@@ -198,14 +198,15 @@ function AuthScreen({ onAuth }) {
 
 const login = () => {
     setLoading(true); setError("");
+    const verifier = Math.random().toString(36).repeat(2);
+    sessionStorage.setItem("cv", verifier);
     const p = new URLSearchParams({
-      client_id: CONFIG.clientId, response_type: "code",
+      client_id: CONFIG.clientId,
+      response_type: "token id_token",
       redirect_uri: window.location.href.split("#")[0],
       scope: CONFIG.scopes,
       response_mode: "fragment",
-      code_challenge_method: "plain",
-      code_challenge: "challenge",
-      nonce: Date.now(),
+      nonce: Date.now().toString(),
     });
     window.location.href = `https://login.microsoftonline.com/${CONFIG.tenantId}/oauth2/v2.0/authorize?${p}`;
   };
