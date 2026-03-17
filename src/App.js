@@ -196,16 +196,19 @@ function AuthScreen({ onAuth }) {
     }
   }, []);
 
-  const login = () => {
+const login = () => {
     setLoading(true); setError("");
     const p = new URLSearchParams({
-      client_id: CONFIG.clientId, response_type: "token",
+      client_id: CONFIG.clientId, response_type: "code",
       redirect_uri: window.location.href.split("#")[0],
-      scope: CONFIG.scopes, response_mode: "fragment", nonce: Date.now(),
+      scope: CONFIG.scopes,
+      response_mode: "fragment",
+      code_challenge_method: "plain",
+      code_challenge: "challenge",
+      nonce: Date.now(),
     });
     window.location.href = `https://login.microsoftonline.com/${CONFIG.tenantId}/oauth2/v2.0/authorize?${p}`;
   };
-
   return (
     <div className="auth-screen">
       <div className="auth-card">
