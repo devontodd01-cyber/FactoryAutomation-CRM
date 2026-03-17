@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 
 const CONFIG = {
-  clientId: "689b65eb-4cdd-42b4-8cf5-516e79a4c42a",
+  clientId: "aeb8c00c-8be9-459b-8987-a1d2c5b5a17f",
   tenantId: "f01629f2-ba7f-494e-bf73-80225ec1095e",
   scopes: "https://graph.microsoft.com/Sites.ReadWrite.All https://graph.microsoft.com/Lists.ReadWrite.All https://graph.microsoft.com/User.Read",
 };
