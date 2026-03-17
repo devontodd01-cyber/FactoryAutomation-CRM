@@ -500,7 +500,7 @@ export default function App() {
     if (!token) return;
     (async () => {
       try {
-        const site = await gFetch(token, "/sites/deventodd.sharepoint.com:/");
+       const site = await gFetch(token, "/sites/deventodd-my.sharepoint.com:/personal/deventodd_deventodd_onmicrosoft_com:");
         const sid = site.id; setSiteId(sid);
         const lists = await gFetch(token, `/sites/${sid}/lists?$select=id,displayName`);
         const lmap = {};
