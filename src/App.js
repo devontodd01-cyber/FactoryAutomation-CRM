@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from "react";
 const CONFIG = {
   clientId: "aeb8c00c-8be9-459b-8987-a1d2c5b5a17f",
   tenantId: "f01629f2-ba7f-494e-bf73-80225ec1095e",
-  scopes: "https://graph.microsoft.com/Sites.ReadWrite.All https://graph.microsoft.com/Lists.ReadWrite.All https://graph.microsoft.com/User.Read",
+  scopes: "User.Read Sites.ReadWrite.All openid profile",
 };
 
 const styles = `
@@ -198,12 +198,10 @@ function AuthScreen({ onAuth }) {
 
 const login = () => {
     setLoading(true); setError("");
-    const verifier = Math.random().toString(36).repeat(2);
-    sessionStorage.setItem("cv", verifier);
     const p = new URLSearchParams({
       client_id: CONFIG.clientId,
-      response_type: "token id_token",
-      redirect_uri: window.location.href.split("#")[0],
+      response_type: "token",
+      redirect_uri: window.location.origin,
       scope: CONFIG.scopes,
       response_mode: "fragment",
       nonce: Date.now().toString(),
