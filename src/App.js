@@ -230,19 +230,16 @@ function JobCard({j,onEdit,onDelete}){
   );
 }
 
-function MobileDashboard({jobs,technicians,onEditJob,onDeleteJob,onNewJob}){
+function MobileDashboard({jobs,onEditJob,onDeleteJob,onNewJob}){
   const today=new Date().toISOString().split('T')[0];
   const [filter,setFilter]=useState(null);
   const active=jobs.filter(j=>['In Progress','Dispatched'].includes(j.status));
   const todayJobs=jobs.filter(j=>j.date===today);
   const pending=jobs.filter(j=>j.status==='Pending');
   const urgent=jobs.filter(j=>j.priority==='Urgent'&&j.status!=='Complete');
-
   const toggleFilter=(f)=>setFilter(prev=>prev===f?null:f);
-
   const filteredJobs=filter==='active'?active:filter==='today'?todayJobs:filter==='pending'?pending:filter==='urgent'?urgent:null;
   const filterLabel=filter==='active'?'In Progress / Dispatched':filter==='today'?'Scheduled Today':filter==='pending'?'Pending Jobs':filter==='urgent'?'Urgent Jobs':null;
-
   return(<>
     <div className="mob-kpi-row">
       <div className={"mob-kpi am"+(filter==='active'?' selected':'')} onClick={()=>toggleFilter('active')}><div className="kl">Active</div><div className="kv">{active.length}</div></div>
@@ -250,9 +247,7 @@ function MobileDashboard({jobs,technicians,onEditJob,onDeleteJob,onNewJob}){
       <div className={"mob-kpi rd"+(filter==='pending'?' selected':'')} onClick={()=>toggleFilter('pending')}><div className="kl">Pending</div><div className="kv">{pending.length}</div></div>
       <div className={"mob-kpi gr"+(filter==='urgent'?' selected':'')} onClick={()=>toggleFilter('urgent')}><div className="kl">Urgent</div><div className="kv">{urgent.length}</div></div>
     </div>
-
     <button className="btn bp" style={{width:'100%',justifyContent:'center',padding:'12px',fontSize:13,marginBottom:16}} onClick={onNewJob}>+ New Job</button>
-
     {filter&&filteredJobs&&<>
       <div className="filter-bar">
         <div className="filter-label">▸ {filterLabel} ({filteredJobs.length})</div>
@@ -261,7 +256,6 @@ function MobileDashboard({jobs,technicians,onEditJob,onDeleteJob,onNewJob}){
       {filteredJobs.map(j=><JobCard key={j.id} j={j} onEdit={onEditJob} onDelete={onDeleteJob}/>)}
       {!filteredJobs.length&&<div className="empty"><div className="ei">✅</div>No {filterLabel.toLowerCase()}</div>}
     </>}
-
     {!filter&&<>
       {active.length>0&&<>
         <div className="mob-section"><div className="mob-section-title">In Progress / Dispatched</div><div className="mob-section-count">{active.length} jobs</div></div>
@@ -272,15 +266,6 @@ function MobileDashboard({jobs,technicians,onEditJob,onDeleteJob,onNewJob}){
         {todayJobs.filter(j=>!['In Progress','Dispatched'].includes(j.status)).map(j=><JobCard key={j.id} j={j} onEdit={onEditJob} onDelete={onDeleteJob}/>)}
       </>}
       {!active.length&&!todayJobs.length&&<div className="empty" style={{marginTop:20}}><div className="ei">✅</div>No active or scheduled jobs today</div>}
-      <div className="mob-section" style={{marginTop:8}}><div className="mob-section-title">Technicians</div></div>
-      {technicians.map(t=>(
-        <div key={t.id} style={{display:'flex',alignItems:'center',gap:12,padding:'12px 14px',background:'var(--sur)',border:'1px solid var(--bdr)',borderRadius:8,marginBottom:8}}>
-          <div className={"tav "+(t.status||'Offline')}>{(t.initials||(t.name||'?').substring(0,2)).toUpperCase()}</div>
-          <div style={{flex:1,minWidth:0}}><div style={{fontSize:14,fontWeight:500}}>{t.name}</div><div style={{fontSize:11,color:'var(--txd)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.current_job||'No active job'}</div></div>
-          <StBadge s={t.status}/>
-        </div>
-      ))}
-      {!technicians.length&&<div className="empty"><div className="ei">👷</div>No technicians yet</div>}
     </>}
   </>);
 }
@@ -291,9 +276,7 @@ function Dashboard({jobs,technicians,onFilterJobs}){
   const rev=jobs.filter(j=>j.invoice_status==='Paid').reduce((s,j)=>s+(parseFloat(j.amount)||0),0);
   const sla=jobs.filter(j=>j.priority==='Urgent'&&j.status!=='Complete').length;
   const [selected,setSelected]=useState(null);
-
   const toggle=(f,filtered)=>{const n=selected===f?null:f;setSelected(n);onFilterJobs(n?filtered:null,n?f:null);};
-
   return(<>
     <div className="kgrid">
       <div className={"kc bl"+(selected==='active'?' selected':'')} onClick={()=>toggle('active',jobs.filter(j=>['In Progress','Dispatched'].includes(j.status)))}><div className="kl">Active Jobs</div><div className="kv">{active}</div><div className="ks">Click to filter ↓</div></div>
@@ -612,7 +595,7 @@ export default function App(){
           {page==='Dashboard'&&<>
             <Dashboard jobs={jobs} technicians={technicians} onFilterJobs={(filtered,label)=>{setFilteredJobs(filtered);setFilterLabel(label);}}/>
             {filteredJobs&&<FilteredJobsPanel jobs={filteredJobs} label={filterLabel==='active'?'Active Jobs':filterLabel==='pending'?'Pending Jobs':filterLabel==='paid'?'Paid Jobs':'Urgent Jobs'} onClear={()=>setFilteredJobs(null)} onEdit={openMobileJobEdit} onDelete={delJob}/>}
-            <MobileDashboard jobs={jobs} technicians={technicians} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/>
+            <MobileDashboard jobs={jobs} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/>
           </>}
           {page==='Jobs'&&<Jobs jobs={jobs} customers={customers} technicians={technicians} loading={loading.jobs} onAdd={addJob} onEdit={editJob} onDelete={delJob}/>}
           {page==='Schedule'&&<Schedule jobs={jobs}/>}
