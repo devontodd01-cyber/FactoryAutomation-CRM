@@ -240,7 +240,7 @@ function Dashboard({ jobs, customers, technicians }) {
           {jobs.slice(0,6).map(j => (
             <div key={j.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"11px 18px",borderBottom:"1px solid var(--border)"}}>
               <div>
-                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:"var(--accent)",marginBottom:2}}>{j.JobID}</div>
+                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:"var(--accent)",marginBottom:2}}>{j.Title}</div>
                 <div style={{fontSize:13,fontWeight:500}}>{j.Customer}</div>
                 <div style={{fontSize:11,color:"var(--text-dim)"}}>{j.Equipment}</div>
               </div>
@@ -270,7 +270,7 @@ function Dashboard({ jobs, customers, technicians }) {
 
 function JobForm({ job, technicians, customers, onSave, onClose }) {
   const [f, setF] = useState({
-    JobID: job?.JobID || `JO-${Date.now().toString().slice(-4)}`,
+    Title: job?.Title || `JO-${Date.now().toString().slice(-4)}`,
     Customer: job?.Customer || "", Equipment: job?.Equipment || "",
     Technician: job?.Technician || "", Status: job?.Status || "Pending",
     ScheduledDate: job?.ScheduledDate?.split("T")[0] || "",
@@ -283,7 +283,7 @@ function JobForm({ job, technicians, customers, onSave, onClose }) {
         <div className="mh"><div className="mti">{job ? "Edit Job" : "New Job"}</div><button className="mc" onClick={onClose}>×</button></div>
         <div className="mbody">
           <div className="fr">
-            <div className="fg"><label className="fl">Job ID</label><input className="fi" value={f.JobID} onChange={e => setF({...f,JobID:e.target.value})} /></div>
+            <div className="fg"><label className="fl">Job ID</label><input className="fi" value={f.Title} onChange={e => setF({...f,Title:e.target.value})} /></div>
             <div className="fg"><label className="fl">Status</label><select className="fsl" value={f.Status} onChange={e => setF({...f,Status:e.target.value})}><option>Pending</option><option>Dispatched</option><option>In Progress</option><option>Complete</option></select></div>
           </div>
           <div className="fg"><label className="fl">Customer</label>
@@ -328,7 +328,7 @@ function Jobs({ jobs, technicians, customers, onAdd, onEdit, onDelete, loading }
             </div>
             {jobs.map(j => (
               <div key={j.id} className="tr" style={{gridTemplateColumns:"76px 1fr 110px 90px 85px 88px 56px"}}>
-                <div className="ci">{j.JobID}</div>
+                <div className="ci">{j.Title}</div>
                 <div><div className="cm">{j.Customer}</div><div className="cs">{j.Equipment}</div></div>
                 <div className="cd">{j.Technician||"—"}</div>
                 <div className="cn">{j.ScheduledDate?.split("T")[0]||"—"}</div>
@@ -473,7 +473,7 @@ function Schedule({ jobs }) {
           return (
             <div key={d} className={`cd2 ${isToday?"today":""}`}>
               <div className={`cdn ${isToday?"tn":""}`}>{d}</div>
-              {dj.map(j => <div key={j.id} className={`cj ${(j.Status||"Pending").replace(" ","")}`} title={`${j.JobID} — ${j.Customer}`}>{j.JobID}</div>)}
+              {dj.map(j => <div key={j.id} className={`cj ${(j.Status||"Pending").replace(" ","")}`} title={`${j.Title} — ${j.Customer}`}>{j.Title}</div>)}
             </div>
           );
         })}
