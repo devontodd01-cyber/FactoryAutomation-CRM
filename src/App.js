@@ -569,4 +569,3 @@ export default function App(){
       <Toast msg={toast}/>
     </div>
   </>);
-}
