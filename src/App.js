@@ -61,7 +61,9 @@ const styles = `
   .ua{width:26px;height:26px;border-radius:50%;background:var(--ac2);font-family:'Rajdhani',sans-serif;font-weight:700;font-size:11px;color:white;display:flex;align-items:center;justify-content:center;}
   .main{margin-left:var(--sw);flex:1;padding:20px;padding-bottom:30px;}
   .kgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;}
-  .kc{background:var(--sur);border:1px solid var(--bdr);border-radius:6px;padding:14px 16px;position:relative;overflow:hidden;}
+  .kc{background:var(--sur);border:1px solid var(--bdr);border-radius:6px;padding:14px 16px;position:relative;overflow:hidden;cursor:pointer;transition:border-color .15s;}
+  .kc:hover{border-color:var(--bdr2);}
+  .kc.selected{border-color:var(--ac);}
   .kc::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;}
   .kc.bl::before{background:var(--ac);}
   .kc.am::before{background:var(--am);}
@@ -142,6 +144,7 @@ const styles = `
   .job-card.Dispatched::before{background:var(--ac);}
   .job-card.Pending::before{background:var(--txd);}
   .job-card.Complete::before{background:var(--gr);}
+  .job-card.Urgent::before{background:var(--rd);}
   .job-card-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;}
   .job-card-id{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ac);margin-bottom:3px;}
   .job-card-customer{font-size:15px;font-weight:600;}
@@ -160,22 +163,28 @@ const styles = `
   .mob-section-title{font-family:'Rajdhani',sans-serif;font-weight:600;font-size:14px;letter-spacing:1px;text-transform:uppercase;color:var(--txm);}
   .mob-section-count{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--ac);}
   .mob-kpi-row{display:flex;gap:10px;margin-bottom:16px;overflow-x:auto;padding-bottom:4px;}
-  .mob-kpi{background:var(--sur);border:1px solid var(--bdr);border-radius:6px;padding:12px 14px;flex-shrink:0;min-width:100px;position:relative;overflow:hidden;}
+  .mob-kpi{background:var(--sur);border:1px solid var(--bdr);border-radius:6px;padding:12px 14px;flex-shrink:0;min-width:90px;position:relative;overflow:hidden;cursor:pointer;transition:border-color .15s;}
+  .mob-kpi:hover{border-color:var(--bdr2);}
+  .mob-kpi.selected{border-color:var(--ac);box-shadow:0 0 0 1px var(--ac);}
   .mob-kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;}
   .mob-kpi.bl::before{background:var(--ac);}
   .mob-kpi.am::before{background:var(--am);}
-  .mob-kpi.gr::before{background:var(--gr);}
   .mob-kpi.rd::before{background:var(--rd);}
+  .mob-kpi.gr::before{background:var(--gr);}
   .mob-kpi .kl{font-size:8px;}
   .mob-kpi .kv{font-size:22px;}
   .mob-kpi.bl .kv{color:var(--ac);}
   .mob-kpi.am .kv{color:var(--am);}
-  .mob-kpi.gr .kv{color:var(--gr);}
   .mob-kpi.rd .kv{color:var(--rd);}
+  .mob-kpi.gr .kv{color:var(--gr);}
+  .filter-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;padding:8px 12px;background:var(--sur);border:1px solid var(--bdr);border-radius:6px;}
+  .filter-label{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--ac);letter-spacing:1px;}
+  .filter-clear{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--txd);cursor:pointer;padding:2px 8px;border:1px solid var(--bdr);border-radius:3px;}
+  .filter-clear:hover{color:var(--tx);border-color:var(--bdr2);}
   @keyframes spin{to{transform:rotate(360deg);}}
   @media(max-width:900px){.kgrid{grid-template-columns:repeat(2,1fr);}.g2{grid-template-columns:1fr;}.fr{grid-template-columns:1fr;}}
   @media(max-width:640px){:root{--sw:0px;}.sidebar{display:none;}.main{margin-left:0;padding:14px;padding-bottom:80px;}.bnav{display:block;}.kgrid{display:none;}.desktop-table{display:none;}.mobile-cards{display:block;}.topbar{padding:0 14px;}.logo-sub{display:none;}}
-  @media(min-width:641px){.mobile-cards{display:none;}.mob-kpi-row{display:none;}.mob-section{display:none;}}
+  @media(min-width:641px){.mobile-cards{display:none;}.mob-kpi-row{display:none;}.mob-section{display:none;}.filter-bar{display:none;}}
 `;
 
 function StBadge({s}){return <span className={"st "+(s||'Pending').replace(' ','')}>{s||'Pending'}</span>;}
@@ -197,7 +206,7 @@ function Modal({title,onClose,onSave,saveLabel,children}){
 function JobCard({j,onEdit,onDelete}){
   const statusClass=(j.status||'Pending').replace(' ','');
   return(
-    <div className={"job-card "+statusClass}>
+    <div className={"job-card "+(j.priority==='Urgent'?'Urgent':statusClass)}>
       <div className="job-card-header">
         <div>
           <div className="job-card-id">{j.job_id}</div>
@@ -223,50 +232,74 @@ function JobCard({j,onEdit,onDelete}){
 
 function MobileDashboard({jobs,technicians,onEditJob,onDeleteJob,onNewJob}){
   const today=new Date().toISOString().split('T')[0];
+  const [filter,setFilter]=useState(null);
   const active=jobs.filter(j=>['In Progress','Dispatched'].includes(j.status));
   const todayJobs=jobs.filter(j=>j.date===today);
-  const pending=jobs.filter(j=>j.status==='Pending').length;
-  const sla=jobs.filter(j=>j.priority==='Urgent'&&j.status!=='Complete').length;
+  const pending=jobs.filter(j=>j.status==='Pending');
+  const urgent=jobs.filter(j=>j.priority==='Urgent'&&j.status!=='Complete');
+
+  const toggleFilter=(f)=>setFilter(prev=>prev===f?null:f);
+
+  const filteredJobs=filter==='active'?active:filter==='today'?todayJobs:filter==='pending'?pending:filter==='urgent'?urgent:null;
+  const filterLabel=filter==='active'?'In Progress / Dispatched':filter==='today'?'Scheduled Today':filter==='pending'?'Pending Jobs':filter==='urgent'?'Urgent Jobs':null;
+
   return(<>
     <div className="mob-kpi-row">
-      <div className="mob-kpi am"><div className="kl">Active</div><div className="kv">{active.length}</div></div>
-      <div className="mob-kpi bl"><div className="kl">Today</div><div className="kv">{todayJobs.length}</div></div>
-      <div className="mob-kpi rd"><div className="kl">Pending</div><div className="kv">{pending}</div></div>
-      <div className="mob-kpi gr"><div className="kl">Urgent</div><div className="kv">{sla}</div></div>
+      <div className={"mob-kpi am"+(filter==='active'?' selected':'')} onClick={()=>toggleFilter('active')}><div className="kl">Active</div><div className="kv">{active.length}</div></div>
+      <div className={"mob-kpi bl"+(filter==='today'?' selected':'')} onClick={()=>toggleFilter('today')}><div className="kl">Today</div><div className="kv">{todayJobs.length}</div></div>
+      <div className={"mob-kpi rd"+(filter==='pending'?' selected':'')} onClick={()=>toggleFilter('pending')}><div className="kl">Pending</div><div className="kv">{pending.length}</div></div>
+      <div className={"mob-kpi gr"+(filter==='urgent'?' selected':'')} onClick={()=>toggleFilter('urgent')}><div className="kl">Urgent</div><div className="kv">{urgent.length}</div></div>
     </div>
+
     <button className="btn bp" style={{width:'100%',justifyContent:'center',padding:'12px',fontSize:13,marginBottom:16}} onClick={onNewJob}>+ New Job</button>
-    {active.length>0&&<>
-      <div className="mob-section"><div className="mob-section-title">In Progress / Dispatched</div><div className="mob-section-count">{active.length} jobs</div></div>
-      {active.map(j=><JobCard key={j.id} j={j} onEdit={onEditJob} onDelete={onDeleteJob}/>)}
-    </>}
-    {todayJobs.length>0&&<>
-      <div className="mob-section"><div className="mob-section-title">Scheduled Today</div><div className="mob-section-count">{todayJobs.length} jobs</div></div>
-      {todayJobs.filter(j=>!['In Progress','Dispatched'].includes(j.status)).map(j=><JobCard key={j.id} j={j} onEdit={onEditJob} onDelete={onDeleteJob}/>)}
-    </>}
-    {!active.length&&!todayJobs.length&&<div className="empty" style={{marginTop:20}}><div className="ei">✅</div>No active or scheduled jobs today</div>}
-    <div className="mob-section" style={{marginTop:8}}><div className="mob-section-title">Technicians</div></div>
-    {technicians.map(t=>(
-      <div key={t.id} style={{display:'flex',alignItems:'center',gap:12,padding:'12px 14px',background:'var(--sur)',border:'1px solid var(--bdr)',borderRadius:8,marginBottom:8}}>
-        <div className={"tav "+(t.status||'Offline')}>{(t.initials||(t.name||'?').substring(0,2)).toUpperCase()}</div>
-        <div style={{flex:1,minWidth:0}}><div style={{fontSize:14,fontWeight:500}}>{t.name}</div><div style={{fontSize:11,color:'var(--txd)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.current_job||'No active job'}</div></div>
-        <StBadge s={t.status}/>
+
+    {filter&&filteredJobs&&<>
+      <div className="filter-bar">
+        <div className="filter-label">▸ {filterLabel} ({filteredJobs.length})</div>
+        <div className="filter-clear" onClick={()=>setFilter(null)}>✕ Clear</div>
       </div>
-    ))}
-    {!technicians.length&&<div className="empty"><div className="ei">👷</div>No technicians yet</div>}
+      {filteredJobs.map(j=><JobCard key={j.id} j={j} onEdit={onEditJob} onDelete={onDeleteJob}/>)}
+      {!filteredJobs.length&&<div className="empty"><div className="ei">✅</div>No {filterLabel.toLowerCase()}</div>}
+    </>}
+
+    {!filter&&<>
+      {active.length>0&&<>
+        <div className="mob-section"><div className="mob-section-title">In Progress / Dispatched</div><div className="mob-section-count">{active.length} jobs</div></div>
+        {active.map(j=><JobCard key={j.id} j={j} onEdit={onEditJob} onDelete={onDeleteJob}/>)}
+      </>}
+      {todayJobs.length>0&&<>
+        <div className="mob-section"><div className="mob-section-title">Scheduled Today</div><div className="mob-section-count">{todayJobs.length} jobs</div></div>
+        {todayJobs.filter(j=>!['In Progress','Dispatched'].includes(j.status)).map(j=><JobCard key={j.id} j={j} onEdit={onEditJob} onDelete={onDeleteJob}/>)}
+      </>}
+      {!active.length&&!todayJobs.length&&<div className="empty" style={{marginTop:20}}><div className="ei">✅</div>No active or scheduled jobs today</div>}
+      <div className="mob-section" style={{marginTop:8}}><div className="mob-section-title">Technicians</div></div>
+      {technicians.map(t=>(
+        <div key={t.id} style={{display:'flex',alignItems:'center',gap:12,padding:'12px 14px',background:'var(--sur)',border:'1px solid var(--bdr)',borderRadius:8,marginBottom:8}}>
+          <div className={"tav "+(t.status||'Offline')}>{(t.initials||(t.name||'?').substring(0,2)).toUpperCase()}</div>
+          <div style={{flex:1,minWidth:0}}><div style={{fontSize:14,fontWeight:500}}>{t.name}</div><div style={{fontSize:11,color:'var(--txd)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.current_job||'No active job'}</div></div>
+          <StBadge s={t.status}/>
+        </div>
+      ))}
+      {!technicians.length&&<div className="empty"><div className="ei">👷</div>No technicians yet</div>}
+    </>}
   </>);
 }
 
-function Dashboard({jobs,technicians}){
+function Dashboard({jobs,technicians,onFilterJobs}){
   const active=jobs.filter(j=>['In Progress','Dispatched'].includes(j.status)).length;
   const pending=jobs.filter(j=>j.status==='Pending').length;
   const rev=jobs.filter(j=>j.invoice_status==='Paid').reduce((s,j)=>s+(parseFloat(j.amount)||0),0);
   const sla=jobs.filter(j=>j.priority==='Urgent'&&j.status!=='Complete').length;
+  const [selected,setSelected]=useState(null);
+
+  const toggle=(f,filtered)=>{const n=selected===f?null:f;setSelected(n);onFilterJobs(n?filtered:null,n?f:null);};
+
   return(<>
     <div className="kgrid">
-      <div className="kc bl"><div className="kl">Active Jobs</div><div className="kv">{active}</div><div className="ks">In progress / dispatched</div></div>
-      <div className="kc am"><div className="kl">Pending</div><div className="kv">{pending}</div><div className="ks">Awaiting assignment</div></div>
-      <div className="kc gr"><div className="kl">Revenue Paid</div><div className="kv">${rev.toLocaleString()}</div><div className="ks">From paid invoices</div></div>
-      <div className="kc rd"><div className="kl">SLA At Risk</div><div className="kv">{sla}</div><div className="ks">Urgent & open</div></div>
+      <div className={"kc bl"+(selected==='active'?' selected':'')} onClick={()=>toggle('active',jobs.filter(j=>['In Progress','Dispatched'].includes(j.status)))}><div className="kl">Active Jobs</div><div className="kv">{active}</div><div className="ks">Click to filter ↓</div></div>
+      <div className={"kc am"+(selected==='pending'?' selected':'')} onClick={()=>toggle('pending',jobs.filter(j=>j.status==='Pending'))}><div className="kl">Pending</div><div className="kv">{pending}</div><div className="ks">Click to filter ↓</div></div>
+      <div className={"kc gr"+(selected==='paid'?' selected':'')} onClick={()=>toggle('paid',jobs.filter(j=>j.invoice_status==='Paid'))}><div className="kl">Revenue Paid</div><div className="kv">${rev.toLocaleString()}</div><div className="ks">Click to filter ↓</div></div>
+      <div className={"kc rd"+(selected==='urgent'?' selected':'')} onClick={()=>toggle('urgent',jobs.filter(j=>j.priority==='Urgent'&&j.status!=='Complete'))}><div className="kl">SLA At Risk</div><div className="kv">{sla}</div><div className="ks">Click to filter ↓</div></div>
     </div>
     <div className="g2">
       <div className="panel">
@@ -292,6 +325,36 @@ function Dashboard({jobs,technicians}){
       </div>
     </div>
   </>);
+}
+
+function FilteredJobsPanel({jobs,label,onClear,onEdit,onDelete}){
+  return(
+    <div className="panel" style={{marginTop:0}}>
+      <div className="ph">
+        <div className="pt">{label} ({jobs.length})</div>
+        <div className="pa" onClick={onClear}>✕ Clear filter</div>
+      </div>
+      <div className="tbl">
+        <div className="tr hdr" style={{gridTemplateColumns:'90px 1fr 110px 90px 90px 70px'}}>
+          <div className="cl">ID</div><div className="cl">Customer/Equip</div><div className="cl">Technician</div><div className="cl">Date</div><div className="cl">Status</div><div className="cl">Act.</div>
+        </div>
+        {jobs.map(j=>(
+          <div key={j.id} className="tr" style={{gridTemplateColumns:'90px 1fr 110px 90px 90px 70px'}}>
+            <div className="ci">{j.job_id}</div>
+            <div><div className="cm">{j.customer||'—'}</div><div className="cs">{j.equipment||'—'}</div></div>
+            <div className="cd">{j.technician||'—'}</div>
+            <div className="cn">{j.date||'—'}</div>
+            <div><StBadge s={j.status}/></div>
+            <div style={{display:'flex',gap:4}}>
+              <button className="btn bg bs" onClick={()=>onEdit(j)}>✏️</button>
+              <button className="btn bd bs" onClick={()=>onDelete(j.id)}>🗑</button>
+            </div>
+          </div>
+        ))}
+        {!jobs.length&&<div className="empty"><div className="ei">✅</div>No jobs in this category</div>}
+      </div>
+    </div>
+  );
 }
 
 function JobFormModal({job,customers,technicians,onSave,onClose}){
@@ -493,6 +556,8 @@ export default function App(){
   const [toast,setToast]=useState('');
   const [jobForm,setJobForm]=useState(null);
   const [showJobForm,setShowJobForm]=useState(false);
+  const [filteredJobs,setFilteredJobs]=useState(null);
+  const [filterLabel,setFilterLabel]=useState('');
 
   const msg=useCallback((m)=>{setToast(m);setTimeout(()=>setToast(''),2500);},[]);
 
@@ -538,14 +603,15 @@ export default function App(){
       <div className="body">
         <div className="sidebar">
           <div className="nl">Operations</div>
-          {pages.slice(0,4).map((p,i)=><div key={p} className={"ni "+(page===p?'active':'')} onClick={()=>setPage(p)}>{icons[i]} {p}</div>)}
+          {pages.slice(0,4).map((p,i)=><div key={p} className={"ni "+(page===p?'active':'')} onClick={()=>{setPage(p);setFilteredJobs(null);}}>{icons[i]} {p}</div>)}
           <div className="nl">Resources</div>
           <div className={"ni "+(page==='Technicians'?'active':'')} onClick={()=>setPage('Technicians')}>◑ Technicians</div>
           <div className="sf"><div className="up"><div className="ua">AD</div><div><div style={{fontSize:12,fontWeight:500}}>Admin</div><div style={{fontSize:10,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace"}}>DISPATCH MGR</div></div></div></div>
         </div>
         <div className="main">
           {page==='Dashboard'&&<>
-            <Dashboard jobs={jobs} technicians={technicians}/>
+            <Dashboard jobs={jobs} technicians={technicians} onFilterJobs={(filtered,label)=>{setFilteredJobs(filtered);setFilterLabel(label);}}/>
+            {filteredJobs&&<FilteredJobsPanel jobs={filteredJobs} label={filterLabel==='active'?'Active Jobs':filterLabel==='pending'?'Pending Jobs':filterLabel==='paid'?'Paid Jobs':'Urgent Jobs'} onClear={()=>setFilteredJobs(null)} onEdit={openMobileJobEdit} onDelete={delJob}/>}
             <MobileDashboard jobs={jobs} technicians={technicians} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/>
           </>}
           {page==='Jobs'&&<Jobs jobs={jobs} customers={customers} technicians={technicians} loading={loading.jobs} onAdd={addJob} onEdit={editJob} onDelete={delJob}/>}
