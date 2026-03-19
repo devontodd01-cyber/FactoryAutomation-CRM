@@ -323,7 +323,7 @@ function Dashboard({jobs,technicians,onFilterJobs,onEditJob}){
       <div className={"kc gr"+(selected==='paid'?' selected':'')} onClick={()=>toggle('paid',jobs.filter(j=>j.invoice_status==='Paid'))}><div className="kl">Revenue Paid</div><div className="kv">${rev.toLocaleString()}</div><div className="ks">Click to filter ↓</div></div>
       <div className={"kc rd"+(selected==='urgent'?' selected':'')} onClick={()=>toggle('urgent',jobs.filter(j=>j.priority==='Urgent'&&j.status!=='Complete'))}><div className="kl">SLA At Risk</div><div className="kv">{sla}</div><div className="ks">Click to filter ↓</div></div>
     </div>
-    <div className="g2">
+<div style={{marginBottom:16}}>
       <div className="panel">
         <div className="ph"><div className="pt">Recent Jobs</div></div>
         {[...jobs].reverse().slice(0,6).map(j=>(
@@ -334,21 +334,7 @@ function Dashboard({jobs,technicians,onFilterJobs,onEditJob}){
         ))}
         {!jobs.length&&<div className="empty"><div className="ei">📋</div>No jobs yet</div>}
       </div>
-      <div className="panel">
-        <div className="ph"><div className="pt">Technicians</div></div>
-        {technicians.map(t=>(
-          <div key={t.id} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 16px',borderBottom:'1px solid var(--bdr)'}}>
-            <div className={"tav "+(t.status||'Offline')}>{(t.initials||(t.name||'?').substring(0,2)).toUpperCase()}</div>
-            <div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:500}}>{t.name}</div><div style={{fontSize:11,color:'var(--txd)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{t.current_job||'No active job'}</div></div>
-            <StBadge s={t.status}/>
-          </div>
-        ))}
-        {!technicians.length&&<div className="empty"><div className="ei">👷</div>No technicians yet</div>}
-      </div>
-    </div>
-    {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)} onEdit={(j)=>{setViewJob(null);onEditJob(j);}}/>}
-  </>);
-}
+ 
 
 function FilteredJobsPanel({jobs,label,onClear,onEdit,onDelete}){
   const [viewJob,setViewJob]=useState(null);
