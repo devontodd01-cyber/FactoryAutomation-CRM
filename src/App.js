@@ -173,7 +173,7 @@ const styles = `
   .mob-kpi.gr::before{background:var(--gr);}
   .mob-kpi .kl{font-size:8px;}
   .mob-kpi .kv{font-size:22px;}
-  .mob-kpi.bl .kv{color:var(--ac).);}
+  .mob-kpi.bl .kv{color:var(--ac);}
   .mob-kpi.am .kv{color:var(--am);}
   .mob-kpi.rd .kv{color:var(--rd);}
   .mob-kpi.gr .kv{color:var(--gr);}
@@ -402,7 +402,7 @@ function JobFormModal({job,customers,technicians,onSave,onClose}){
       <div className="fg"><label className="fl">Customer</label>
         <select className="fsl" value={f.customer||''} onChange={e=>setF({...f,customer:e.target.value})}>
           <option value="">Select customer...</option>
-          {customers.map(c=><option key={c.id}>{c.company}</option>)}
+          {[...customers].sort((a,b)=>(a.company||'').localeCompare(b.company||'')).map(c=><option key={c.id}>{c.company}</option>)}
         </select>
       </div>
       <div className="fg"><label className="fl">Equipment</label><input className="fi" placeholder="e.g. Fanuc Robodrill" value={f.equipment||''} onChange={e=>setF({...f,equipment:e.target.value})}/></div>
@@ -472,7 +472,7 @@ function Customers({customers,jobs,onAdd,onEdit,onDelete,loading}){
   const [search,setSearch]=useState('');
   const [expanded,setExpanded]=useState(null);
   const [viewJob,setViewJob]=useState(null);
-  const filtered=customers.filter(c=>
+  const filtered=[...customers].sort((a,b)=>(a.company||'').localeCompare(b.company||'')).filter(c=>
     (c.company||'').toLowerCase().includes(search.toLowerCase())||
     (c.contact||'').toLowerCase().includes(search.toLowerCase())||
     (c.email||'').toLowerCase().includes(search.toLowerCase())||
@@ -490,7 +490,7 @@ function Customers({customers,jobs,onAdd,onEdit,onDelete,loading}){
         <div className="tr hdr" style={{gridTemplateColumns:'1fr 130px 60px 70px'}}>
           <div className="cl">Company/Contact</div><div className="cl">Phone</div><div className="cl">Jobs</div><div className="cl">Act.</div>
         </div>
-        {[...filtered].reverse().map(c=>{
+        {filtered.map(c=>{
           const cJobs=jobs.filter(j=>j.customer===c.company);
           const isOpen=expanded===c.id;
           return(<>
@@ -667,14 +667,14 @@ export default function App(){
       <div className="body">
         <div className="sidebar">
           <div className="nl">Operations</div>
-          {pages.slice(0,4).map((p,i)=><div key={p} className={"ni "+(page===p?'active':'')} onClick={()=>{setPage(p);setFilteredJobs(null);}}>{icons[i]} {p}</div>)}
+          {pages.slice(0,4).map((p,i)=><div key={p} className={"ni "+(page===p?'active':'')} onClick={()=>setPage(p)}>{icons[i]} {p}</div>)}
           <div className="nl">Resources</div>
           <div className={"ni "+(page==='Technicians'?'active':'')} onClick={()=>setPage('Technicians')}>◑ Technicians</div>
           <div className="sf"><div className="up"><div className="ua">AD</div><div><div style={{fontSize:12,fontWeight:500}}>Admin</div><div style={{fontSize:10,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace"}}>DISPATCH MGR</div></div></div></div>
         </div>
         <div className="main">
           {page==='Dashboard'&&<>
-            <Dashboard jobs={jobs} onEditJob={openMobileJobEdit}/>}
+            <Dashboard jobs={jobs} onEditJob={openMobileJobEdit}/>
             <MobileDashboard jobs={jobs} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/>
           </>}
           {page==='Jobs'&&<Jobs jobs={jobs} customers={customers} technicians={technicians} loading={loading.jobs} onAdd={addJob} onEdit={editJob} onDelete={delJob}/>}
