@@ -417,6 +417,7 @@ function Customers({customers,jobs,onAdd,onEdit,onDelete,loading}){
   const [form,setForm]=useState(null);
   const [f,setF]=useState({});
   const [search,setSearch]=useState('');
+  const [expanded,setExpanded]=useState(null);
   const filtered=customers.filter(c=>
     (c.company||'').toLowerCase().includes(search.toLowerCase())||
     (c.contact||'').toLowerCase().includes(search.toLowerCase())||
@@ -435,17 +436,34 @@ function Customers({customers,jobs,onAdd,onEdit,onDelete,loading}){
         <div className="tr hdr" style={{gridTemplateColumns:'1fr 130px 60px 70px'}}>
           <div className="cl">Company/Contact</div><div className="cl">Phone</div><div className="cl">Jobs</div><div className="cl">Act.</div>
         </div>
-        {[...filtered].reverse().map(c=>(
-          <div key={c.id} className="tr" style={{gridTemplateColumns:'1fr 130px 60px 70px'}}>
-            <div><div className="cm">{c.company||'—'}</div><div className="cs">{c.contact||''}</div></div>
-            <div className="cn">{c.phone||'—'}</div>
-            <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,color:'var(--ac)'}}>{jobs.filter(j=>j.customer===c.company).length}</div>
-            <div style={{display:'flex',gap:4}}>
-              <button className="btn bg bs" onClick={()=>open(c)}>✏️</button>
-              <button className="btn bd bs" onClick={()=>onDelete(c.id)}>🗑</button>
-            </div>
-          </div>
-        ))}
+    {[...filtered].reverse().map(c=>{
+            const cJobs=jobs.filter(j=>j.customer===c.company);
+            const isOpen=expanded===c.id;
+            return(<>
+              <div key={c.id} className="tr" style={{gridTemplateColumns:'1fr 130px 60px 70px',background:isOpen?'var(--sur2)':''}} onClick={()=>setExpanded(isOpen?null:c.id)}>
+                <div><div className="cm">{c.company||'—'}</div><div className="cs">{c.contact||''}</div></div>
+                <div className="cn">{c.phone||'—'}</div>
+                <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,color:'var(--ac)'}}>{cJobs.length}</div>
+                <div style={{display:'flex',gap:4}} onClick={e=>e.stopPropagation()}>
+                  <button className="btn bg bs" onClick={()=>open(c)}>✏️</button>
+                  <button className="btn bd bs" onClick={()=>onDelete(c.id)}>🗑</button>
+                </div>
+              </div>
+              {isOpen&&<div key={c.id+'-jobs'} style={{background:'var(--sur3)',borderBottom:'1px solid var(--bdr)',padding:'0 0 8px 0'}}>
+                <div style={{padding:'8px 16px 4px',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:2,textTransform:'uppercase'}}>Job History — {c.company}</div>
+                {cJobs.length===0&&<div style={{padding:'10px 16px',fontSize:12,color:'var(--txd)'}}>No jobs found for this customer.</div>}
+                {cJobs.map(j=>(
+                  <div key={j.id} style={{display:'grid',gridTemplateColumns:'90px 1fr 100px 90px 80px',alignItems:'center',padding:'8px 16px',borderTop:'1px solid var(--bdr)'}}>
+                    <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:'var(--ac)'}}>{j.job_id}</div>
+                    <div><div style={{fontSize:12,fontWeight:500}}>{j.equipment||'—'}</div><div style={{fontSize:11,color:'var(--txd)'}}>{j.technician||'Unassigned'}</div></div>
+                    <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txm)'}}>{j.date||'—'}</div>
+                    <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,fontSize:13}}>{j.amount?'$'+j.amount:'—'}</div>
+                    <div><span className={"st "+(j.status||'Pending').replace(' ','')}>{j.status||'Pending'}</span></div>
+                  </div>
+                ))}
+              </div>}
+            </>);
+          })}
         {!customers.length&&<div className="empty"><div className="ei">🏢</div>No customers yet.</div>}
       </div>}
     </div>
