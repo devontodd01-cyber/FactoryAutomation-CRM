@@ -37,7 +37,7 @@ const db = {
 const styles = `
   @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
   *{margin:0;padding:0;box-sizing:border-box;}
-  :root{--bg:#0a0c10;--sur:#0f1218;--sur2:#161b24;--bdr:#1e2a3a;--bdr2:#243040;--ac:#00c8ff;--ac2:#0084a8;--acd:rgba(0,200,255,0.08);--am:#ffb020;--amd:rgba(255,176,32,0.10);--gr:#22d47a;--grd:rgba(34,212,122,0.10);--rd:#ff4d6a;--rdd:rgba(255,77,106,0.10);--tx:#d0dae8;--txd:#5a6a80;--txm:#8a9ab0;--sw:200px;}
+  :root{--bg:#0a0c10;--sur:#0f1218;--sur2:#161b24;--sur3:#1c2230;--bdr:#1e2a3a;--bdr2:#243040;--ac:#00c8ff;--ac2:#0084a8;--acd:rgba(0,200,255,0.08);--am:#ffb020;--amd:rgba(255,176,32,0.10);--gr:#22d47a;--grd:rgba(34,212,122,0.10);--rd:#ff4d6a;--rdd:rgba(255,77,106,0.10);--tx:#d0dae8;--txd:#5a6a80;--txm:#8a9ab0;--sw:200px;}
   html,body{background:var(--bg);font-family:'IBM Plex Sans',sans-serif;color:var(--tx);min-height:100vh;}
   .app{display:flex;flex-direction:column;min-height:100vh;}
   .topbar{height:52px;background:var(--sur);border-bottom:1px solid var(--bdr);display:flex;align-items:center;padding:0 20px;gap:12px;position:sticky;top:0;z-index:5;}
@@ -181,6 +181,9 @@ const styles = `
   .filter-label{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--ac);letter-spacing:1px;}
   .filter-clear{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--txd);cursor:pointer;padding:2px 8px;border:1px solid var(--bdr);border-radius:3px;}
   .filter-clear:hover{color:var(--tx);border-color:var(--bdr2);}
+  .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;}
+  .detail-label{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--txd);letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;}
+  .detail-value{font-size:13px;color:var(--tx);}
   @keyframes spin{to{transform:rotate(360deg);}}
   @media(max-width:900px){.kgrid{grid-template-columns:repeat(2,1fr);}.g2{grid-template-columns:1fr;}.fr{grid-template-columns:1fr;}}
   @media(max-width:640px){:root{--sw:0px;}.sidebar{display:none;}.main{margin-left:0;padding:14px;padding-bottom:80px;}.bnav{display:block;}.kgrid{display:none;}.desktop-table{display:none;}.mobile-cards{display:block;}.topbar{padding:0 14px;}.logo-sub{display:none;}}
@@ -198,6 +201,38 @@ function Modal({title,onClose,onSave,saveLabel,children}){
         <div className="mh"><div className="mt">{title}</div><button className="mc" onClick={onClose}>×</button></div>
         <div className="mb">{children}</div>
         <div className="mf"><button className="btn bg" onClick={onClose}>Cancel</button><button className="btn bp" onClick={onSave}>{saveLabel||'Save'}</button></div>
+      </div>
+    </div>
+  );
+}
+
+function JobDetailModal({job,onClose}){
+  return(
+    <div className="mbg" onClick={onClose}>
+      <div className="modal" onClick={e=>e.stopPropagation()}>
+        <div className="mh">
+          <div>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:'var(--ac)',marginBottom:3}}>{job.job_id}</div>
+            <div className="mt">{job.customer}</div>
+          </div>
+          <button className="mc" onClick={onClose}>×</button>
+        </div>
+        <div className="mb">
+          <div className="detail-grid">
+            <div><div className="detail-label">Equipment</div><div className="detail-value" style={{fontWeight:500}}>{job.equipment||'—'}</div></div>
+            <div><div className="detail-label">Status</div><StBadge s={job.status}/></div>
+            <div><div className="detail-label">Technician</div><div className="detail-value">{job.technician||'Unassigned'}</div></div>
+            <div><div className="detail-label">Date</div><div className="detail-value" style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{job.date||'—'}</div></div>
+            <div><div className="detail-label">Amount</div><div className="detail-value" style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:18,color:'var(--ac)'}}>{job.amount?'$'+job.amount:'—'}</div></div>
+            <div><div className="detail-label">Priority</div><div className="detail-value">{job.priority||'Normal'}</div></div>
+            <div><div className="detail-label">Invoice</div><div className="detail-value">{job.invoice_status||'—'}</div></div>
+          </div>
+          <div style={{borderTop:'1px solid var(--bdr)',paddingTop:16}}>
+            <div className="detail-label" style={{marginBottom:8}}>Notes</div>
+            <div style={{fontSize:13,color:job.notes?'var(--tx)':'var(--txd)',lineHeight:1.7,minHeight:60,background:'var(--sur2)',padding:'10px 12px',borderRadius:4,border:'1px solid var(--bdr)',fontStyle:job.notes?'normal':'italic'}}>{job.notes||'No notes for this job.'}</div>
+          </div>
+        </div>
+        <div className="mf"><button className="btn bg" onClick={onClose}>Close</button></div>
       </div>
     </div>
   );
@@ -311,7 +346,8 @@ function Dashboard({jobs,technicians,onFilterJobs}){
 }
 
 function FilteredJobsPanel({jobs,label,onClear,onEdit,onDelete}){
-  return(
+  const [viewJob,setViewJob]=useState(null);
+  return(<>
     <div className="panel" style={{marginTop:0}}>
       <div className="ph">
         <div className="pt">{label} ({jobs.length})</div>
@@ -322,13 +358,13 @@ function FilteredJobsPanel({jobs,label,onClear,onEdit,onDelete}){
           <div className="cl">ID</div><div className="cl">Customer/Equip</div><div className="cl">Technician</div><div className="cl">Date</div><div className="cl">Status</div><div className="cl">Act.</div>
         </div>
         {jobs.map(j=>(
-          <div key={j.id} className="tr" style={{gridTemplateColumns:'90px 1fr 110px 90px 90px 70px'}}>
+          <div key={j.id} className="tr" style={{gridTemplateColumns:'90px 1fr 110px 90px 90px 70px'}} onClick={()=>setViewJob(j)}>
             <div className="ci">{j.job_id}</div>
             <div><div className="cm">{j.customer||'—'}</div><div className="cs">{j.equipment||'—'}</div></div>
             <div className="cd">{j.technician||'—'}</div>
             <div className="cn">{j.date||'—'}</div>
             <div><StBadge s={j.status}/></div>
-            <div style={{display:'flex',gap:4}}>
+            <div style={{display:'flex',gap:4}} onClick={e=>e.stopPropagation()}>
               <button className="btn bg bs" onClick={()=>onEdit(j)}>✏️</button>
               <button className="btn bd bs" onClick={()=>onDelete(j.id)}>🗑</button>
             </div>
@@ -337,7 +373,8 @@ function FilteredJobsPanel({jobs,label,onClear,onEdit,onDelete}){
         {!jobs.length&&<div className="empty"><div className="ei">✅</div>No jobs in this category</div>}
       </div>
     </div>
-  );
+    {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)}/>}
+  </>);
 }
 
 function JobFormModal({job,customers,technicians,onSave,onClose}){
@@ -377,6 +414,7 @@ function JobFormModal({job,customers,technicians,onSave,onClose}){
 function Jobs({jobs,customers,technicians,onAdd,onEdit,onDelete,loading}){
   const [editJob,setEditJob]=useState(null);
   const [showForm,setShowForm]=useState(false);
+  const [viewJob,setViewJob]=useState(null);
   const save=(f)=>{editJob?.id?onEdit({...f}):onAdd({...f});setShowForm(false);setEditJob(null);};
   const openEdit=(j)=>{setEditJob(j);setShowForm(true);};
   const openNew=()=>{setEditJob(null);setShowForm(true);};
@@ -388,14 +426,14 @@ function Jobs({jobs,customers,technicians,onAdd,onEdit,onDelete,loading}){
           <div className="cl">ID</div><div className="cl">Customer/Equip</div><div className="cl">Technician</div><div className="cl">Date</div><div className="cl">Amount</div><div className="cl">Status</div><div className="cl">Act.</div>
         </div>
         {[...jobs].reverse().map(j=>(
-          <div key={j.id} className="tr" style={{gridTemplateColumns:'90px 1fr 110px 90px 80px 90px 70px'}}>
+          <div key={j.id} className="tr" style={{gridTemplateColumns:'90px 1fr 110px 90px 80px 90px 70px'}} onClick={()=>setViewJob(j)}>
             <div className="ci">{j.job_id}</div>
             <div><div className="cm">{j.customer||'—'}</div><div className="cs">{j.equipment||'—'}</div></div>
             <div className="cd">{j.technician||'—'}</div>
             <div className="cn">{j.date||'—'}</div>
             <div className="cv">{j.amount?'$'+j.amount:'—'}</div>
             <div><StBadge s={j.status}/></div>
-            <div style={{display:'flex',gap:4}}>
+            <div style={{display:'flex',gap:4}} onClick={e=>e.stopPropagation()}>
               <button className="btn bg bs" onClick={()=>openEdit(j)}>✏️</button>
               <button className="btn bd bs" onClick={()=>onDelete(j.id)}>🗑</button>
             </div>
@@ -410,6 +448,7 @@ function Jobs({jobs,customers,technicians,onAdd,onEdit,onDelete,loading}){
       {!loading&&!jobs.length&&<div className="empty"><div className="ei">📋</div>No jobs yet!</div>}
     </div>
     {showForm&&<JobFormModal job={editJob} customers={customers} technicians={technicians} onSave={save} onClose={()=>{setShowForm(false);setEditJob(null);}}/>}
+    {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)}/>}
   </>);
 }
 
@@ -418,6 +457,7 @@ function Customers({customers,jobs,onAdd,onEdit,onDelete,loading}){
   const [f,setF]=useState({});
   const [search,setSearch]=useState('');
   const [expanded,setExpanded]=useState(null);
+  const [viewJob,setViewJob]=useState(null);
   const filtered=customers.filter(c=>
     (c.company||'').toLowerCase().includes(search.toLowerCase())||
     (c.contact||'').toLowerCase().includes(search.toLowerCase())||
@@ -436,37 +476,38 @@ function Customers({customers,jobs,onAdd,onEdit,onDelete,loading}){
         <div className="tr hdr" style={{gridTemplateColumns:'1fr 130px 60px 70px'}}>
           <div className="cl">Company/Contact</div><div className="cl">Phone</div><div className="cl">Jobs</div><div className="cl">Act.</div>
         </div>
-    {[...filtered].reverse().map(c=>{
-            const cJobs=jobs.filter(j=>j.customer===c.company);
-            const isOpen=expanded===c.id;
-            return(<>
-              <div key={c.id} className="tr" style={{gridTemplateColumns:'1fr 130px 60px 70px',background:isOpen?'var(--sur2)':''}} onClick={()=>setExpanded(isOpen?null:c.id)}>
-                <div><div className="cm">{c.company||'—'}</div><div className="cs">{c.contact||''}</div></div>
-                <div className="cn">{c.phone||'—'}</div>
-                <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,color:'var(--ac)'}}>{cJobs.length}</div>
-                <div style={{display:'flex',gap:4}} onClick={e=>e.stopPropagation()}>
-                  <button className="btn bg bs" onClick={()=>open(c)}>✏️</button>
-                  <button className="btn bd bs" onClick={()=>onDelete(c.id)}>🗑</button>
-                </div>
+        {[...filtered].reverse().map(c=>{
+          const cJobs=jobs.filter(j=>j.customer===c.company);
+          const isOpen=expanded===c.id;
+          return(<>
+            <div key={c.id} className="tr" style={{gridTemplateColumns:'1fr 130px 60px 70px',background:isOpen?'var(--sur2)':''}} onClick={()=>setExpanded(isOpen?null:c.id)}>
+              <div><div className="cm">{c.company||'—'}</div><div className="cs">{c.contact||''}</div></div>
+              <div className="cn">{c.phone||'—'}</div>
+              <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,color:'var(--ac)'}}>{cJobs.length}</div>
+              <div style={{display:'flex',gap:4}} onClick={e=>e.stopPropagation()}>
+                <button className="btn bg bs" onClick={()=>open(c)}>✏️</button>
+                <button className="btn bd bs" onClick={()=>onDelete(c.id)}>🗑</button>
               </div>
-              {isOpen&&<div key={c.id+'-jobs'} style={{background:'var(--sur3)',borderBottom:'1px solid var(--bdr)',padding:'0 0 8px 0'}}>
-                <div style={{padding:'8px 16px 4px',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:2,textTransform:'uppercase'}}>Job History — {c.company}</div>
-                {cJobs.length===0&&<div style={{padding:'10px 16px',fontSize:12,color:'var(--txd)'}}>No jobs found for this customer.</div>}
-                {cJobs.map(j=>(
-                  <div key={j.id} style={{display:'grid',gridTemplateColumns:'90px 1fr 100px 90px 80px',alignItems:'center',padding:'8px 16px',borderTop:'1px solid var(--bdr)'}}>
-                    <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:'var(--ac)'}}>{j.job_id}</div>
-                    <div><div style={{fontSize:12,fontWeight:500}}>{j.equipment||'—'}</div><div style={{fontSize:11,color:'var(--txd)'}}>{j.technician||'Unassigned'}</div></div>
-                    <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txm)'}}>{j.date||'—'}</div>
-                    <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,fontSize:13}}>{j.amount?'$'+j.amount:'—'}</div>
-                    <div><span className={"st "+(j.status||'Pending').replace(' ','')}>{j.status||'Pending'}</span></div>
-                  </div>
-                ))}
-              </div>}
-            </>);
-          })}
+            </div>
+            {isOpen&&<div key={c.id+'-jobs'} style={{background:'var(--sur3)',borderBottom:'1px solid var(--bdr)',padding:'0 0 8px 0'}}>
+              <div style={{padding:'8px 16px 4px',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:2,textTransform:'uppercase'}}>Job History — {c.company}</div>
+              {cJobs.length===0&&<div style={{padding:'10px 16px',fontSize:12,color:'var(--txd)'}}>No jobs found for this customer.</div>}
+              {cJobs.map(j=>(
+                <div key={j.id} style={{display:'grid',gridTemplateColumns:'90px 1fr 100px 90px 80px',alignItems:'center',padding:'8px 16px',borderTop:'1px solid var(--bdr)',cursor:'pointer',transition:'background .1s'}} onClick={()=>setViewJob(j)} onMouseEnter={e=>e.currentTarget.style.background='var(--sur2)'} onMouseLeave={e=>e.currentTarget.style.background=''}>
+                  <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:'var(--ac)'}}>{j.job_id}</div>
+                  <div><div style={{fontSize:12,fontWeight:500}}>{j.equipment||'—'}</div><div style={{fontSize:11,color:'var(--txd)'}}>{j.technician||'Unassigned'}</div></div>
+                  <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txm)'}}>{j.date||'—'}</div>
+                  <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,fontSize:13}}>{j.amount?'$'+j.amount:'—'}</div>
+                  <div><span className={"st "+(j.status||'Pending').replace(' ','')}>{j.status||'Pending'}</span></div>
+                </div>
+              ))}
+            </div>}
+          </>);
+        })}
         {!customers.length&&<div className="empty"><div className="ei">🏢</div>No customers yet.</div>}
       </div>}
     </div>
+    {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)}/>}
     {form!==null&&(
       <Modal title={form?.id?'Edit Customer':'New Customer'} onClose={()=>setForm(null)} onSave={save} saveLabel={form?.id?'Save Changes':'Add Customer'}>
         <div className="fg"><label className="fl">Company Name</label><input className="fi" value={f.company||''} onChange={e=>setF({...f,company:e.target.value})}/></div>
