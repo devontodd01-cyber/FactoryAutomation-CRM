@@ -416,16 +416,26 @@ function Jobs({jobs,customers,technicians,onAdd,onEdit,onDelete,loading}){
 function Customers({customers,jobs,onAdd,onEdit,onDelete,loading}){
   const [form,setForm]=useState(null);
   const [f,setF]=useState({});
+  const [search,setSearch]=useState('');
+  const filtered=customers.filter(c=>
+    (c.company||'').toLowerCase().includes(search.toLowerCase())||
+    (c.contact||'').toLowerCase().includes(search.toLowerCase())||
+    (c.email||'').toLowerCase().includes(search.toLowerCase())||
+    (c.phone||'').toLowerCase().includes(search.toLowerCase())
+  );
   const open=(c)=>{setF(c?{...c}:{});setForm(c||{});};
   const save=()=>{form?.id?onEdit({...f}):onAdd({...f});setForm(null);};
   return(<>
     <div className="panel">
       <div className="ph"><div className="pt">Customers ({customers.length})</div><button className="btn bp bs" onClick={()=>open(null)}>+ New Customer</button></div>
+      <div style={{padding:'10px 16px',borderBottom:'1px solid var(--bdr)'}}>
+        <input className="fi" placeholder="🔍 Search customers..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:0}}/>
+      </div>
       {loading?<Loading/>:<div className="tbl">
         <div className="tr hdr" style={{gridTemplateColumns:'1fr 130px 60px 70px'}}>
           <div className="cl">Company/Contact</div><div className="cl">Phone</div><div className="cl">Jobs</div><div className="cl">Act.</div>
         </div>
-        {[...customers].reverse().map(c=>(
+        {[...filtered].reverse().map(c=>(
           <div key={c.id} className="tr" style={{gridTemplateColumns:'1fr 130px 60px 70px'}}>
             <div><div className="cm">{c.company||'—'}</div><div className="cs">{c.contact||''}</div></div>
             <div className="cn">{c.phone||'—'}</div>
