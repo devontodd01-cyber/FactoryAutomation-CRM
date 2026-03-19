@@ -363,7 +363,7 @@ function FilteredJobsPanel({jobs,label,onClear,onEdit,onDelete}){
           <div className="cl">ID</div><div className="cl">Customer/Equip</div><div className="cl">Technician</div><div className="cl">Date</div><div className="cl">Status</div><div className="cl">Act.</div>
         </div>
         {jobs.map(j=>(
-          <div key={j.id} className="tr" style={{gridTemplateColumns:'90px 1fr 110px 90px 90px 70px'}} onClick={()=>setViewJob(j)}>
+          {dj.map(j=><div key={j.id} className={"cj "+(j.status||'Pending').replace(' ','')} title={j.job_id}>{j.customer||j.job_id}</div>)}
             <div className="ci">{j.job_id}</div>
             <div><div className="cm">{j.customer||'—'}</div><div className="cs">{j.equipment||'—'}</div></div>
             <div className="cd">{j.technician||'—'}</div>
