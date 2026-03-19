@@ -320,10 +320,9 @@ function Dashboard({jobs,technicians,onFilterJobs,onEditJob}){
     <div className="kgrid">
       <div className={"kc bl"+(selected==='active'?' selected':'')} onClick={()=>toggle('active',jobs.filter(j=>['In Progress','Dispatched'].includes(j.status)))}><div className="kl">Active Jobs</div><div className="kv">{active}</div><div className="ks">Click to filter ↓</div></div>
       <div className={"kc am"+(selected==='pending'?' selected':'')} onClick={()=>toggle('pending',jobs.filter(j=>j.status==='Pending'))}><div className="kl">Pending</div><div className="kv">{pending}</div><div className="ks">Click to filter ↓</div></div>
-      <div className={"kc gr"+(selected==='paid'?' selected':'')} onClick={()=>toggle('paid',jobs.filter(j=>j.invoice_status==='Paid'))}><div className="kl">Revenue Paid</div><div className="kv">${rev.toLocaleString()}</div><div className="ks">Click to filter ↓</div></div>
-      <div className={"kc rd"+(selected==='urgent'?' selected':'')} onClick={()=>toggle('urgent',jobs.filter(j=>j.priority==='Urgent'&&j.status!=='Complete'))}><div className="kl">SLA At Risk</div><div className="kv">{sla}</div><div className="ks">Click to filter ↓</div></div>
+
     </div>
-<div style={{marginBottom:16}}>
+    <div style={{marginBottom:16}}>
       <div className="panel">
         <div className="ph"><div className="pt">Recent Jobs</div></div>
         {[...jobs].reverse().slice(0,6).map(j=>(
@@ -334,7 +333,10 @@ function Dashboard({jobs,technicians,onFilterJobs,onEditJob}){
         ))}
         {!jobs.length&&<div className="empty"><div className="ei">📋</div>No jobs yet</div>}
       </div>
- 
+    </div>
+    {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)} onEdit={(j)=>{setViewJob(null);onEditJob(j);}}/>}
+  </>);
+}
 
 function FilteredJobsPanel({jobs,label,onClear,onEdit,onDelete}){
   const [viewJob,setViewJob]=useState(null);
