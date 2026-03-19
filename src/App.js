@@ -310,7 +310,7 @@ function MobileDashboard({jobs,onEditJob,onDeleteJob,onNewJob}){
 
 function DashJobTile({j,onClick}){
   const sc=(j.status||'Pending').replace(' ','');
-  const border=sc==='InProgress'?'var(--am)':sc==='Dispatched'?'var(--ac)':sc==='Complete'?'var(--gr)":'var(--txd)';
+  const border=sc==='InProgress'?'var(--am)':sc==='Dispatched'?'var(--ac)':sc==='Complete'?'var(--gr)':'var(--txd)';
   return(
     <div onClick={()=>onClick(j)} style={{background:'var(--sur)',border:'1px solid var(--bdr)',borderRadius:8,padding:'12px 14px',cursor:'pointer',position:'relative',overflow:'hidden',transition:'border-color .15s'}} onMouseEnter={e=>e.currentTarget.style.borderColor=border} onMouseLeave={e=>e.currentTarget.style.borderColor='var(--bdr)'}>
       <div style={{position:'absolute',left:0,top:0,bottom:0,width:3,background:border}}/>
