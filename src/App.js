@@ -308,32 +308,53 @@ function MobileDashboard({jobs,onEditJob,onDeleteJob,onNewJob}){
   </>);
 }
 
-function Dashboard({jobs,technicians,onFilterJobs,onEditJob}){
-  const active=jobs.filter(j=>['In Progress','Dispatched'].includes(j.status)).length;
-  const pending=jobs.filter(j=>j.status==='Pending').length;
-  const rev=jobs.filter(j=>j.invoice_status==='Paid').reduce((s,j)=>s+(parseFloat(j.amount)||0),0);
-  const sla=jobs.filter(j=>j.priority==='Urgent'&&j.status!=='Complete').length;
-  const [selected,setSelected]=useState(null);
-  const [viewJob,setViewJob]=useState(null);
-  const toggle=(f,filtered)=>{const n=selected===f?null:f;setSelected(n);onFilterJobs(n?filtered:null,n?f:null);};
-  return(<>
-    <div className="kgrid">
-      <div className={"kc bl"+(selected==='active'?' selected':'')} onClick={()=>toggle('active',jobs.filter(j=>['In Progress','Dispatched'].includes(j.status)))}><div className="kl">Active Jobs</div><div className="kv">{active}</div><div className="ks">Click to filter ↓</div></div>
-      <div className={"kc am"+(selected==='pending'?' selected':'')} onClick={()=>toggle('pending',jobs.filter(j=>j.status==='Pending'))}><div className="kl">Pending</div><div className="kv">{pending}</div><div className="ks">Click to filter ↓</div></div>
-
-    </div>
-    <div style={{marginBottom:16}}>
-      <div className="panel">
-        <div className="ph"><div className="pt">Recent Jobs</div></div>
-        {[...jobs].reverse().slice(0,6).map(j=>(
-          <div key={j.id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 16px',borderBottom:'1px solid var(--bdr)',cursor:'pointer',transition:'background .1s'}} onClick={()=>setViewJob(j)} onMouseEnter={e=>e.currentTarget.style.background='var(--sur2)'} onMouseLeave={e=>e.currentTarget.style.background=''}>
-            <div><div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--ac)',marginBottom:1}}>{j.job_id}</div><div style={{fontSize:13,fontWeight:500}}>{j.customer||'—'}</div><div style={{fontSize:11,color:'var(--txd)'}}>{j.equipment||'—'}</div></div>
-            <StBadge s={j.status}/>
-          </div>
-        ))}
-        {!jobs.length&&<div className="empty"><div className="ei">📋</div>No jobs yet</div>}
+function DashJobTile({j,onClick}){
+  const sc=(j.status||'Pending').replace(' ','');
+  const border=sc==='InProgress'?'var(--am)':sc==='Dispatched'?'var(--ac)':sc==='Complete'?'var(--gr)":'var(--txd)';
+  return(
+    <div onClick={()=>onClick(j)} style={{background:'var(--sur)',border:'1px solid var(--bdr)',borderRadius:8,padding:'12px 14px',cursor:'pointer',position:'relative',overflow:'hidden',transition:'border-color .15s'}} onMouseEnter={e=>e.currentTarget.style.borderColor=border} onMouseLeave={e=>e.currentTarget.style.borderColor='var(--bdr)'}>
+      <div style={{position:'absolute',left:0,top:0,bottom:0,width:3,background:border}}/>
+      <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--ac)',letterSpacing:1,marginBottom:4}}>{j.job_id}</div>
+      <div style={{fontSize:13,fontWeight:600,marginBottom:2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{j.customer||'—'}</div>
+      <div style={{fontSize:11,color:'var(--txd)',marginBottom:8,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{j.equipment||'—'}</div>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+        <StBadge s={j.status}/>
+        {j.priority&&j.priority!=='Normal'&&<span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:j.priority==='Urgent'?'var(--rd)':'var(--am)'}}>{j.priority==='Urgent'?'⚡ URGENT':'⚡ '+j.priority}</span>}
       </div>
+      {j.technician&&<div style={{marginTop:6,fontSize:10,color:'var(--txm)',fontFamily:"'IBM Plex Mono',monospace"}}>👤 {j.technician}</div>}
+      {j.date&&<div style={{fontSize:10,color:'var(--txm)',fontFamily:"'IBM Plex Mono',monospace",marginTop:2}}>📅 {j.date}</div>}
     </div>
+  );
+}
+
+function Dashboard({jobs,onEditJob}){
+  const [viewJob,setViewJob]=useState(null);
+  const boardJobs=jobs.filter(j=>!(['Invoiced','Paid'].includes(j.invoice_status)));
+  const groups=[
+    {label:'Pending',color:'var(--txd)',jobs:boardJobs.filter(j=>j.status==='Pending')},
+    {label:'Dispatched',color:'var(--ac)',jobs:boardJobs.filter(j=>j.status==='Dispatched')},
+    {label:'In Progress',color:'var(--am)',jobs:boardJobs.filter(j=>j.status==='In Progress')},
+    {label:'Complete',color:'var(--gr)',jobs:boardJobs.filter(j=>j.status==='Complete')},
+  ];
+  return(<>
+    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
+      <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,fontSize:13,letterSpacing:1,textTransform:'uppercase',color:'var(--txm)'}}>Job Board <span style={{color:'var(--ac)',marginLeft:8}}>{boardJobs.length} active</span></div>
+      <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)'}}>Invoiced/Paid jobs removed</div>
+    </div>
+    {groups.map(g=>(
+      <div key={g.label} style={{marginBottom:20}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+          <div style={{width:3,height:14,borderRadius:2,background:g.color}}/>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txm)',letterSpacing:2,textTransform:'uppercase'}}>{g.label}</div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:g.color}}>{g.jobs.length}</div>
+        </div>
+        {g.jobs.length===0&&<div style={{padding:'10px 14px',background:'var(--sur)',border:'1px solid var(--bdr)',borderRadius:6,fontSize:12,color:'var(--txd)'}}>No {g.label.toLowerCase()} jobs</div>}
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:10}}>
+          {g.jobs.map(j=><DashJobTile key={j.id} j={j} onClick={setViewJob}/>)}
+        </div>
+      </div>
+    ))}
+    {!boardJobs.length&&<div className="empty"><div className="ei">🎉</div>All jobs invoiced!</div>}
     {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)} onEdit={(j)=>{setViewJob(null);onEditJob(j);}}/>}
   </>);
 }
@@ -601,8 +622,6 @@ export default function App(){
   const [toast,setToast]=useState('');
   const [jobForm,setJobForm]=useState(null);
   const [showJobForm,setShowJobForm]=useState(false);
-  const [filteredJobs,setFilteredJobs]=useState(null);
-  const [filterLabel,setFilterLabel]=useState('');
 
   const msg=useCallback((m)=>{setToast(m);setTimeout(()=>setToast(''),2500);},[]);
 
@@ -655,8 +674,7 @@ export default function App(){
         </div>
         <div className="main">
           {page==='Dashboard'&&<>
-            <Dashboard jobs={jobs} technicians={technicians} onFilterJobs={(filtered,label)=>{setFilteredJobs(filtered);setFilterLabel(label);}} onEditJob={openMobileJobEdit}/>
-            {filteredJobs&&<FilteredJobsPanel jobs={filteredJobs} label={filterLabel==='active'?'Active Jobs':filterLabel==='pending'?'Pending Jobs':filterLabel==='paid'?'Paid Jobs':'Urgent Jobs'} onClear={()=>setFilteredJobs(null)} onEdit={openMobileJobEdit} onDelete={delJob}/>}
+            <Dashboard jobs={jobs} onEditJob={openMobileJobEdit}/>}
             <MobileDashboard jobs={jobs} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/>
           </>}
           {page==='Jobs'&&<Jobs jobs={jobs} customers={customers} technicians={technicians} loading={loading.jobs} onAdd={addJob} onEdit={editJob} onDelete={delJob}/>}
