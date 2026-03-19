@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 const SUPABASE_URL = "https://untsjmmqtfasejkwjnlf.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVudHNqbW1xdGZhc2Vqa3dqbmxmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM3OTc3NDksImV4cCI6MjA4OTM3Mzc0OX0.dqBbwFHC1tsPEtl9KD_qNUvhGW0H33NFj19h6MFeqAo";
@@ -29,6 +29,38 @@ const db = {
   async delete(table, id) {
     await fetch(`${SUPABASE_URL}/rest/v1/${table}?id=eq.${id}`, {
       method: "DELETE",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+    });
+  }
+};
+
+
+const storage = {
+  async upload(file, jobId) {
+    const ext = file.name.split('.').pop();
+    const path = `${jobId}/${Date.now()}.${ext}`;
+    const r = await fetch(`${SUPABASE_URL}/storage/v1/object/job-photos/${path}`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': file.type },
+      body: file
+    });
+    if (!r.ok) throw new Error('Upload failed');
+    return `${SUPABASE_URL}/storage/v1/object/public/job-photos/${path}`;
+  },
+  async list(jobId) {
+    const r = await fetch(`${SUPABASE_URL}/storage/v1/object/list/job-photos`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prefix: `${jobId}/`, limit: 50 })
+    });
+    const files = await r.json();
+    if (!Array.isArray(files)) return [];
+    return files.map(f => `${SUPABASE_URL}/storage/v1/object/public/job-photos/${jobId}/${f.name}`);
+  },
+  async delete(url) {
+    const path = url.split('/job-photos/')[1];
+    await fetch(`${SUPABASE_URL}/storage/v1/object/job-photos/${path}`, {
+      method: 'DELETE',
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
     });
   }
@@ -207,6 +239,33 @@ function Modal({title,onClose,onSave,saveLabel,children}){
 }
 
 function JobDetailModal({job,onClose,onEdit}){
+  const [photos,setPhotos]=useState([]);
+  const [uploading,setUploading]=useState(false);
+  const [lightbox,setLightbox]=useState(null);
+  const fileRef=useRef(null);
+
+  useEffect(()=>{
+    if(job?.id) storage.list(job.id).then(setPhotos).catch(()=>setPhotos([]));
+  },[job?.id]);
+
+  const handleUpload=async(e)=>{
+    const files=[...e.target.files];
+    if(!files.length) return;
+    setUploading(true);
+    try{
+      const urls=await Promise.all(files.map(f=>storage.upload(f,job.id)));
+      setPhotos(p=>[...p,...urls]);
+    }catch(err){alert('Upload failed. Please try again.');}
+    setUploading(false);
+    e.target.value='';
+  };
+
+  const handleDelete=async(url)=>{
+    if(!window.confirm('Delete this photo?')) return;
+    await storage.delete(url);
+    setPhotos(p=>p.filter(x=>x!==url));
+  };
+
   return(
     <div className="mbg" onClick={onClose}>
       <div className="modal" onClick={e=>e.stopPropagation()}>
@@ -227,9 +286,28 @@ function JobDetailModal({job,onClose,onEdit}){
             <div><div className="detail-label">Priority</div><div className="detail-value">{job.priority||'Normal'}</div></div>
             <div><div className="detail-label">Invoice</div><div className="detail-value">{job.invoice_status||'—'}</div></div>
           </div>
-          <div style={{borderTop:'1px solid var(--bdr)',paddingTop:16}}>
+          <div style={{borderTop:'1px solid var(--bdr)',paddingTop:16,marginBottom:16}}>
             <div className="detail-label" style={{marginBottom:8}}>Notes</div>
             <div style={{fontSize:13,color:job.notes?'var(--tx)':'var(--txd)',lineHeight:1.7,minHeight:60,background:'var(--sur2)',padding:'10px 12px',borderRadius:4,border:'1px solid var(--bdr)',fontStyle:job.notes?'normal':'italic'}}>{job.notes||'No notes for this job.'}</div>
+          </div>
+          <div style={{borderTop:'1px solid var(--bdr)',paddingTop:16}}>
+            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
+              <div className="detail-label">Photos ({photos.length})</div>
+              <button className="btn bp bs" onClick={()=>fileRef.current?.click()} disabled={uploading}>
+                {uploading?'Uploading...':'📷 Add Photo'}
+              </button>
+              <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple style={{display:'none'}} onChange={handleUpload}/>
+            </div>
+            {photos.length===0&&!uploading&&<div style={{padding:'20px',textAlign:'center',color:'var(--txd)',fontSize:12,background:'var(--sur2)',borderRadius:6,border:'1px solid var(--bdr)'}}>No photos yet — tap Add Photo to upload</div>}
+            {uploading&&<div style={{padding:'20px',textAlign:'center',color:'var(--ac)',fontSize:12,background:'var(--sur2)',borderRadius:6,border:'1px solid var(--bdr)'}}>⏳ Uploading...</div>}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginTop:8}}>
+              {photos.map((url,i)=>(
+                <div key={i} style={{position:'relative',paddingBottom:'100%',borderRadius:6,overflow:'hidden',border:'1px solid var(--bdr)'}}>
+                  <img src={url} alt="" style={{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover',cursor:'pointer'}} onClick={()=>setLightbox(url)}/>
+                  <button onClick={()=>handleDelete(url)} style={{position:'absolute',top:4,right:4,background:'rgba(0,0,0,0.7)',border:'none',color:'white',borderRadius:3,width:20,height:20,cursor:'pointer',fontSize:12,display:'flex',alignItems:'center',justifyContent:'center'}}>×</button>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
         <div className="mf">
@@ -237,6 +315,12 @@ function JobDetailModal({job,onClose,onEdit}){
           {onEdit&&<button className="btn bp" onClick={()=>onEdit(job)}>✏️ Edit Job</button>}
         </div>
       </div>
+      {lightbox&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.95)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:20}} onClick={()=>setLightbox(null)}>
+          <img src={lightbox} alt="" style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:6}}/>
+          <button style={{position:'absolute',top:20,right:20,background:'rgba(255,255,255,0.1)',border:'none',color:'white',fontSize:24,cursor:'pointer',borderRadius:4,padding:'4px 10px'}} onClick={()=>setLightbox(null)}>×</button>
+        </div>
+      )}
     </div>
   );
 }
