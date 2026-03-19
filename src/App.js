@@ -173,7 +173,7 @@ const styles = `
   .mob-kpi.gr::before{background:var(--gr);}
   .mob-kpi .kl{font-size:8px;}
   .mob-kpi .kv{font-size:22px;}
-  .mob-kpi.bl .kv{color:var(--ac);}
+  .mob-kpi.bl .kv{color:var(--ac).);}
   .mob-kpi.am .kv{color:var(--am);}
   .mob-kpi.rd .kv{color:var(--rd);}
   .mob-kpi.gr .kv{color:var(--gr);}
@@ -206,7 +206,7 @@ function Modal({title,onClose,onSave,saveLabel,children}){
   );
 }
 
-function JobDetailModal({job,onClose}){
+function JobDetailModal({job,onClose,onEdit}){
   return(
     <div className="mbg" onClick={onClose}>
       <div className="modal" onClick={e=>e.stopPropagation()}>
@@ -232,7 +232,10 @@ function JobDetailModal({job,onClose}){
             <div style={{fontSize:13,color:job.notes?'var(--tx)':'var(--txd)',lineHeight:1.7,minHeight:60,background:'var(--sur2)',padding:'10px 12px',borderRadius:4,border:'1px solid var(--bdr)',fontStyle:job.notes?'normal':'italic'}}>{job.notes||'No notes for this job.'}</div>
           </div>
         </div>
-        <div className="mf"><button className="btn bg" onClick={onClose}>Close</button></div>
+        <div className="mf">
+          <button className="btn bg" onClick={onClose}>Close</button>
+          {onEdit&&<button className="btn bp" onClick={()=>onEdit(job)}>✏️ Edit Job</button>}
+        </div>
       </div>
     </div>
   );
@@ -305,12 +308,13 @@ function MobileDashboard({jobs,onEditJob,onDeleteJob,onNewJob}){
   </>);
 }
 
-function Dashboard({jobs,technicians,onFilterJobs}){
+function Dashboard({jobs,technicians,onFilterJobs,onEditJob}){
   const active=jobs.filter(j=>['In Progress','Dispatched'].includes(j.status)).length;
   const pending=jobs.filter(j=>j.status==='Pending').length;
   const rev=jobs.filter(j=>j.invoice_status==='Paid').reduce((s,j)=>s+(parseFloat(j.amount)||0),0);
   const sla=jobs.filter(j=>j.priority==='Urgent'&&j.status!=='Complete').length;
   const [selected,setSelected]=useState(null);
+  const [viewJob,setViewJob]=useState(null);
   const toggle=(f,filtered)=>{const n=selected===f?null:f;setSelected(n);onFilterJobs(n?filtered:null,n?f:null);};
   return(<>
     <div className="kgrid">
@@ -323,7 +327,7 @@ function Dashboard({jobs,technicians,onFilterJobs}){
       <div className="panel">
         <div className="ph"><div className="pt">Recent Jobs</div></div>
         {[...jobs].reverse().slice(0,6).map(j=>(
-          <div key={j.id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 16px',borderBottom:'1px solid var(--bdr)'}}>
+          <div key={j.id} style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 16px',borderBottom:'1px solid var(--bdr)',cursor:'pointer',transition:'background .1s'}} onClick={()=>setViewJob(j)} onMouseEnter={e=>e.currentTarget.style.background='var(--sur2)'} onMouseLeave={e=>e.currentTarget.style.background=''}>
             <div><div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--ac)',marginBottom:1}}>{j.job_id}</div><div style={{fontSize:13,fontWeight:500}}>{j.customer||'—'}</div><div style={{fontSize:11,color:'var(--txd)'}}>{j.equipment||'—'}</div></div>
             <StBadge s={j.status}/>
           </div>
@@ -342,6 +346,7 @@ function Dashboard({jobs,technicians,onFilterJobs}){
         {!technicians.length&&<div className="empty"><div className="ei">👷</div>No technicians yet</div>}
       </div>
     </div>
+    {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)} onEdit={(j)=>{setViewJob(null);onEditJob(j);}}/>}
   </>);
 }
 
@@ -373,7 +378,7 @@ function FilteredJobsPanel({jobs,label,onClear,onEdit,onDelete}){
         {!jobs.length&&<div className="empty"><div className="ei">✅</div>No jobs in this category</div>}
       </div>
     </div>
-    {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)}/>}
+    {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)} onEdit={(j)=>{setViewJob(null);onEdit(j);}}/>}
   </>);
 }
 
@@ -448,7 +453,7 @@ function Jobs({jobs,customers,technicians,onAdd,onEdit,onDelete,loading}){
       {!loading&&!jobs.length&&<div className="empty"><div className="ei">📋</div>No jobs yet!</div>}
     </div>
     {showForm&&<JobFormModal job={editJob} customers={customers} technicians={technicians} onSave={save} onClose={()=>{setShowForm(false);setEditJob(null);}}/>}
-    {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)}/>}
+    {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)} onEdit={(j)=>{setViewJob(null);openEdit(j);}}/>}
   </>);
 }
 
@@ -662,7 +667,7 @@ export default function App(){
         </div>
         <div className="main">
           {page==='Dashboard'&&<>
-            <Dashboard jobs={jobs} technicians={technicians} onFilterJobs={(filtered,label)=>{setFilteredJobs(filtered);setFilterLabel(label);}}/>
+            <Dashboard jobs={jobs} technicians={technicians} onFilterJobs={(filtered,label)=>{setFilteredJobs(filtered);setFilterLabel(label);}} onEditJob={openMobileJobEdit}/>
             {filteredJobs&&<FilteredJobsPanel jobs={filteredJobs} label={filterLabel==='active'?'Active Jobs':filterLabel==='pending'?'Pending Jobs':filterLabel==='paid'?'Paid Jobs':'Urgent Jobs'} onClear={()=>setFilteredJobs(null)} onEdit={openMobileJobEdit} onDelete={delJob}/>}
             <MobileDashboard jobs={jobs} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/>
           </>}
