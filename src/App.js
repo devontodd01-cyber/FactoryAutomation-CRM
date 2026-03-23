@@ -121,6 +121,16 @@ const PDF_JOBS = [
   { customer: "Core3d", equipment: "PM7 – Disconnect Error", date: "2025-10-14", notes: "Pm7 disconnect error.\nMainboard com board\n48v power supply", status: "Complete" },
 ];
 
+// ── Archive helper ───────────────────────────────────────────────────────────
+function isArchived(job) {
+  if (job.status !== 'Complete') return false;
+  if (!job.date) return false;
+  const completed = new Date(job.date);
+  const now = new Date();
+  const diffDays = (now - completed) / (1000 * 60 * 60 * 24);
+  return diffDays > 30;
+}
+
 // ── Styles ───────────────────────────────────────────────────────────────────
 const styles = `
   @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
@@ -274,6 +284,7 @@ const styles = `
   .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;}
   .detail-label{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--txd);letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;}
   .detail-value{font-size:13px;color:var(--tx);}
+  .st.Archived{background:rgba(90,106,128,0.12);color:#4a5a70;border:1px solid var(--bdr);}
   .import-modal{background:var(--sur);border:1px solid var(--bdr2);border-radius:8px;width:100%;max-width:620px;max-height:85vh;overflow-y:auto;}
   .import-row{display:grid;grid-template-columns:24px 1fr 120px 90px;align-items:center;gap:8px;padding:8px 16px;border-bottom:1px solid var(--bdr);font-size:12px;}
   .import-row:hover{background:var(--sur2);}
@@ -839,6 +850,58 @@ function Schedule({jobs}){
   );
 }
 
+function Archive({jobs,onEdit,onDelete,loading}){
+  const [viewJob,setViewJob]=useState(null);
+  const [search,setSearch]=useState('');
+  const [clientFilter,setClientFilter]=useState('');
+  const archived=jobs.filter(isArchived);
+  const clients=[...new Set(archived.map(j=>j.customer).filter(Boolean))].sort();
+  const filtered=[...archived].sort((a,b)=>new Date(b.date)-new Date(a.date)).filter(j=>{
+    const q=search.toLowerCase();
+    const matchSearch=!q||(j.customer||'').toLowerCase().includes(q)||(j.equipment||'').toLowerCase().includes(q)||(j.notes||'').toLowerCase().includes(q)||(j.job_id||'').toLowerCase().includes(q);
+    const matchClient=!clientFilter||j.customer===clientFilter;
+    return matchSearch&&matchClient;
+  });
+  return(<>
+    <div className="panel desktop-table">
+      <div className="ph">
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div className="pt">Archive</div>
+          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:1,background:'var(--sur2)',border:'1px solid var(--bdr)',padding:'2px 7px',borderRadius:3}}>COMPLETE &gt; 30 DAYS</span>
+        </div>
+        <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)'}}>{filtered.length} jobs</div>
+      </div>
+      <div style={{padding:'10px 16px',borderBottom:'1px solid var(--bdr)',display:'flex',gap:10}}>
+        <input className="fi" placeholder="🔍 Search archived jobs..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:0,flex:2}}/>
+        <select className="fsl" value={clientFilter} onChange={e=>setClientFilter(e.target.value)} style={{flex:1}}>
+          <option value="">All clients</option>
+          {clients.map(c=><option key={c}>{c}</option>)}
+        </select>
+      </div>
+      {loading?<Loading/>:<div className="tbl">
+        <div className="tr hdr" style={{gridTemplateColumns:'90px 1fr 110px 90px 80px 70px'}}>
+          <div className="cl">ID</div><div className="cl">Customer/Equip</div><div className="cl">Technician</div><div className="cl">Date</div><div className="cl">Amount</div><div className="cl">Act.</div>
+        </div>
+        {filtered.map(j=>(
+          <div key={j.id} className="tr" style={{gridTemplateColumns:'90px 1fr 110px 90px 80px 70px',opacity:.8}} onClick={()=>setViewJob(j)}>
+            <div className="ci" style={{color:'var(--txd)'}}>{j.job_id}</div>
+            <div><div className="cm" style={{color:'var(--txm)'}}>{j.customer||'—'}</div><div className="cs">{j.equipment||'—'}</div></div>
+            <div className="cd">{j.technician||'—'}</div>
+            <div className="cn">{j.date||'—'}</div>
+            <div className="cv" style={{color:'var(--txm)'}}>{j.amount?'$'+j.amount:'—'}</div>
+            <div style={{display:'flex',gap:4}} onClick={e=>e.stopPropagation()}>
+              <button className="btn bg bs" onClick={()=>onEdit(j)}>✏️</button>
+              <button className="btn bd bs" onClick={()=>onDelete(j.id)}>🗑</button>
+            </div>
+          </div>
+        ))}
+        {!filtered.length&&<div className="empty"><div className="ei">🗄</div>{search||clientFilter?'No archived jobs match.':'No archived jobs yet — completed jobs older than 30 days appear here.'}</div>}
+      </div>}
+    </div>
+    {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)} onEdit={onEdit}/>}
+  </>);
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App(){
   const [page,setPage]=useState('Dashboard');
@@ -907,6 +970,7 @@ export default function App(){
   const pages=['Dashboard','Jobs','Schedule','Customers','Technicians'];
   const icons=['▣','◈','◎','◻','◑'];
   const activeCount=jobs.filter(j=>['In Progress','Dispatched'].includes(j.status)).length;
+  const archiveCount=jobs.filter(isArchived).length;
   const openMobileJobEdit=(j)=>{setJobForm(j);setShowJobForm(true);};
   const openMobileJobNew=()=>{setJobForm(null);setShowJobForm(true);};
   const saveMobileJob=(f)=>{jobForm?.id?editJob({...f}):addJob({...f});setShowJobForm(false);setJobForm(null);};
@@ -926,17 +990,23 @@ export default function App(){
           {pages.slice(0,4).map((p,i)=><div key={p} className={"ni "+(page===p?'active':'')} onClick={()=>setPage(p)}>{icons[i]} {p}</div>)}
           <div className="nl">Resources</div>
           <div className={"ni "+(page==='Technicians'?'active':'')} onClick={()=>setPage('Technicians')}>◑ Technicians</div>
+          <div className="nl">History</div>
+          <div className={"ni "+(page==='Archive'?'active':'')} onClick={()=>setPage('Archive')} style={{color:page==='Archive'?'var(--ac)':'var(--txd)'}}>
+            ◧ Archive
+            {archiveCount>0&&<span style={{marginLeft:'auto',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,background:'var(--sur2)',border:'1px solid var(--bdr)',padding:'1px 5px',borderRadius:3,color:'var(--txd)'}}>{archiveCount}</span>}
+          </div>
           <div className="sf"><div className="up"><div className="ua">AD</div><div><div style={{fontSize:12,fontWeight:500}}>Admin</div><div style={{fontSize:10,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace"}}>DISPATCH MGR</div></div></div></div>
         </div>
         <div className="main">
           {page==='Dashboard'&&<>
-            <Dashboard jobs={jobs} onEditJob={openMobileJobEdit}/>
-            <MobileDashboard jobs={jobs} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/>
+            <Dashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit}/>
+            <MobileDashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/>
           </>}
-          {page==='Jobs'&&<Jobs jobs={jobs} customers={customers} technicians={technicians} loading={loading.jobs} onAdd={addJob} onEdit={editJob} onDelete={delJob}/>}
-          {page==='Schedule'&&<Schedule jobs={jobs}/>}
+          {page==='Jobs'&&<Jobs jobs={jobs.filter(j=>!isArchived(j))} customers={customers} technicians={technicians} loading={loading.jobs} onAdd={addJob} onEdit={editJob} onDelete={delJob}/>}
+          {page==='Schedule'&&<Schedule jobs={jobs.filter(j=>!isArchived(j))}/>}
           {page==='Customers'&&<Customers customers={customers} jobs={jobs} loading={loading.customers} onAdd={addCust} onEdit={editCust} onDelete={delCust}/>}
           {page==='Technicians'&&<Technicians technicians={technicians} loading={loading.technicians} onAdd={addTech} onEdit={editTech} onDelete={delTech}/>}
+          {page==='Archive'&&<Archive jobs={jobs} onEdit={editJob} onDelete={delJob} loading={loading.jobs}/>}
         </div>
       </div>
       <nav className="bnav">
