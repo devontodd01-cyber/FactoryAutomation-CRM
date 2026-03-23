@@ -967,8 +967,8 @@ export default function App(){
     msg(`✅ Imported ${count} jobs from PDF!`);
   };
 
-  const pages=['Dashboard','Jobs','Schedule','Customers','Technicians'];
-  const icons=['▣','◈','◎','◻','◑'];
+  const pages=['Dashboard','Jobs','Schedule','Customers','Technicians','Archive'];
+  const icons=['▣','◈','◎','◻','◑','◧'];
   const activeCount=jobs.filter(j=>['In Progress','Dispatched'].includes(j.status)).length;
   const archiveCount=jobs.filter(isArchived).length;
   const openMobileJobEdit=(j)=>{setJobForm(j);setShowJobForm(true);};
@@ -1015,6 +1015,7 @@ export default function App(){
             <div key={p} className={"bnav-item "+(page===p?'active':'')} onClick={()=>setPage(p)}>
               <div className="bnav-icon">{icons[i]}</div>
               {p==='Jobs'&&activeCount>0&&<span className="bnav-badge">{activeCount}</span>}
+              {p==='Archive'&&archiveCount>0&&<span className="bnav-badge" style={{background:'var(--txd)'}}>{archiveCount}</span>}
               <div className="bnav-label">{p==='Technicians'?'Techs':p}</div>
             </div>
           ))}
