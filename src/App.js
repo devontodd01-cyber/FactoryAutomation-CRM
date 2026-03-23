@@ -62,6 +62,23 @@ const storage = {
       method: 'DELETE',
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
     });
+  },
+  async uploadFile(file) {
+    const safeName = Date.now() + '_' + file.name.replace(/[^a-zA-Z0-9._-]/g,'_');
+    const path = `refs/${safeName}`;
+    const r = await fetch(`${SUPABASE_URL}/storage/v1/object/job-photos/${path}`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': file.type },
+      body: file
+    });
+    if (!r.ok) throw new Error('Upload failed');
+    return { url: `${SUPABASE_URL}/storage/v1/object/public/job-photos/${path}`, name: file.name, size: file.size, path };
+  },
+  async deleteFile(path) {
+    await fetch(`${SUPABASE_URL}/storage/v1/object/job-photos/${path}`, {
+      method: 'DELETE',
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+    });
   }
 };
 
@@ -850,6 +867,102 @@ function Schedule({jobs}){
   );
 }
 
+function Files({files, onUpload, onDelete, uploading}) {
+  const [viewing, setViewing] = useState(null);
+  const [search, setSearch] = useState('');
+  const fileRef = useRef(null);
+
+  const filtered = files.filter(f =>
+    (f.name||'').toLowerCase().includes(search.toLowerCase()) ||
+    (f.tag||'').toLowerCase().includes(search.toLowerCase())
+  );
+
+  const fmt = (bytes) => {
+    if (!bytes) return '—';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024*1024) return Math.round(bytes/1024) + ' KB';
+    return (bytes/(1024*1024)).toFixed(1) + ' MB';
+  };
+
+  const fmtDate = (iso) => {
+    if (!iso) return '—';
+    return new Date(iso).toLocaleDateString('en-CA');
+  };
+
+  return (<>
+    <div className="panel">
+      <div className="ph">
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div className="pt">Files</div>
+          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:1,background:'var(--sur2)',border:'1px solid var(--bdr)',padding:'2px 7px',borderRadius:3}}>REFERENCE DOCS</span>
+        </div>
+        <button className="btn bimport" onClick={()=>fileRef.current?.click()} disabled={uploading} style={{fontSize:11}}>
+          {uploading ? '⏳ Uploading...' : '⬆ Upload PDF'}
+        </button>
+        <input ref={fileRef} type="file" accept="application/pdf" multiple style={{display:'none'}} onChange={e=>onUpload([...e.target.files]).then(()=>e.target.value='')}/>
+      </div>
+      <div style={{padding:'10px 16px',borderBottom:'1px solid var(--bdr)'}}>
+        <input className="fi" placeholder="🔍 Search files..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:0}}/>
+      </div>
+      <div className="tbl">
+        <div className="tr hdr" style={{gridTemplateColumns:'28px 1fr 80px 90px 70px'}}>
+          <div className="cl"/>
+          <div className="cl">File Name</div>
+          <div className="cl">Size</div>
+          <div className="cl">Uploaded</div>
+          <div className="cl">Act.</div>
+        </div>
+        {filtered.map(f=>(
+          <div key={f.id} className="tr" style={{gridTemplateColumns:'28px 1fr 80px 90px 70px'}} onClick={()=>setViewing(f)}>
+            <div style={{fontSize:18,lineHeight:1}}>📄</div>
+            <div>
+              <div className="cm" style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{f.name||'Unnamed'}</div>
+              {f.tag&&<div className="cs">{f.tag}</div>}
+            </div>
+            <div className="cn">{fmt(f.size)}</div>
+            <div className="cn">{fmtDate(f.created_at)}</div>
+            <div style={{display:'flex',gap:4}} onClick={e=>e.stopPropagation()}>
+              <button className="btn bg bs" onClick={()=>setViewing(f)} title="View">👁</button>
+              <button className="btn bd bs" onClick={()=>onDelete(f)}>🗑</button>
+            </div>
+          </div>
+        ))}
+        {!filtered.length&&!uploading&&(
+          <div className="empty">
+            <div className="ei">📁</div>
+            {search ? 'No files match your search.' : 'No files yet — upload a PDF to get started.'}
+          </div>
+        )}
+        {uploading&&<div className="loading"><div className="spin"/>Uploading...</div>}
+      </div>
+    </div>
+
+    {viewing&&(
+      <div className="mbg" onClick={()=>setViewing(null)}>
+        <div style={{background:'var(--sur)',border:'1px solid var(--bdr2)',borderRadius:8,width:'100%',maxWidth:860,height:'88vh',display:'flex',flexDirection:'column'}} onClick={e=>e.stopPropagation()}>
+          <div className="mh">
+            <div>
+              <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:2,marginBottom:3}}>REFERENCE FILE</div>
+              <div className="mt" style={{fontSize:13}}>{viewing.name}</div>
+            </div>
+            <div style={{display:'flex',gap:8,alignItems:'center'}}>
+              <a href={viewing.url} target="_blank" rel="noreferrer" className="btn bg bs" style={{textDecoration:'none',fontSize:11}} onClick={e=>e.stopPropagation()}>⬇ Download</a>
+              <button className="mc" onClick={()=>setViewing(null)}>×</button>
+            </div>
+          </div>
+          <div style={{flex:1,overflow:'hidden',borderRadius:'0 0 8px 8px'}}>
+            <iframe
+              src={viewing.url + '#toolbar=1&navpanes=0'}
+              style={{width:'100%',height:'100%',border:'none',borderRadius:'0 0 8px 8px'}}
+              title={viewing.name}
+            />
+          </div>
+        </div>
+      </div>
+    )}
+  </>);
+}
+
 function Archive({jobs,onEdit,onDelete,loading}){
   const [viewJob,setViewJob]=useState(null);
   const [search,setSearch]=useState('');
@@ -908,7 +1021,10 @@ export default function App(){
   const [jobs,setJobs]=useState([]);
   const [customers,setCustomers]=useState([]);
   const [technicians,setTechnicians]=useState([]);
+  const [files,setFiles]=useState([]);
   const [loading,setLoading]=useState({jobs:true,customers:true,technicians:true});
+  const [filesLoading,setFilesLoading]=useState(false);
+  const [fileUploading,setFileUploading]=useState(false);
   const [toast,setToast]=useState('');
   const [jobForm,setJobForm]=useState(null);
   const [showJobForm,setShowJobForm]=useState(false);
@@ -918,8 +1034,8 @@ export default function App(){
 
   const load=useCallback(async()=>{
     try{
-      const [j,c,t]=await Promise.all([db.get('jobs'),db.get('customers'),db.get('technicians')]);
-      setJobs(j||[]);setCustomers(c||[]);setTechnicians(t||[]);
+      const [j,c,t,f]=await Promise.all([db.get('jobs'),db.get('customers'),db.get('technicians'),db.get('ref_files')]);
+      setJobs(j||[]);setCustomers(c||[]);setTechnicians(t||[]);setFiles(f||[]);
     }catch(e){msg('⚠️ Could not connect to database.');}
     setLoading({jobs:false,customers:false,technicians:false});
   },[msg]);
@@ -967,8 +1083,32 @@ export default function App(){
     msg(`✅ Imported ${count} jobs from PDF!`);
   };
 
-  const pages=['Dashboard','Jobs','Schedule','Customers','Technicians','Archive'];
-  const icons=['▣','◈','◎','◻','◑','◧'];
+  const uploadFiles = async (fileList) => {
+    setFileUploading(true);
+    try {
+      for (const file of fileList) {
+        const {url, name, size, path} = await storage.uploadFile(file);
+        const r = await db.insert('ref_files', {name, url, size, storage_path: path});
+        const rec = Array.isArray(r) ? r[0] : r;
+        if (rec?.id) setFiles(p=>[...p, rec]);
+      }
+      msg(`✅ ${fileList.length} file${fileList.length>1?'s':''} uploaded!`);
+    } catch(e) { msg('⚠️ Upload failed. Check storage bucket.'); }
+    setFileUploading(false);
+  };
+
+  const deleteFile = async (f) => {
+    if (!window.confirm(`Delete "${f.name}"?`)) return;
+    try {
+      if (f.storage_path) await storage.deleteFile(f.storage_path);
+      await db.delete('ref_files', f.id);
+      setFiles(p=>p.filter(x=>x.id!==f.id));
+      msg('🗑 File deleted.');
+    } catch(e) { msg('⚠️ Delete failed.'); }
+  };
+
+  const pages=['Dashboard','Jobs','Schedule','Customers','Technicians','Files','Archive'];
+  const icons=['▣','◈','◎','◻','◑','◫','◧'];
   const activeCount=jobs.filter(j=>['In Progress','Dispatched'].includes(j.status)).length;
   const archiveCount=jobs.filter(isArchived).length;
   const openMobileJobEdit=(j)=>{setJobForm(j);setShowJobForm(true);};
@@ -990,6 +1130,7 @@ export default function App(){
           {pages.slice(0,4).map((p,i)=><div key={p} className={"ni "+(page===p?'active':'')} onClick={()=>setPage(p)}>{icons[i]} {p}</div>)}
           <div className="nl">Resources</div>
           <div className={"ni "+(page==='Technicians'?'active':'')} onClick={()=>setPage('Technicians')}>◑ Technicians</div>
+          <div className={"ni "+(page==='Files'?'active':'')} onClick={()=>setPage('Files')}>◫ Files</div>
           <div className="nl">History</div>
           <div className={"ni "+(page==='Archive'?'active':'')} onClick={()=>setPage('Archive')} style={{color:page==='Archive'?'var(--ac)':'var(--txd)'}}>
             ◧ Archive
@@ -1006,6 +1147,7 @@ export default function App(){
           {page==='Schedule'&&<Schedule jobs={jobs.filter(j=>!isArchived(j))}/>}
           {page==='Customers'&&<Customers customers={customers} jobs={jobs} loading={loading.customers} onAdd={addCust} onEdit={editCust} onDelete={delCust}/>}
           {page==='Technicians'&&<Technicians technicians={technicians} loading={loading.technicians} onAdd={addTech} onEdit={editTech} onDelete={delTech}/>}
+          {page==='Files'&&<Files files={files} onUpload={uploadFiles} onDelete={deleteFile} uploading={fileUploading}/>}
           {page==='Archive'&&<Archive jobs={jobs} onEdit={editJob} onDelete={delJob} loading={loading.jobs}/>}
         </div>
       </div>
