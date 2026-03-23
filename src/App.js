@@ -34,7 +34,6 @@ const db = {
   }
 };
 
-
 const storage = {
   async upload(file, jobId) {
     const ext = file.name.split('.').pop();
@@ -66,6 +65,63 @@ const storage = {
   }
 };
 
+// ── PDF Import Data ──────────────────────────────────────────────────────────
+const PDF_JOBS = [
+  { customer: "Aurum Equipment", equipment: "Meditherm Gold30700802", date: "2026-02-03", notes: "Meditherm gold30700802\nFuse", status: "Complete" },
+  { customer: "Schell", equipment: "SN 910500638", date: "2026-01-22", notes: "910500638\nDecent no concerns", status: "Complete" },
+  { customer: "Schell", equipment: "SN 910000147", date: "2026-01-22", notes: "910000147\nNoisy z axis ballscrew. Needs replacing.\nNew collet, supplied by customer\nY bs dirty.", status: "Complete" },
+  { customer: "Schell", equipment: "SN 9106000681", date: "2026-01-22", notes: "9106000681\nNoisy y belt. Lubricated.\nAll other serviced.\nNoisy x bs. Needs replacing", status: "Complete" },
+  { customer: "Schell", equipment: "450i", date: "2026-01-22", notes: "450i\nTool alignments out. Holder shifted.\nAligned, tightened and calibrated. Tested crown", status: "Complete" },
+  { customer: "Schell", equipment: "350iPlus SN2022-S3709", date: "2026-01-21", notes: "350iplus sn2022-s3709\nAdjust medentika holder, over clamped. New one ordered\nZero clamp full service\nX tension, grease\nZ tension. Greased\nCollet maintenance.\nChecked tool pockets\nScratched x, 50 microns.\nChiller bypassed", status: "Complete" },
+  { customer: "Evergreen Hans", equipment: "52DCI SN ZES1575", date: "2026-01-15", notes: "52dci sn ZES1575\nFailing calibrations. And clamp bearing fault.\nBad cont. Tested in rotary axis. 2Mohms\nNew collet\nBs cleaned and lube\nDice", status: "Complete" },
+  { customer: "Evergreen Hans", equipment: "51D SN ZDA1995", date: "2026-01-15", notes: "51d sn ZDA1995\nVacuum low, dusty inside. Oil and water in air lines.\nDamaged y axis left cover. Replaced.\nAdjusted x waycover.\nReseat xyz bs\nRecommend x bs.\nRecommend a axis rebuild, backlash\nCollet replaced\nDice good", status: "Complete" },
+  { customer: "Hitech", equipment: "Select – Loader", date: "2026-01-12", notes: "Select\nLoader issues.\nLower motor loose.\nPerhaps crimped, zipped tie cable.\nCalibration off. Helped alot.\nTop left switch replaced due to lever bending. $800 charge", status: "Complete" },
+  { customer: "Core3d", equipment: "Imes 150N04", date: "2026-01-08", notes: "Imes 150n04\nB axis sensor not reading.\nDirty\nCalibration due to values being way out", status: "Complete" },
+  { customer: "Aurum Equipment", equipment: "Bego Meditherm 307 377", date: "2026-01-07", notes: "Bego meditherm 307 377\nThermocouple.\n3 hours", status: "Complete" },
+  { customer: "Aurum Equipment", equipment: "EP5000 875530", date: "2026-01-06", notes: "Ep5000, 875530\nVacuum and heater failure. Err20\nLower vacuum seal. Heater power cable. #748474", status: "Complete" },
+  { customer: "Core3d", equipment: "150i No1", date: "2025-12-29", notes: "150i no1\nBack to smaller last purchased make of coolant pump", status: "Complete" },
+  { customer: "Refurbished Units", equipment: "DWX52DCI SN KEW0159", date: "2025-12-20", notes: "Dwx52dci sn kew0159\nB gear\nA gear\nXyz bs\nSpindle\nLoader upgrade", status: "Complete" },
+  { customer: "Core3d", equipment: "360Pro+", date: "2025-12-18", notes: "360pro+\nSpindle replacement\nOld 91520\nNew 91517\nGreased belts", status: "Complete" },
+  { customer: "Protec CB", equipment: "Imes350ProPlus 701041", date: "2025-12-12", notes: "Imes350proplus 701041\nNew belts, red.\nFull cali.\nOil build up on z belt. Need to check again if rtv sealant has kept it clean", status: "Complete" },
+  { customer: "Protec CB", equipment: "52DC No5 ZCZ0173", date: "2025-12-12", notes: "52dc no5 zcz0173\nZ Bs\nX bs\nCollet. A gear\nRepeatability xyz\nLoader clean and cali\nBetter but small mismatch line.\nDice is good. Suggested manual correction for now.", status: "Complete" },
+  { customer: "Protec CB", equipment: "52D ZDY1683 No6", date: "2025-12-11", notes: "52d zdy1683 NO6\nNew collet\nBoth white clamps.\nAdjust x,y bs seating\nGood dice good crowns", status: "Complete" },
+  { customer: "Protec CB", equipment: "PM7 252 – Denture Right No2/3/7", date: "2025-12-11", notes: "Pm7 252 (denture right.)\nFingers. 3 sets.\nNo2\nNo3\nNo7", status: "Complete" },
+  { customer: "Protec CB", equipment: "PM7 834 – Denture Right", date: "2025-12-11", notes: "Pm7 834 (denture right)\nPreventative maintenance.\nJust needed clean and lube.\nDid Loader test", status: "Complete" },
+  { customer: "Protec CB", equipment: "DWX52D ZEM2776 No1", date: "2025-12-10", notes: "Dwx52d ZEM2776 (NO1)\nXYZ BS NEW\nA GEAR\nB backlash\nTwist.\nDice good.\nGood crowns", status: "Complete" },
+  { customer: "Refurbished Units", equipment: "DWX52D ZDJ0203", date: "2025-12-09", notes: "Dwx52d zdj0203\nXyz BS\nFA AXIS\nStandard B axis", status: "Complete" },
+  { customer: "Rema Dents", equipment: "DWC50 ZBL1400", date: "2025-12-03", notes: "Dwc50.ZBL1400", status: "Complete" },
+  { customer: "Core3d", equipment: "150N02", date: "2025-12-01", notes: "150n02\nFull service.\nZ belt.\nNew spindle\nNew touch setter\n3 new tools sockets.\nClean and lubricant\nNew coolant good pump", status: "Complete" },
+  { customer: "Trosvic Seattle", equipment: "350i Pro Loader 697804/1", date: "2025-11-28", notes: "350i pro loader. 697804/1\nDust eaten through alot of mechanical components.\nZ axis ballscrew noisy. Repeatability good.\nX axis ballscrew had to be adjust on ballnut. Recommend new xyz ballscrew.\nNew belts.\nAlignments.\nNew collet\nFull calibration incl. 5 axis\nMain door missing rail.\nZero clamp system worn for dust. (replaced seals.)\nPc slow boot up", status: "Complete" },
+  { customer: "Trosvic Seattle", equipment: "52DCI KFD0656", date: "2025-11-27", notes: "Kfd0656\n52dci\nReplaced traverser with Refurbished unit. Too many issues with existing one.\nXyz ballscrews\nCollet\nAxis adjustment.\nNeeds full rotary axis replacement/Rebuild\nNeeds new calibration pins x2\nSend with tools. And 350 parts", status: "Complete" },
+  { customer: "Trosvic Seattle", equipment: "52DCI KFD0673", date: "2025-11-26", notes: "Kfd0673\n52dci\nRebuilt existing traverser. Loose and alignments.\nXyz ballscrews\nY axis limit switch\nRotary adjustments.\nRepeatability issues shown by dice.\nAlignment of axis needed\nNeeds full rotary axis replacement/Rebuild", status: "Complete" },
+  { customer: "Vhf", equipment: "R5 ID 923345704", date: "2025-11-24", notes: "R5 ID 923345704\nShipped out 2 x e5\nReceived r5.\nMissing some screws from the back\nIonizer faulty.\n2.3vdc output at nozzles\nWent through power supply.\nTested nozzles. Suspect cables.\nReplaced cables with nozzles. 28vdc\nSlight oil residue around nozzles and z axis bellows.\nReassembled with covers. Adjust door.\nInstalled csk screws for back panel.\nArranged pickup/delivery", status: "Complete" },
+  { customer: "Aurum Equipment", equipment: "P500 400232", date: "2025-11-19", notes: "P500 400232\nHead not moving. (hinge loose) and switch damaged - adjusted)\nNo Vacuum. Cleaned seal and reseat.", status: "Complete" },
+  { customer: "Aurum Equipment", equipment: "Radwell Vacuum Seal Kits (Order)", date: "2025-11-19", notes: "Ordered radwell vacuum seal kits\nArrive mid dec. Mid Jan", status: "Complete" },
+  { customer: "Centre St Denture", equipment: "53DC", date: "2025-11-18", notes: "53dc\nEarlier tro assembly\nRigid couplings\nToday z axis BS and touch setter switch\nX axis BS sounds bad.\nCalibration done.\n25nov\nSpace tape side of spindle for alignment", status: "Complete" },
+  { customer: "Aurum Equipment", equipment: "P300 200097", date: "2025-11-17", notes: "P300 200097\nNo power,\nPower supply replacement.\nBroken vacuum fitting\nPlatform seal cleanup\nGlue power supply cable", status: "Complete" },
+  { customer: "Core3d", equipment: "150No1 – Spindle Swap", date: "2025-11-13", notes: "150no1\nSwapped spindle with no2.\nNew coolant pump", status: "Complete" },
+  { customer: "Core3d", equipment: "150N03", date: "2025-11-13", notes: "150n03\nPcb fuses\nAnd coolant pump", status: "Complete" },
+  { customer: "FA Machines", equipment: "DWX52D ZDJ0203 – Storage", date: "2025-11-06", notes: "Storage. Swap out ready.\nZdj0203\nXyz balls.\nSwitches\nA/b gears\nWhite fixture clamps.\nRefurbished spindle\nTested with dice and Zr.", status: "Complete" },
+  { customer: "Core3d", equipment: "PM7 – DICP Error", date: "2025-11-05", notes: "Pm7 dicp error and lagging.\nMade backup\nReset database\nInput tool info", status: "Complete" },
+  { customer: "Core3d", equipment: "Furnace No8", date: "2025-11-03", notes: "Furnace no8\nThermocouple value 0.3\nElements 0.2", status: "Complete" },
+  { customer: "Core3d", equipment: "OM2 Left – Spindle", date: "2025-11-03", notes: "Om2 left\nSpindle noisy, failing", status: "Complete" },
+  { customer: "Anvarda", equipment: "SN 9105001087", date: "2025-10-29", notes: "9105001087\nNeeds y axis ballscrew\nSuspect z.\nSuspect x", status: "Complete" },
+  { customer: "Anvarda", equipment: "SN 910500750", date: "2025-10-29", notes: "910500750\nPm, bad quality.\nZ ballscrew replaced\nY ballscrew replaced\nZ belt replaced.\nCleaned and tensioner all.", status: "Complete" },
+  { customer: "Bc Perio", equipment: "350iPlus", date: "2025-10-28", notes: "350iplus service.\nMicro contactors failed needed smacking.\nRelay board didnt work. Need to return with new relays.\nDid service. Good condition. Over heat error. Suspect dirty temp sensor.\nCleaned.", status: "Complete" },
+  { customer: "Kh Dental", equipment: "52DCI", date: "2025-10-28", notes: "52dci\nBad quality.\nDamaged y axis cover. Noisy y axis ballscrew.\nReplaced and calibrated", status: "Complete" },
+  { customer: "Core3d", equipment: "DWX51 No3 – Spindle", date: "2025-10-20", notes: "Dwx51 no3 spindle fault\nRebuilt.", status: "Complete" },
+  { customer: "Aurum Equipment", equipment: "P300 – Vacuum Fitting", date: "2025-10-20", notes: "P300 vacuum fitting", status: "Complete" },
+  { customer: "Aurum Equipment", equipment: "Grinder/Plate Sander – Moe", date: "2025-10-20", notes: "Grinder/plate sander for moe\nSwitch fail", status: "Complete" },
+  { customer: "Core3d", equipment: "150No4 – Networking", date: "2025-10-20", notes: "150no4 networking issues.\nSetup one drive access for all 150is", status: "Complete" },
+  { customer: "Ocean", equipment: "52DCI ZER1510", date: "2025-10-17", notes: "52dci ZER1510\nRebuild.\nNewish spindle supplied earlier.\nXyz BS\nX switch\nZ Switch\nA gear - free (warranty)\nA Twist", status: "Complete" },
+  { customer: "Protec Ortho", equipment: "350 No2", date: "2025-10-15", notes: "350no2\nX axis ballscrew from no0\nXyz grey belts", status: "Complete" },
+  { customer: "Protec Ortho", equipment: "350 No1 701157", date: "2025-10-15", notes: "350no1 701157\nZ axis pulley flange worn off\nNew pulley. (grey)\nZ grey belt\nX red and black\nY red and black", status: "Complete" },
+  { customer: "Protec Ortho", equipment: "350i No0 660555/1", date: "2025-10-15", notes: "350i no0 660555/1\nNew x axis ballscrew (got swapped to no2 due to parts waiting)\nRefurbished spindle (seized)\nNew z belt (grey)\nNew x belt (grey)\nPc shut off half way through job", status: "Complete" },
+  { customer: "Core3d", equipment: "Imes 150i No1 – New Spindle", date: "2025-10-14", notes: "Imes 150I number one new spindle.\nNew a axis cable", status: "Complete" },
+  { customer: "Core3d", equipment: "PM7 – Disconnect Error", date: "2025-10-14", notes: "Pm7 disconnect error.\nMainboard com board\n48v power supply", status: "Complete" },
+];
+
+// ── Styles ───────────────────────────────────────────────────────────────────
 const styles = `
   @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
   *{margin:0;padding:0;box-sizing:border-box;}
@@ -81,6 +137,8 @@ const styles = `
   .bg{background:transparent;color:var(--txm);border-color:var(--bdr2);}
   .bg:hover{color:var(--tx);border-color:var(--ac);}
   .bd{background:var(--rdd);color:var(--rd);border-color:rgba(255,77,106,0.3);}
+  .bimport{background:rgba(255,176,32,0.15);color:var(--am);border-color:rgba(255,176,32,0.4);}
+  .bimport:hover{background:rgba(255,176,32,0.25);}
   .bs{padding:4px 9px;font-size:10px;}
   .body{display:flex;flex:1;}
   .sidebar{width:var(--sw);background:var(--sur);border-right:1px solid var(--bdr);display:flex;flex-direction:column;position:fixed;top:52px;bottom:0;left:0;z-index:4;}
@@ -216,12 +274,17 @@ const styles = `
   .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;}
   .detail-label{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--txd);letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;}
   .detail-value{font-size:13px;color:var(--tx);}
+  .import-modal{background:var(--sur);border:1px solid var(--bdr2);border-radius:8px;width:100%;max-width:620px;max-height:85vh;overflow-y:auto;}
+  .import-row{display:grid;grid-template-columns:24px 1fr 120px 90px;align-items:center;gap:8px;padding:8px 16px;border-bottom:1px solid var(--bdr);font-size:12px;}
+  .import-row:hover{background:var(--sur2);}
+  .import-check{width:16px;height:16px;accent-color:var(--ac);cursor:pointer;}
   @keyframes spin{to{transform:rotate(360deg);}}
   @media(max-width:900px){.kgrid{grid-template-columns:repeat(2,1fr);}.g2{grid-template-columns:1fr;}.fr{grid-template-columns:1fr;}}
   @media(max-width:640px){:root{--sw:0px;}.sidebar{display:none;}.main{margin-left:0;padding:14px;padding-bottom:80px;}.bnav{display:block;}.kgrid{display:none;}.desktop-table{display:none;}.mobile-cards{display:block;}.topbar{padding:0 14px;}.logo-sub{display:none;}}
   @media(min-width:641px){.mobile-cards{display:none;}.mob-kpi-row{display:none;}.mob-section{display:none;}.filter-bar{display:none;}}
 `;
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
 function StBadge({s}){return <span className={"st "+(s||'Pending').replace(' ','')}>{s||'Pending'}</span>;}
 function Toast({msg}){return msg?<div className="toast">{msg}</div>:null;}
 function Loading(){return <div className="loading"><div className="spin"/>Loading...</div>;}
@@ -238,6 +301,95 @@ function Modal({title,onClose,onSave,saveLabel,children}){
   );
 }
 
+// ── PDF Import Modal ─────────────────────────────────────────────────────────
+function ImportModal({onClose, onImport, existingJobs}) {
+  const [selected, setSelected] = useState(() => new Set(PDF_JOBS.map((_,i)=>i)));
+  const [importing, setImporting] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  const existingNotes = new Set(existingJobs.map(j => j.notes));
+  const alreadyImported = (job) => existingNotes.has(job.notes);
+
+  const toggleAll = () => {
+    const available = PDF_JOBS.map((_,i)=>i).filter(i=>!alreadyImported(PDF_JOBS[i]));
+    if(selected.size === available.length) setSelected(new Set());
+    else setSelected(new Set(available));
+  };
+
+  const toggle = (i) => {
+    const next = new Set(selected);
+    next.has(i) ? next.delete(i) : next.add(i);
+    setSelected(next);
+  };
+
+  const doImport = async () => {
+    const toImport = [...selected].map(i => PDF_JOBS[i]);
+    setImporting(true);
+    await onImport(toImport, setProgress);
+    setImporting(false);
+    onClose();
+  };
+
+  const available = PDF_JOBS.filter((_,i)=>!alreadyImported(PDF_JOBS[i]));
+
+  return (
+    <div className="mbg" onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div className="import-modal">
+        <div className="mh">
+          <div>
+            <div className="mt">Import PDF Jobs</div>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',marginTop:2}}>{PDF_JOBS.length} jobs from March 23, 2026 export</div>
+          </div>
+          <button className="mc" onClick={onClose}>×</button>
+        </div>
+        <div style={{padding:'10px 16px',borderBottom:'1px solid var(--bdr)',display:'flex',alignItems:'center',gap:12}}>
+          <input type="checkbox" className="import-check" checked={selected.size===available.length&&available.length>0} onChange={toggleAll}/>
+          <span style={{fontSize:12,color:'var(--txm)',fontFamily:"'IBM Plex Mono',monospace"}}>{selected.size} of {available.length} selected (grayed = already imported)</span>
+        </div>
+        <div style={{maxHeight:'50vh',overflowY:'auto'}}>
+          <div className="import-row" style={{background:'var(--sur3)',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:1}}>
+            <div/>
+            <div>CUSTOMER / EQUIPMENT</div>
+            <div>DATE</div>
+            <div>STATUS</div>
+          </div>
+          {PDF_JOBS.map((job, i) => {
+            const done = alreadyImported(job);
+            return (
+              <div key={i} className="import-row" style={{opacity: done ? 0.4 : 1, pointerEvents: done ? 'none' : 'auto'}} onClick={()=>!done&&toggle(i)}>
+                <input type="checkbox" className="import-check" checked={selected.has(i)} onChange={()=>toggle(i)} onClick={e=>e.stopPropagation()} disabled={done}/>
+                <div>
+                  <div style={{fontWeight:500,color:'var(--tx)'}}>{job.customer}</div>
+                  <div style={{color:'var(--txd)',fontSize:11,marginTop:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{job.equipment}</div>
+                </div>
+                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txm)'}}>{job.date}</div>
+                <div>{done ? <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--gr)'}}>✓ Done</span> : <StBadge s={job.status}/>}</div>
+              </div>
+            );
+          })}
+        </div>
+        {importing && (
+          <div style={{padding:'12px 16px',borderTop:'1px solid var(--bdr)'}}>
+            <div style={{background:'var(--sur2)',borderRadius:4,overflow:'hidden',height:4,marginBottom:8}}>
+              <div style={{width:`${Math.round((progress/selected.size)*100)}%`,background:'var(--ac)',height:'100%',transition:'width .2s'}}/>
+            </div>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',textAlign:'center'}}>
+              Importing {progress}/{selected.size}...
+            </div>
+          </div>
+        )}
+        <div className="mf">
+          <button className="btn bg" onClick={onClose} disabled={importing}>Cancel</button>
+          <button className="btn bp" onClick={doImport} disabled={importing||selected.size===0}>
+            {importing ? 'Importing...' : `Import ${selected.size} Jobs`}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Job Components ────────────────────────────────────────────────────────────
 function JobDetailModal({job,onClose,onEdit}){
   const [photos,setPhotos]=useState([]);
   const [uploading,setUploading]=useState(false);
@@ -288,7 +440,7 @@ function JobDetailModal({job,onClose,onEdit}){
           </div>
           <div style={{borderTop:'1px solid var(--bdr)',paddingTop:16,marginBottom:16}}>
             <div className="detail-label" style={{marginBottom:8}}>Notes</div>
-            <div style={{fontSize:13,color:job.notes?'var(--tx)':'var(--txd)',lineHeight:1.7,minHeight:60,background:'var(--sur2)',padding:'10px 12px',borderRadius:4,border:'1px solid var(--bdr)',fontStyle:job.notes?'normal':'italic'}}>{job.notes||'No notes for this job.'}</div>
+            <div style={{fontSize:13,color:job.notes?'var(--tx)':'var(--txd)',lineHeight:1.7,minHeight:60,background:'var(--sur2)',padding:'10px 12px',borderRadius:4,border:'1px solid var(--bdr)',fontStyle:job.notes?'normal':'italic',whiteSpace:'pre-wrap'}}>{job.notes||'No notes for this job.'}</div>
           </div>
           <div style={{borderTop:'1px solid var(--bdr)',paddingTop:16}}>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
@@ -343,7 +495,7 @@ function JobCard({j,onEdit,onDelete}){
         {j.priority&&j.priority!=='Normal'&&<span className="job-card-tag" style={{color:j.priority==='Urgent'?'var(--rd)':j.priority==='High'?'var(--am)':'var(--txm)',borderColor:j.priority==='Urgent'?'rgba(255,77,106,0.3)':j.priority==='High'?'rgba(255,176,32,0.3)':'var(--bdr)'}}>⚡ {j.priority}</span>}
         {j.amount&&<span className="job-card-tag">💰 ${j.amount}</span>}
       </div>
-      {j.notes&&<div style={{fontSize:11,color:'var(--txd)',marginTop:8,fontStyle:'italic',borderLeft:'2px solid var(--bdr)',paddingLeft:8}}>{j.notes}</div>}
+      {j.notes&&<div style={{fontSize:11,color:'var(--txd)',marginTop:8,fontStyle:'italic',borderLeft:'2px solid var(--bdr)',paddingLeft:8,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{j.notes}</div>}
       <div className="job-card-actions">
         <button className="btn bg bs" style={{flex:1}} onClick={()=>onEdit(j)}>✏️ Edit</button>
         <button className="btn bd bs" onClick={()=>onDelete(j.id)}>🗑</button>
@@ -443,38 +595,6 @@ function Dashboard({jobs,onEditJob}){
   </>);
 }
 
-function FilteredJobsPanel({jobs,label,onClear,onEdit,onDelete}){
-  const [viewJob,setViewJob]=useState(null);
-  return(<>
-    <div className="panel" style={{marginTop:0}}>
-      <div className="ph">
-        <div className="pt">{label} ({jobs.length})</div>
-        <div className="pa" onClick={onClear}>✕ Clear filter</div>
-      </div>
-      <div className="tbl">
-        <div className="tr hdr" style={{gridTemplateColumns:'90px 1fr 110px 90px 90px 70px'}}>
-          <div className="cl">ID</div><div className="cl">Customer/Equip</div><div className="cl">Technician</div><div className="cl">Date</div><div className="cl">Status</div><div className="cl">Act.</div>
-        </div>
-        {jobs.map(j=>(
-          <div key={j.id} className="tr" style={{gridTemplateColumns:'90px 1fr 110px 90px 90px 70px'}} onClick={()=>setViewJob(j)}>
-            <div className="ci">{j.job_id}</div>
-            <div><div className="cm">{j.customer||'—'}</div><div className="cs">{j.equipment||'—'}</div></div>
-            <div className="cd">{j.technician||'—'}</div>
-            <div className="cn">{j.date||'—'}</div>
-            <div><StBadge s={j.status}/></div>
-            <div style={{display:'flex',gap:4}} onClick={e=>e.stopPropagation()}>
-              <button className="btn bg bs" onClick={()=>onEdit(j)}>✏️</button>
-              <button className="btn bd bs" onClick={()=>onDelete(j.id)}>🗑</button>
-            </div>
-          </div>
-        ))}
-        {!jobs.length&&<div className="empty"><div className="ei">✅</div>No jobs in this category</div>}
-      </div>
-    </div>
-    {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)} onEdit={(j)=>{setViewJob(null);onEdit(j);}}/>}
-  </>);
-}
-
 function JobFormModal({job,customers,technicians,onSave,onClose}){
   const [f,setF]=useState(job?{...job}:{job_id:'JO-'+Date.now().toString().slice(-4),status:'Pending',priority:'Normal',invoice_status:'Not Invoiced'});
   return(
@@ -489,7 +609,7 @@ function JobFormModal({job,customers,technicians,onSave,onClose}){
           {[...customers].sort((a,b)=>(a.company||'').localeCompare(b.company||'')).map(c=><option key={c.id}>{c.company}</option>)}
         </select>
       </div>
-      <div className="fg"><label className="fl">Equipment</label><input className="fi" placeholder="e.g. Fanuc Robodrill" value={f.equipment||''} onChange={e=>setF({...f,equipment:e.target.value})}/></div>
+      <div className="fg"><label className="fl">Equipment</label><input className="fi" placeholder="e.g. DWX-52D" value={f.equipment||''} onChange={e=>setF({...f,equipment:e.target.value})}/></div>
       <div className="fr">
         <div className="fg"><label className="fl">Technician</label>
           <select className="fsl" value={f.technician||''} onChange={e=>setF({...f,technician:e.target.value})}>
@@ -513,17 +633,39 @@ function Jobs({jobs,customers,technicians,onAdd,onEdit,onDelete,loading}){
   const [editJob,setEditJob]=useState(null);
   const [showForm,setShowForm]=useState(false);
   const [viewJob,setViewJob]=useState(null);
+  const [search,setSearch]=useState('');
+  const [clientFilter,setClientFilter]=useState('');
+
+  const clients=[...new Set(jobs.map(j=>j.customer).filter(Boolean))].sort();
+  const filtered=[...jobs].reverse().filter(j=>{
+    const q=search.toLowerCase();
+    const matchSearch=!q||(j.customer||'').toLowerCase().includes(q)||(j.equipment||'').toLowerCase().includes(q)||(j.notes||'').toLowerCase().includes(q)||(j.job_id||'').toLowerCase().includes(q);
+    const matchClient=!clientFilter||j.customer===clientFilter;
+    return matchSearch&&matchClient;
+  });
+
   const save=(f)=>{editJob?.id?onEdit({...f}):onAdd({...f});setShowForm(false);setEditJob(null);};
   const openEdit=(j)=>{setEditJob(j);setShowForm(true);};
   const openNew=()=>{setEditJob(null);setShowForm(true);};
+
   return(<>
     <div className="panel desktop-table">
-      <div className="ph"><div className="pt">Jobs ({jobs.length})</div><button className="btn bp bs" onClick={openNew}>+ New Job</button></div>
+      <div className="ph">
+        <div className="pt">Jobs ({filtered.length}{filtered.length!==jobs.length?` of ${jobs.length}`:''})</div>
+        <button className="btn bp bs" onClick={openNew}>+ New Job</button>
+      </div>
+      <div style={{padding:'10px 16px',borderBottom:'1px solid var(--bdr)',display:'flex',gap:10}}>
+        <input className="fi" placeholder="🔍 Search jobs, equipment, notes..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:0,flex:2}}/>
+        <select className="fsl" value={clientFilter} onChange={e=>setClientFilter(e.target.value)} style={{flex:1}}>
+          <option value="">All clients</option>
+          {clients.map(c=><option key={c}>{c}</option>)}
+        </select>
+      </div>
       {loading?<Loading/>:<div className="tbl">
         <div className="tr hdr" style={{gridTemplateColumns:'90px 1fr 110px 90px 80px 90px 70px'}}>
           <div className="cl">ID</div><div className="cl">Customer/Equip</div><div className="cl">Technician</div><div className="cl">Date</div><div className="cl">Amount</div><div className="cl">Status</div><div className="cl">Act.</div>
         </div>
-        {[...jobs].reverse().map(j=>(
+        {filtered.map(j=>(
           <div key={j.id} className="tr" style={{gridTemplateColumns:'90px 1fr 110px 90px 80px 90px 70px'}} onClick={()=>setViewJob(j)}>
             <div className="ci">{j.job_id}</div>
             <div><div className="cm">{j.customer||'—'}</div><div className="cs">{j.equipment||'—'}</div></div>
@@ -537,7 +679,7 @@ function Jobs({jobs,customers,technicians,onAdd,onEdit,onDelete,loading}){
             </div>
           </div>
         ))}
-        {!jobs.length&&<div className="empty"><div className="ei">📋</div>No jobs yet!</div>}
+        {!filtered.length&&<div className="empty"><div className="ei">📋</div>{search||clientFilter?'No jobs match your search.':'No jobs yet!'}</div>}
       </div>}
     </div>
     <div className="mobile-cards">
@@ -697,6 +839,7 @@ function Schedule({jobs}){
   );
 }
 
+// ── App ───────────────────────────────────────────────────────────────────────
 export default function App(){
   const [page,setPage]=useState('Dashboard');
   const [jobs,setJobs]=useState([]);
@@ -706,6 +849,7 @@ export default function App(){
   const [toast,setToast]=useState('');
   const [jobForm,setJobForm]=useState(null);
   const [showJobForm,setShowJobForm]=useState(false);
+  const [showImport,setShowImport]=useState(false);
 
   const msg=useCallback((m)=>{setToast(m);setTimeout(()=>setToast(''),2500);},[]);
 
@@ -731,6 +875,35 @@ export default function App(){
   const editTech=async(f)=>{try{await db.update('technicians',f.id,{name:f.name,initials:f.initials,email:f.email,phone:f.phone,status:f.status,current_job:f.current_job});setTechnicians(p=>p.map(x=>x.id===f.id?{...x,...f}:x));msg('✅ Updated!');}catch{msg('⚠️ Update failed.');}};
   const delTech=async(id)=>{if(!window.confirm('Delete?'))return;try{await db.delete('technicians',id);setTechnicians(p=>p.filter(x=>x.id!==id));msg('🗑 Deleted.');}catch{msg('⚠️ Delete failed.');}};
 
+  // ── Bulk PDF Import ────────────────────────────────────────────────────────
+  const handleImport = async (toImport, setProgress) => {
+    let count = 0;
+    const newJobs = [];
+    for (const job of toImport) {
+      try {
+        const jobId = 'PDF-' + Date.now().toString().slice(-5) + '-' + Math.floor(Math.random()*100);
+        const r = await db.insert('jobs', {
+          job_id: jobId,
+          customer: job.customer,
+          equipment: job.equipment,
+          technician: '',
+          status: job.status || 'Complete',
+          priority: 'Normal',
+          date: job.date,
+          amount: null,
+          invoice_status: 'Not Invoiced',
+          notes: job.notes
+        });
+        if (Array.isArray(r)) newJobs.push(...r); else if (r?.id) newJobs.push(r);
+        count++;
+        setProgress(count);
+        await new Promise(res => setTimeout(res, 80));
+      } catch(e) { /* skip failed */ }
+    }
+    setJobs(p => [...p, ...newJobs]);
+    msg(`✅ Imported ${count} jobs from PDF!`);
+  };
+
   const pages=['Dashboard','Jobs','Schedule','Customers','Technicians'];
   const icons=['▣','◈','◎','◻','◑'];
   const activeCount=jobs.filter(j=>['In Progress','Dispatched'].includes(j.status)).length;
@@ -744,9 +917,8 @@ export default function App(){
       <div className="topbar">
         <div><div className="logo">⊞ AXISCRM</div><div className="logo-sub">CAD·CAM FIELD OPS</div></div>
         <div style={{flex:1}}/>
+        <button className="btn bimport" onClick={()=>setShowImport(true)} style={{fontSize:11}}>⬇ Import PDF</button>
         {page==='Jobs'&&<button className="btn bp" onClick={openMobileJobNew}>+ New Job</button>}
-        {page==='Customers'&&<button className="btn bp" onClick={()=>document.dispatchEvent(new CustomEvent('openCust'))}>+ New Customer</button>}
-        {page==='Technicians'&&<button className="btn bp" onClick={()=>document.dispatchEvent(new CustomEvent('openTech'))}>+ Add Technician</button>}
       </div>
       <div className="body">
         <div className="sidebar">
@@ -779,6 +951,7 @@ export default function App(){
         </div>
       </nav>
       {showJobForm&&<JobFormModal job={jobForm} customers={customers} technicians={technicians} onSave={saveMobileJob} onClose={()=>{setShowJobForm(false);setJobForm(null);}}/>}
+      {showImport&&<ImportModal onClose={()=>setShowImport(false)} onImport={handleImport} existingJobs={jobs}/>}
       <Toast msg={toast}/>
     </div>
   </>);
