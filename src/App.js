@@ -252,7 +252,7 @@ const styles = `
   .st.Available{background:var(--grd);color:var(--gr);border:1px solid rgba(34,212,122,0.2);}
   .st.Busy{background:var(--amd);color:var(--am);border:1px solid rgba(255,176,32,0.2);}
   .st.Offline{background:rgba(90,106,128,0.15);color:var(--txd);border:1px solid var(--bdr);}
-  .mbg{position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:50;display:flex;align-items:center;justify-content:center;padding:20px;}
+  .mbg{position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:50;display:flex;align-items:center;justify-content:center;padding:20px;-webkit-overflow-scrolling:touch;}
   .modal{background:var(--sur);border:1px solid var(--bdr2);border-radius:8px;width:100%;max-width:500px;max-height:85vh;overflow-y:auto;}
   .mh{padding:14px 18px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;justify-content:space-between;}
   .mt{font-family:'Rajdhani',sans-serif;font-weight:600;font-size:15px;letter-spacing:1px;text-transform:uppercase;}
@@ -382,7 +382,7 @@ const styles = `
 
   @keyframes spin{to{transform:rotate(360deg);}}
   @media(max-width:900px){.kgrid{grid-template-columns:repeat(2,1fr);}.g2{grid-template-columns:1fr;}.fr{grid-template-columns:1fr;}.focus-body{grid-template-columns:1fr;}.focus-col:first-child{border-right:none;border-bottom:1px solid var(--bdr);}}
-  @media(max-width:640px){:root{--sw:0px;}.sidebar{display:none;}.main{margin-left:0;padding:14px;padding-bottom:80px;}.bnav{display:block;}.kgrid{display:none;}.desktop-table{display:none;}.mobile-cards{display:block;}.topbar{padding:0 14px;}.logo-sub{display:none;}}
+  @media(max-width:640px){:root{--sw:0px;}.sidebar{display:none;}.main{margin-left:0;padding:14px;padding-bottom:80px;}.bnav{display:block;}.kgrid{display:none;}.desktop-table{display:none;}.mobile-cards{display:block;}.topbar{padding:0 14px;}.logo-sub{display:none;}.mbg{padding:0;align-items:flex-end;}.modal{max-width:100%;max-height:90vh;border-radius:16px 16px 0 0;border-left:none;border-right:none;border-bottom:none;}.mh{padding:16px 18px;}.mb{padding:14px 16px;}.mf{padding:12px 16px;}.fi,.fsl,.fta{font-size:16px;}.fr{grid-template-columns:1fr;}}
   @media(min-width:641px){.mobile-cards{display:none;}.mob-kpi-row{display:none;}.mob-section{display:none;}.filter-bar{display:none;}}
 `;
 
