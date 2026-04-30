@@ -810,6 +810,57 @@ function DashJobTile({j,onClick}){
   );
 }
 
+function DashCalendar({jobs}){
+  const now=new Date();
+  const [vd,setVd]=useState(new Date(now.getFullYear(),now.getMonth(),1));
+  const dim=new Date(vd.getFullYear(),vd.getMonth()+1,0).getDate();
+  const fd=new Date(vd.getFullYear(),vd.getMonth(),1).getDay();
+  const days=['Su','Mo','Tu','We','Th','Fr','Sa'];
+  const jobsFor=d=>{
+    const s=`${vd.getFullYear()}-${String(vd.getMonth()+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    return jobs.filter(j=>j.date===s);
+  };
+  const cells=[...Array(fd).fill(null),...Array.from({length:dim},(_,i)=>i+1)];
+  return(
+    <div style={{background:'var(--sur)',border:'1px solid var(--bdr)',borderRadius:6,overflow:'hidden',display:'flex',flexDirection:'column',height:'100%'}}>
+      <div style={{padding:'10px 14px',borderBottom:'1px solid var(--bdr)',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
+        <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,fontSize:12,letterSpacing:1,textTransform:'uppercase',color:'var(--txm)'}}>
+          {vd.toLocaleString('default',{month:'long',year:'numeric'})}
+        </div>
+        <div style={{display:'flex',gap:6}}>
+          <button className="btn bg bs" onClick={()=>setVd(new Date(vd.getFullYear(),vd.getMonth()-1,1))}>‹</button>
+          <button className="btn bg bs" onClick={()=>setVd(new Date(now.getFullYear(),now.getMonth(),1))}>●</button>
+          <button className="btn bg bs" onClick={()=>setVd(new Date(vd.getFullYear(),vd.getMonth()+1,1))}>›</button>
+        </div>
+      </div>
+      <div style={{flex:1,overflow:'auto',padding:'8px'}}>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2,marginBottom:2}}>
+          {days.map(d=><div key={d} style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:'var(--txd)',textAlign:'center',padding:'2px 0',letterSpacing:1}}>{d}</div>)}
+        </div>
+        <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2}}>
+          {cells.map((d,i)=>{
+            if(!d) return <div key={'e'+i}/>;
+            const isToday=d===now.getDate()&&vd.getMonth()===now.getMonth()&&vd.getFullYear()===now.getFullYear();
+            const dj=jobsFor(d);
+            return(
+              <div key={d} style={{minHeight:52,background:isToday?'rgba(0,200,255,0.06)':'var(--sur2)',border:`1px solid ${isToday?'var(--ac)':'var(--bdr)'}`,borderRadius:3,padding:'3px 2px'}}>
+                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:isToday?'var(--ac)':'var(--txm)',fontWeight:isToday?700:400,marginBottom:2,textAlign:'center'}}>{d}</div>
+                {dj.slice(0,2).map(j=>(
+                  <div key={j.id} style={{fontSize:7,padding:'1px 3px',borderRadius:2,marginBottom:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
+                    background:j.status==='In Progress'?'var(--amd)':j.status==='Dispatched'?'var(--acd)':j.status==='Complete'?'var(--grd)':'rgba(90,106,128,0.15)',
+                    color:j.status==='In Progress'?'var(--am)':j.status==='Dispatched'?'var(--ac)':j.status==='Complete'?'var(--gr)':'var(--txd)'
+                  }} title={j.customer}>{j.customer}</div>
+                ))}
+                {dj.length>2&&<div style={{fontSize:7,color:'var(--txd)',textAlign:'center'}}>+{dj.length-2}</div>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function Dashboard({jobs,onEditJob}){
   const [viewJob,setViewJob]=useState(null);
   const boardJobs=jobs.filter(j=>!(['Invoiced','Paid'].includes(j.invoice_status)));
@@ -821,24 +872,33 @@ function Dashboard({jobs,onEditJob}){
   ];
   return(<>
     <DailyFocusPanel jobs={jobs} onEditJob={(j)=>{setViewJob(null);onEditJob(j);}}/>
-    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
-      <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,fontSize:13,letterSpacing:1,textTransform:'uppercase',color:'var(--txm)'}}>Job Board <span style={{color:'var(--ac)',marginLeft:8}}>{boardJobs.length} active</span></div>
-      <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)'}}>Invoiced/Paid jobs removed</div>
-    </div>
-    {groups.map(g=>(
-      <div key={g.label} style={{marginBottom:20}}>
-        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
-          <div style={{width:3,height:14,borderRadius:2,background:g.color}}/>
-          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txm)',letterSpacing:2,textTransform:'uppercase'}}>{g.label}</div>
-          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:g.color}}>{g.jobs.length}</div>
+    <div style={{display:'flex',gap:16,alignItems:'flex-start'}}>
+      {/* Job board — left, takes most of the space */}
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
+          <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,fontSize:13,letterSpacing:1,textTransform:'uppercase',color:'var(--txm)'}}>Job Board <span style={{color:'var(--ac)',marginLeft:8}}>{boardJobs.length} active</span></div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)'}}>Invoiced/Paid jobs removed</div>
         </div>
-        {g.jobs.length===0&&<div style={{padding:'10px 14px',background:'var(--sur)',border:'1px solid var(--bdr)',borderRadius:6,fontSize:12,color:'var(--txd)'}}>No {g.label.toLowerCase()} jobs</div>}
-        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:10}}>
-          {g.jobs.map(j=><DashJobTile key={j.id} j={j} onClick={setViewJob}/>)}
-        </div>
+        {groups.map(g=>(
+          <div key={g.label} style={{marginBottom:20}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+              <div style={{width:3,height:14,borderRadius:2,background:g.color}}/>
+              <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txm)',letterSpacing:2,textTransform:'uppercase'}}>{g.label}</div>
+              <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:g.color}}>{g.jobs.length}</div>
+            </div>
+            {g.jobs.length===0&&<div style={{padding:'10px 14px',background:'var(--sur)',border:'1px solid var(--bdr)',borderRadius:6,fontSize:12,color:'var(--txd)'}}>No {g.label.toLowerCase()} jobs</div>}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:10}}>
+              {g.jobs.map(j=><DashJobTile key={j.id} j={j} onClick={setViewJob}/>)}
+            </div>
+          </div>
+        ))}
+        {!boardJobs.length&&<div className="empty"><div className="ei">🎉</div>All jobs invoiced!</div>}
       </div>
-    ))}
-    {!boardJobs.length&&<div className="empty"><div className="ei">🎉</div>All jobs invoiced!</div>}
+      {/* Calendar — right side panel, fixed width */}
+      <div style={{width:280,flexShrink:0,position:'sticky',top:0,height:'calc(100vh - 140px)'}}>
+        <DashCalendar jobs={jobs}/>
+      </div>
+    </div>
     {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)} onEdit={(j)=>{setViewJob(null);onEditJob(j);}}/>}
   </>);
 }
