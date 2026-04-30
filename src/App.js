@@ -810,6 +810,40 @@ function DashJobTile({j,onClick}){
   );
 }
 
+function useDragResize(defaultWidth=280, min=180, max=520){
+  const [width, setWidth] = useState(defaultWidth);
+  const dragging = useRef(false);
+  const startX = useRef(0);
+  const startW = useRef(defaultWidth);
+
+  const onMouseDown = useCallback((e) => {
+    dragging.current = true;
+    startX.current = e.clientX;
+    startW.current = width;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, [width]);
+
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!dragging.current) return;
+      const delta = startX.current - e.clientX; // drag left = bigger calendar
+      const newW = Math.min(max, Math.max(min, startW.current + delta));
+      setWidth(newW);
+    };
+    const onUp = () => {
+      dragging.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, [min, max]);
+
+  return { width, onMouseDown };
+}
+
 function DashCalendar({jobs}){
   const now=new Date();
   const [vd,setVd]=useState(new Date(now.getFullYear(),now.getMonth(),1));
@@ -870,15 +904,13 @@ function Dashboard({jobs,onEditJob}){
     {label:'In Progress',color:'var(--am)',jobs:boardJobs.filter(j=>j.status==='In Progress')},
     {label:'Complete',color:'var(--gr)',jobs:boardJobs.filter(j=>j.status==='Complete')},
   ];
+  const {width: calWidth, onMouseDown: onDragStart} = useDragResize(280, 180, 520);
+
   return(<>
     <DailyFocusPanel jobs={jobs} onEditJob={(j)=>{setViewJob(null);onEditJob(j);}}/>
-    <div style={{display:'flex',gap:16,alignItems:'flex-start'}}>
-      {/* Job board — left, takes most of the space */}
-      <div style={{flex:1,minWidth:0}}>
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
-          <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,fontSize:13,letterSpacing:1,textTransform:'uppercase',color:'var(--txm)'}}>Job Board <span style={{color:'var(--ac)',marginLeft:8}}>{boardJobs.length} active</span></div>
-          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)'}}>Invoiced/Paid jobs removed</div>
-        </div>
+    <div style={{display:'flex',gap:0,alignItems:'flex-start'}}>
+      {/* Job board — left */}
+      <div style={{flex:1,minWidth:0,paddingRight:12}}>
         {groups.map(g=>(
           <div key={g.label} style={{marginBottom:20}}>
             <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
@@ -894,8 +926,30 @@ function Dashboard({jobs,onEditJob}){
         ))}
         {!boardJobs.length&&<div className="empty"><div className="ei">🎉</div>All jobs invoiced!</div>}
       </div>
-      {/* Calendar — right side panel, fixed width */}
-      <div style={{width:280,flexShrink:0,position:'sticky',top:0,height:'calc(100vh - 140px)'}}>
+
+      {/* Drag handle */}
+      <div
+        onMouseDown={onDragStart}
+        style={{
+          width:8, flexShrink:0, cursor:'col-resize',
+          display:'flex', alignItems:'center', justifyContent:'center',
+          alignSelf:'stretch', position:'relative', zIndex:2,
+          marginRight:4,
+        }}
+        title="Drag to resize calendar"
+      >
+        <div style={{
+          width:3, height:'60px', borderRadius:3,
+          background:'var(--bdr2)',
+          transition:'background 0.15s',
+        }}
+        onMouseEnter={e=>e.currentTarget.style.background='var(--ac)'}
+        onMouseLeave={e=>e.currentTarget.style.background='var(--bdr2)'}
+        />
+      </div>
+
+      {/* Calendar — resizable right panel */}
+      <div style={{width:calWidth, flexShrink:0, position:'sticky', top:0, height:'calc(100vh - 140px)'}}>
         <DashCalendar jobs={jobs}/>
       </div>
     </div>
