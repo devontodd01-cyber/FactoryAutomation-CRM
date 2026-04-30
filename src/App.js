@@ -148,6 +148,39 @@ function isArchived(job) {
   return diffDays > 30;
 }
 
+// ── Priority helpers ─────────────────────────────────────────────────────────
+const PRIORITY_CONFIG = {
+  Urgent: { color: 'var(--rd)', bg: 'var(--rdd)', border: 'rgba(255,77,106,0.3)', icon: '🔴' },
+  High:   { color: 'var(--am)', bg: 'var(--amd)', border: 'rgba(255,176,32,0.3)',  icon: '🟡' },
+  Normal: { color: 'var(--txm)', bg: 'transparent', border: 'var(--bdr)',          icon: '⚪' },
+  Low:    { color: 'var(--txd)', bg: 'transparent', border: 'var(--bdr)',          icon: '🔵' },
+};
+
+function PriorityBadge({ p }) {
+  const cfg = PRIORITY_CONFIG[p] || PRIORITY_CONFIG.Normal;
+  if (p === 'Normal' || !p) return null;
+  return (
+    <span style={{
+      fontFamily:"'IBM Plex Mono',monospace", fontSize:9, letterSpacing:1,
+      padding:'2px 7px', borderRadius:2, fontWeight:500, textTransform:'uppercase',
+      display:'inline-block', whiteSpace:'nowrap',
+      color: cfg.color, background: cfg.bg, border: `1px solid ${cfg.border}`
+    }}>{cfg.icon} {p}</span>
+  );
+}
+
+// ── Follow-up helpers ────────────────────────────────────────────────────────
+function isFollowupOverdue(job) {
+  if (!job.followup || !job.followup_date) return false;
+  return new Date(job.followup_date) < new Date();
+}
+
+function daysUntilFollowup(job) {
+  if (!job.followup || !job.followup_date) return null;
+  const diff = new Date(job.followup_date) - new Date();
+  return Math.ceil(diff / (1000 * 60 * 60 * 24));
+}
+
 // ── Styles ───────────────────────────────────────────────────────────────────
 const styles = `
   @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
@@ -166,6 +199,8 @@ const styles = `
   .bd{background:var(--rdd);color:var(--rd);border-color:rgba(255,77,106,0.3);}
   .bimport{background:rgba(255,176,32,0.15);color:var(--am);border-color:rgba(255,176,32,0.4);}
   .bimport:hover{background:rgba(255,176,32,0.25);}
+  .bfollowup{background:rgba(34,212,122,0.12);color:var(--gr);border-color:rgba(34,212,122,0.3);}
+  .bfollowup:hover{background:rgba(34,212,122,0.22);}
   .bs{padding:4px 9px;font-size:10px;}
   .body{display:flex;flex:1;}
   .sidebar{width:var(--sw);background:var(--sur);border-right:1px solid var(--bdr);display:flex;flex-direction:column;position:fixed;top:52px;bottom:0;left:0;z-index:4;}
@@ -251,7 +286,7 @@ const styles = `
   .cj.Complete{background:var(--grd);color:var(--gr);}
   .empty{padding:40px;text-align:center;color:var(--txd);font-size:13px;}
   .ei{font-size:28px;margin-bottom:10px;}
-  .loading{display:flex;align-items:center;justify-content:center;padding:40px;color:var(--txd);font-family:'IBM Plex Mono',monospace;font-size:12px;gap:10px;}
+  .loading{display:flex;align-items:center;justify-content:padding:40px;color:var(--txd);font-family:'IBM Plex Mono',monospace;font-size:12px;gap:10px;}
   .spin{width:14px;height:14px;border:2px solid var(--bdr2);border-top-color:var(--ac);border-radius:50%;animation:spin .7s linear infinite;}
   .toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--sur2);border:1px solid var(--bdr2);border-radius:6px;padding:9px 18px;font-family:'IBM Plex Mono',monospace;font-size:11px;z-index:100;white-space:nowrap;}
   .g2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
@@ -306,8 +341,47 @@ const styles = `
   .import-row{display:grid;grid-template-columns:24px 1fr 120px 90px;align-items:center;gap:8px;padding:8px 16px;border-bottom:1px solid var(--bdr);font-size:12px;}
   .import-row:hover{background:var(--sur2);}
   .import-check{width:16px;height:16px;accent-color:var(--ac);cursor:pointer;}
+
+  /* ── Daily Focus Panel ── */
+  .focus-panel{background:linear-gradient(135deg,rgba(0,200,255,0.06) 0%,rgba(255,176,32,0.04) 100%);border:1px solid var(--bdr2);border-radius:8px;margin-bottom:20px;overflow:hidden;}
+  .focus-header{padding:14px 18px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;justify-content:space-between;}
+  .focus-title{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:15px;letter-spacing:2px;text-transform:uppercase;color:var(--ac);}
+  .focus-date{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--txd);}
+  .focus-body{display:grid;grid-template-columns:1fr 1fr;gap:0;}
+  .focus-col{padding:14px 18px;}
+  .focus-col:first-child{border-right:1px solid var(--bdr);}
+  .focus-col-title{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--txd);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;}
+  .focus-item{display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border-radius:5px;margin-bottom:6px;border:1px solid var(--bdr);background:var(--sur);cursor:pointer;transition:border-color .15s;}
+  .focus-item:hover{border-color:var(--bdr2);}
+  .focus-item.urgent{border-color:rgba(255,77,106,0.3);background:var(--rdd);}
+  .focus-item.high{border-color:rgba(255,176,32,0.25);background:var(--amd);}
+  .focus-item.overdue{border-color:rgba(255,77,106,0.4);background:rgba(255,77,106,0.08);}
+  .focus-item-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;margin-top:4px;}
+  .focus-item-dot.urgent{background:var(--rd);}
+  .focus-item-dot.high{background:var(--am);}
+  .focus-item-dot.followup{background:var(--gr);}
+  .focus-item-dot.overdue{background:var(--rd);}
+  .focus-item-info{flex:1;min-width:0;}
+  .focus-item-customer{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .focus-item-sub{font-size:11px;color:var(--txd);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .focus-item-badge{font-family:'IBM Plex Mono',monospace;font-size:9px;flex-shrink:0;padding:2px 6px;border-radius:3px;align-self:center;}
+  .focus-empty{padding:16px;text-align:center;color:var(--txd);font-size:12px;font-family:'IBM Plex Mono',monospace;}
+
+  /* ── Follow-up indicator on job tiles ── */
+  .followup-pill{display:inline-flex;align-items:center;gap:4px;font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 7px;border-radius:10px;border:1px solid;white-space:nowrap;}
+  .followup-pill.due{color:var(--am);border-color:rgba(255,176,32,0.3);background:var(--amd);}
+  .followup-pill.overdue{color:var(--rd);border-color:rgba(255,77,106,0.3);background:var(--rdd);}
+  .followup-pill.done{color:var(--gr);border-color:rgba(34,212,122,0.3);background:var(--grd);}
+
+  /* ── Follow-ups page ── */
+  .followup-card{background:var(--sur);border:1px solid var(--bdr);border-radius:8px;padding:14px 16px;margin-bottom:10px;position:relative;overflow:hidden;}
+  .followup-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;}
+  .followup-card.overdue::before{background:var(--rd);}
+  .followup-card.today::before{background:var(--am);}
+  .followup-card.upcoming::before{background:var(--ac);}
+
   @keyframes spin{to{transform:rotate(360deg);}}
-  @media(max-width:900px){.kgrid{grid-template-columns:repeat(2,1fr);}.g2{grid-template-columns:1fr;}.fr{grid-template-columns:1fr;}}
+  @media(max-width:900px){.kgrid{grid-template-columns:repeat(2,1fr);}.g2{grid-template-columns:1fr;}.fr{grid-template-columns:1fr;}.focus-body{grid-template-columns:1fr;}.focus-col:first-child{border-right:none;border-bottom:1px solid var(--bdr);}}
   @media(max-width:640px){:root{--sw:0px;}.sidebar{display:none;}.main{margin-left:0;padding:14px;padding-bottom:80px;}.bnav{display:block;}.kgrid{display:none;}.desktop-table{display:none;}.mobile-cards{display:block;}.topbar{padding:0 14px;}.logo-sub{display:none;}}
   @media(min-width:641px){.mobile-cards{display:none;}.mob-kpi-row{display:none;}.mob-section{display:none;}.filter-bar{display:none;}}
 `;
@@ -327,6 +401,125 @@ function Modal({title,onClose,onSave,saveLabel,children}){
       </div>
     </div>
   );
+}
+
+// ── Daily Focus Panel ─────────────────────────────────────────────────────────
+function DailyFocusPanel({ jobs, onEditJob }) {
+  const today = new Date();
+  const dateStr = today.toLocaleDateString('en-CA', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+
+  // Top priority jobs (Urgent first, then High, non-complete, non-archived)
+  const priorityJobs = jobs
+    .filter(j => !isArchived(j) && j.status !== 'Complete' && (j.priority === 'Urgent' || j.priority === 'High'))
+    .sort((a,b) => {
+      const order = { Urgent:0, High:1 };
+      return (order[a.priority]??2) - (order[b.priority]??2);
+    })
+    .slice(0, 5);
+
+  // Follow-ups: overdue first, then upcoming
+  const followupJobs = jobs
+    .filter(j => j.followup && j.status !== 'Complete')
+    .sort((a,b) => {
+      const da = new Date(a.followup_date||'9999');
+      const db2 = new Date(b.followup_date||'9999');
+      return da - db2;
+    })
+    .slice(0, 5);
+
+  const overdueFollowups = followupJobs.filter(isFollowupOverdue);
+  const upcomingFollowups = followupJobs.filter(j => !isFollowupOverdue(j));
+
+  return (
+    <div className="focus-panel">
+      <div className="focus-header">
+        <div>
+          <div className="focus-title">⚡ Daily Focus</div>
+          <div className="focus-date">{dateStr}</div>
+        </div>
+        <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',textAlign:'right'}}>
+          <div style={{color: overdueFollowups.length > 0 ? 'var(--rd)' : 'var(--txd)'}}>
+            {overdueFollowups.length > 0 ? `⚠ ${overdueFollowups.length} overdue follow-up${overdueFollowups.length>1?'s':''}` : '✓ No overdue follow-ups'}
+          </div>
+          <div style={{marginTop:2}}>{priorityJobs.length} priority job{priorityJobs.length!==1?'s':''} active</div>
+        </div>
+      </div>
+      <div className="focus-body">
+        {/* Priority Jobs column */}
+        <div className="focus-col">
+          <div className="focus-col-title">🔴 Priority Jobs</div>
+          {priorityJobs.length === 0 && (
+            <div className="focus-empty">✅ No urgent or high priority jobs</div>
+          )}
+          {priorityJobs.map(j => {
+            const isUrgent = j.priority === 'Urgent';
+            return (
+              <div key={j.id} className={`focus-item ${isUrgent?'urgent':'high'}`} onClick={() => onEditJob(j)}>
+                <div className={`focus-item-dot ${isUrgent?'urgent':'high'}`}/>
+                <div className="focus-item-info">
+                  <div className="focus-item-customer">{j.customer}</div>
+                  <div className="focus-item-sub">{j.equipment || '—'}</div>
+                </div>
+                <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4,flexShrink:0}}>
+                  <PriorityBadge p={j.priority}/>
+                  <StBadge s={j.status}/>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Follow-ups column */}
+        <div className="focus-col">
+          <div className="focus-col-title">📞 Follow-ups Needed</div>
+          {followupJobs.length === 0 && (
+            <div className="focus-empty">✅ No pending follow-ups</div>
+          )}
+          {overdueFollowups.map(j => {
+            const days = daysUntilFollowup(j);
+            return (
+              <div key={j.id} className="focus-item overdue" onClick={() => onEditJob(j)}>
+                <div className="focus-item-dot overdue"/>
+                <div className="focus-item-info">
+                  <div className="focus-item-customer">{j.customer}</div>
+                  <div className="focus-item-sub">{j.followup_note || j.equipment || '—'}</div>
+                </div>
+                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--rd)',flexShrink:0,textAlign:'right'}}>
+                  {Math.abs(days)}d overdue
+                </div>
+              </div>
+            );
+          })}
+          {upcomingFollowups.map(j => {
+            const days = daysUntilFollowup(j);
+            return (
+              <div key={j.id} className="focus-item" onClick={() => onEditJob(j)}>
+                <div className="focus-item-dot followup"/>
+                <div className="focus-item-info">
+                  <div className="focus-item-customer">{j.customer}</div>
+                  <div className="focus-item-sub">{j.followup_note || j.equipment || '—'}</div>
+                </div>
+                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:days<=1?'var(--am)':'var(--txd)',flexShrink:0,textAlign:'right'}}>
+                  {days===0?'Today':days===1?'Tomorrow':`${days}d`}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Follow-up pill for job tiles ─────────────────────────────────────────────
+function FollowupPill({ job }) {
+  if (!job.followup) return null;
+  const overdue = isFollowupOverdue(job);
+  const days = daysUntilFollowup(job);
+  if (overdue) return <span className="followup-pill overdue">📞 {Math.abs(days)}d overdue</span>;
+  if (days === 0) return <span className="followup-pill due">📞 Today</span>;
+  if (days === 1) return <span className="followup-pill due">📞 Tomorrow</span>;
+  return <span className="followup-pill due">📞 {days}d</span>;
 }
 
 // ── PDF Import Modal ─────────────────────────────────────────────────────────
@@ -446,6 +639,9 @@ function JobDetailModal({job,onClose,onEdit}){
     setPhotos(p=>p.filter(x=>x!==url));
   };
 
+  const days = daysUntilFollowup(job);
+  const overdueFollowup = isFollowupOverdue(job);
+
   return(
     <div className="mbg" onClick={onClose}>
       <div className="modal" onClick={e=>e.stopPropagation()}>
@@ -463,9 +659,26 @@ function JobDetailModal({job,onClose,onEdit}){
             <div><div className="detail-label">Technician</div><div className="detail-value">{job.technician||'Unassigned'}</div></div>
             <div><div className="detail-label">Date</div><div className="detail-value" style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{job.date||'—'}</div></div>
             <div><div className="detail-label">Amount</div><div className="detail-value" style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:18,color:'var(--ac)'}}>{job.amount?'$'+job.amount:'—'}</div></div>
-            <div><div className="detail-label">Priority</div><div className="detail-value">{job.priority||'Normal'}</div></div>
+            <div><div className="detail-label">Priority</div><div className="detail-value">{job.priority ? <PriorityBadge p={job.priority}/> : 'Normal'}</div></div>
             <div><div className="detail-label">Invoice</div><div className="detail-value">{job.invoice_status||'—'}</div></div>
           </div>
+
+          {/* Follow-up section in detail modal */}
+          {job.followup && (
+            <div style={{borderTop:'1px solid var(--bdr)',paddingTop:14,marginBottom:16}}>
+              <div className="detail-label" style={{marginBottom:8}}>Follow-up Required</div>
+              <div style={{background: overdueFollowup ? 'var(--rdd)' : 'var(--amd)', border:`1px solid ${overdueFollowup?'rgba(255,77,106,0.3)':'rgba(255,176,32,0.3)'}`,borderRadius:6,padding:'10px 12px'}}>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
+                  <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:overdueFollowup?'var(--rd)':'var(--am)'}}>
+                    📞 {overdueFollowup ? `OVERDUE by ${Math.abs(days)} day${Math.abs(days)!==1?'s':''}` : days===0?'Due Today':days===1?'Due Tomorrow':`Due in ${days} days`}
+                  </span>
+                  <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)'}}>{job.followup_date}</span>
+                </div>
+                {job.followup_note && <div style={{fontSize:12,color:'var(--tx)',lineHeight:1.5}}>{job.followup_note}</div>}
+              </div>
+            </div>
+          )}
+
           <div style={{borderTop:'1px solid var(--bdr)',paddingTop:16,marginBottom:16}}>
             <div className="detail-label" style={{marginBottom:8}}>Notes</div>
             <div style={{fontSize:13,color:job.notes?'var(--tx)':'var(--txd)',lineHeight:1.7,minHeight:60,background:'var(--sur2)',padding:'10px 12px',borderRadius:4,border:'1px solid var(--bdr)',fontStyle:job.notes?'normal':'italic',whiteSpace:'pre-wrap'}}>{job.notes||'No notes for this job.'}</div>
@@ -515,15 +728,19 @@ function JobCard({j,onEdit,onDelete}){
           <div className="job-card-customer">{j.customer||'—'}</div>
           <div className="job-card-equip">{j.equipment||'—'}</div>
         </div>
-        <StBadge s={j.status}/>
+        <div style={{display:'flex',flexDirection:'column',gap:4,alignItems:'flex-end'}}>
+          <StBadge s={j.status}/>
+          {j.priority && j.priority !== 'Normal' && <PriorityBadge p={j.priority}/>}
+        </div>
       </div>
       <div className="job-card-meta">
         {j.technician&&<span className="job-card-tag">👤 {j.technician}</span>}
         {j.date&&<span className="job-card-tag">📅 {j.date}</span>}
-        {j.priority&&j.priority!=='Normal'&&<span className="job-card-tag" style={{color:j.priority==='Urgent'?'var(--rd)':j.priority==='High'?'var(--am)':'var(--txm)',borderColor:j.priority==='Urgent'?'rgba(255,77,106,0.3)':j.priority==='High'?'rgba(255,176,32,0.3)':'var(--bdr)'}}>⚡ {j.priority}</span>}
         {j.amount&&<span className="job-card-tag">💰 ${j.amount}</span>}
+        <FollowupPill job={j}/>
       </div>
       {j.notes&&<div style={{fontSize:11,color:'var(--txd)',marginTop:8,fontStyle:'italic',borderLeft:'2px solid var(--bdr)',paddingLeft:8,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{j.notes}</div>}
+      {j.followup && j.followup_note && <div style={{fontSize:11,color:'var(--am)',marginTop:6,borderLeft:'2px solid rgba(255,176,32,0.4)',paddingLeft:8}}>📞 {j.followup_note}</div>}
       <div className="job-card-actions">
         <button className="btn bg bs" style={{flex:1}} onClick={()=>onEdit(j)}>✏️ Edit</button>
         <button className="btn bd bs" onClick={()=>onDelete(j.id)}>🗑</button>
@@ -575,18 +792,20 @@ function MobileDashboard({jobs,onEditJob,onDeleteJob,onNewJob}){
 function DashJobTile({j,onClick}){
   const sc=(j.status||'Pending').replace(' ','');
   const border=sc==='InProgress'?'var(--am)':sc==='Dispatched'?'var(--ac)':sc==='Complete'?'var(--gr)':'var(--txd)';
+  const priorityCfg = PRIORITY_CONFIG[j.priority] || PRIORITY_CONFIG.Normal;
   return(
-    <div onClick={()=>onClick(j)} style={{background:'var(--sur)',border:'1px solid var(--bdr)',borderRadius:8,padding:'12px 14px',cursor:'pointer',position:'relative',overflow:'hidden',transition:'border-color .15s'}} onMouseEnter={e=>e.currentTarget.style.borderColor=border} onMouseLeave={e=>e.currentTarget.style.borderColor='var(--bdr)'}>
-      <div style={{position:'absolute',left:0,top:0,bottom:0,width:3,background:border}}/>
+    <div onClick={()=>onClick(j)} style={{background:'var(--sur)',border:`1px solid ${j.priority==='Urgent'?'rgba(255,77,106,0.3)':j.priority==='High'?'rgba(255,176,32,0.25)':'var(--bdr)'}`,borderRadius:8,padding:'12px 14px',cursor:'pointer',position:'relative',overflow:'hidden',transition:'border-color .15s'}} onMouseEnter={e=>e.currentTarget.style.borderColor=border} onMouseLeave={e=>e.currentTarget.style.borderColor=j.priority==='Urgent'?'rgba(255,77,106,0.3)':j.priority==='High'?'rgba(255,176,32,0.25)':'var(--bdr)'}>
+      <div style={{position:'absolute',left:0,top:0,bottom:0,width:3,background:j.priority==='Urgent'?'var(--rd)':j.priority==='High'?'var(--am)':border}}/>
       <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--ac)',letterSpacing:1,marginBottom:4}}>{j.job_id}</div>
       <div style={{fontSize:13,fontWeight:600,marginBottom:2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{j.customer||'—'}</div>
       <div style={{fontSize:11,color:'var(--txd)',marginBottom:8,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{j.equipment||'—'}</div>
-      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+      <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',flexWrap:'wrap',gap:4}}>
         <StBadge s={j.status}/>
-        {j.priority&&j.priority!=='Normal'&&<span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:j.priority==='Urgent'?'var(--rd)':'var(--am)'}}>{j.priority==='Urgent'?'⚡ URGENT':'⚡ '+j.priority}</span>}
+        {j.priority && j.priority !== 'Normal' && <PriorityBadge p={j.priority}/>}
       </div>
       {j.technician&&<div style={{marginTop:6,fontSize:10,color:'var(--txm)',fontFamily:"'IBM Plex Mono',monospace"}}>👤 {j.technician}</div>}
       {j.date&&<div style={{fontSize:10,color:'var(--txm)',fontFamily:"'IBM Plex Mono',monospace",marginTop:2}}>📅 {j.date}</div>}
+      {j.followup&&<div style={{marginTop:6}}><FollowupPill job={j}/></div>}
     </div>
   );
 }
@@ -601,6 +820,7 @@ function Dashboard({jobs,onEditJob}){
     {label:'Complete',color:'var(--gr)',jobs:boardJobs.filter(j=>j.status==='Complete')},
   ];
   return(<>
+    <DailyFocusPanel jobs={jobs} onEditJob={(j)=>{setViewJob(null);onEditJob(j);}}/>
     <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}}>
       <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,fontSize:13,letterSpacing:1,textTransform:'uppercase',color:'var(--txm)'}}>Job Board <span style={{color:'var(--ac)',marginLeft:8}}>{boardJobs.length} active</span></div>
       <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)'}}>Invoiced/Paid jobs removed</div>
@@ -623,8 +843,9 @@ function Dashboard({jobs,onEditJob}){
   </>);
 }
 
+// ── Job Form Modal (with follow-up fields) ────────────────────────────────────
 function JobFormModal({job,customers,technicians,onSave,onClose}){
-  const [f,setF]=useState(job?{...job}:{job_id:'JO-'+Date.now().toString().slice(-4),status:'Pending',priority:'Normal',invoice_status:'Not Invoiced'});
+  const [f,setF]=useState(job?{...job}:{job_id:'JO-'+Date.now().toString().slice(-4),status:'Pending',priority:'Normal',invoice_status:'Not Invoiced',followup:false});
   return(
     <Modal title={job?.id?'Edit Job':'New Job'} onClose={onClose} onSave={()=>onSave(f)} saveLabel={job?.id?'Save Changes':'Create Job'}>
       <div className="fr">
@@ -645,7 +866,16 @@ function JobFormModal({job,customers,technicians,onSave,onClose}){
             {technicians.map(t=><option key={t.id}>{t.name}</option>)}
           </select>
         </div>
-        <div className="fg"><label className="fl">Priority</label><select className="fsl" value={f.priority||'Normal'} onChange={e=>setF({...f,priority:e.target.value})}><option>Low</option><option>Normal</option><option>High</option><option>Urgent</option></select></div>
+        <div className="fg">
+          <label className="fl">Priority</label>
+          <select className="fsl" value={f.priority||'Normal'} onChange={e=>setF({...f,priority:e.target.value})}
+            style={{color:f.priority==='Urgent'?'var(--rd)':f.priority==='High'?'var(--am)':f.priority==='Low'?'var(--txd)':'var(--tx)',borderColor:f.priority==='Urgent'?'rgba(255,77,106,0.4)':f.priority==='High'?'rgba(255,176,32,0.3)':'var(--bdr)'}}>
+            <option value="Low">🔵 Low</option>
+            <option value="Normal">⚪ Normal</option>
+            <option value="High">🟡 High</option>
+            <option value="Urgent">🔴 Urgent</option>
+          </select>
+        </div>
       </div>
       <div className="fr">
         <div className="fg"><label className="fl">Date</label><input className="fi" type="date" value={f.date||''} onChange={e=>setF({...f,date:e.target.value})}/></div>
@@ -653,8 +883,106 @@ function JobFormModal({job,customers,technicians,onSave,onClose}){
       </div>
       <div className="fg"><label className="fl">Invoice Status</label><select className="fsl" value={f.invoice_status||'Not Invoiced'} onChange={e=>setF({...f,invoice_status:e.target.value})}><option>Not Invoiced</option><option>Invoiced</option><option>Paid</option><option>Overdue</option></select></div>
       <div className="fg"><label className="fl">Notes</label><textarea className="fta" value={f.notes||''} onChange={e=>setF({...f,notes:e.target.value})}/></div>
+
+      {/* ── Follow-up section ── */}
+      <div style={{borderTop:'1px solid var(--bdr)',paddingTop:14,marginTop:4}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:f.followup?12:0}}>
+          <label className="fl" style={{margin:0,cursor:'pointer',display:'flex',alignItems:'center',gap:8}}>
+            <input type="checkbox" checked={!!f.followup} onChange={e=>setF({...f,followup:e.target.checked,followup_date:e.target.checked?(f.followup_date||new Date(Date.now()+86400000*3).toISOString().split('T')[0]):null})}
+              style={{width:16,height:16,accentColor:'var(--gr)',cursor:'pointer'}}/>
+            <span style={{color:'var(--gr)'}}>📞 Needs Follow-up</span>
+          </label>
+          {f.followup && <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)'}}>FOLLOW-UP DETAILS</span>}
+        </div>
+        {f.followup && (
+          <div style={{background:'rgba(34,212,122,0.05)',border:'1px solid rgba(34,212,122,0.2)',borderRadius:6,padding:'12px',marginTop:8}}>
+            <div className="fr">
+              <div className="fg" style={{marginBottom:0}}>
+                <label className="fl">Follow-up Date</label>
+                <input className="fi" type="date" value={f.followup_date||''} onChange={e=>setF({...f,followup_date:e.target.value})}/>
+              </div>
+              <div className="fg" style={{marginBottom:0}}>
+                <label className="fl">Reason / Action</label>
+                <input className="fi" placeholder="e.g. Call re: quote, Part arrived..." value={f.followup_note||''} onChange={e=>setF({...f,followup_note:e.target.value})}/>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </Modal>
   );
+}
+
+// ── Follow-ups Page ───────────────────────────────────────────────────────────
+function Followups({ jobs, onEdit, loading }) {
+  const [viewJob, setViewJob] = useState(null);
+
+  const followupJobs = jobs
+    .filter(j => j.followup && j.status !== 'Complete' && !isArchived(j))
+    .sort((a,b) => new Date(a.followup_date||'9999') - new Date(b.followup_date||'9999'));
+
+  const overdue = followupJobs.filter(isFollowupOverdue);
+  const today = followupJobs.filter(j => !isFollowupOverdue(j) && daysUntilFollowup(j) === 0);
+  const upcoming = followupJobs.filter(j => !isFollowupOverdue(j) && daysUntilFollowup(j) > 0);
+
+  const renderGroup = (label, items, cardClass) => {
+    if (!items.length) return null;
+    return (
+      <div style={{marginBottom:20}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txm)',letterSpacing:2,textTransform:'uppercase'}}>{label}</div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:cardClass==='overdue'?'var(--rd)':cardClass==='today'?'var(--am)':'var(--ac)'}}>{items.length}</div>
+        </div>
+        {items.map(j => {
+          const days = daysUntilFollowup(j);
+          return (
+            <div key={j.id} className={`followup-card ${cardClass}`} onClick={() => setViewJob(j)} style={{cursor:'pointer'}}>
+              <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:10}}>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--ac)',marginBottom:3}}>{j.job_id}</div>
+                  <div style={{fontSize:15,fontWeight:600,marginBottom:2}}>{j.customer}</div>
+                  <div style={{fontSize:12,color:'var(--txd)',marginBottom:8}}>{j.equipment||'—'}</div>
+                  {j.followup_note && <div style={{fontSize:13,color:'var(--tx)',background:'var(--sur2)',padding:'8px 10px',borderRadius:4,border:'1px solid var(--bdr)',lineHeight:1.5}}>📞 {j.followup_note}</div>}
+                </div>
+                <div style={{textAlign:'right',flexShrink:0}}>
+                  <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,fontWeight:700,color:cardClass==='overdue'?'var(--rd)':cardClass==='today'?'var(--am)':'var(--ac)',marginBottom:6}}>
+                    {cardClass==='overdue'?`${Math.abs(days)}d overdue`:cardClass==='today'?'Today':`${days}d away`}
+                  </div>
+                  <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',marginBottom:6}}>{j.followup_date}</div>
+                  <StBadge s={j.status}/>
+                </div>
+              </div>
+              <div style={{display:'flex',gap:8,marginTop:12,paddingTop:10,borderTop:'1px solid var(--bdr)'}}>
+                <button className="btn bfollowup bs" style={{flex:1}} onClick={e=>{e.stopPropagation();onEdit(j);}}>✏️ Edit Job</button>
+                <button className="btn bg bs" onClick={e=>{e.stopPropagation();onEdit({...j,followup:false,followup_date:null,followup_note:null});}}>✓ Mark Done</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  return (<>
+    <div className="panel">
+      <div className="ph">
+        <div style={{display:'flex',alignItems:'center',gap:10}}>
+          <div className="pt">Follow-ups</div>
+          {overdue.length > 0 && <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--rd)',background:'var(--rdd)',border:'1px solid rgba(255,77,106,0.3)',padding:'2px 7px',borderRadius:3}}>⚠ {overdue.length} OVERDUE</span>}
+        </div>
+        <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)'}}>{followupJobs.length} total</div>
+      </div>
+      <div style={{padding:16}}>
+        {loading ? <Loading/> : <>
+          {!followupJobs.length && <div className="empty"><div className="ei">✅</div>No follow-ups needed right now.<br/>Flag jobs with "Needs Follow-up" when editing them.</div>}
+          {renderGroup('⚠ Overdue', overdue, 'overdue')}
+          {renderGroup('📅 Due Today', today, 'today')}
+          {renderGroup('📆 Upcoming', upcoming, 'upcoming')}
+        </>}
+      </div>
+    </div>
+    {viewJob && <JobDetailModal job={viewJob} onClose={()=>setViewJob(null)} onEdit={(j)=>{setViewJob(null);onEdit(j);}}/>}
+  </>);
 }
 
 function Jobs({jobs,customers,technicians,onAdd,onEdit,onDelete,loading}){
@@ -690,16 +1018,21 @@ function Jobs({jobs,customers,technicians,onAdd,onEdit,onDelete,loading}){
         </select>
       </div>
       {loading?<Loading/>:<div className="tbl">
-        <div className="tr hdr" style={{gridTemplateColumns:'90px 1fr 110px 90px 80px 90px 70px'}}>
-          <div className="cl">ID</div><div className="cl">Customer/Equip</div><div className="cl">Technician</div><div className="cl">Date</div><div className="cl">Amount</div><div className="cl">Status</div><div className="cl">Act.</div>
+        <div className="tr hdr" style={{gridTemplateColumns:'90px 1fr 110px 90px 80px 100px 80px 70px'}}>
+          <div className="cl">ID</div><div className="cl">Customer/Equip</div><div className="cl">Technician</div><div className="cl">Date</div><div className="cl">Amount</div><div className="cl">Priority</div><div className="cl">Status</div><div className="cl">Act.</div>
         </div>
         {filtered.map(j=>(
-          <div key={j.id} className="tr" style={{gridTemplateColumns:'90px 1fr 110px 90px 80px 90px 70px'}} onClick={()=>setViewJob(j)}>
+          <div key={j.id} className="tr" style={{gridTemplateColumns:'90px 1fr 110px 90px 80px 100px 80px 70px',borderLeft:j.priority==='Urgent'?'2px solid var(--rd)':j.priority==='High'?'2px solid var(--am)':'2px solid transparent'}} onClick={()=>setViewJob(j)}>
             <div className="ci">{j.job_id}</div>
-            <div><div className="cm">{j.customer||'—'}</div><div className="cs">{j.equipment||'—'}</div></div>
+            <div>
+              <div className="cm">{j.customer||'—'}</div>
+              <div className="cs">{j.equipment||'—'}</div>
+              {j.followup && <FollowupPill job={j}/>}
+            </div>
             <div className="cd">{j.technician||'—'}</div>
             <div className="cn">{j.date||'—'}</div>
             <div className="cv">{j.amount?'$'+j.amount:'—'}</div>
+            <div><PriorityBadge p={j.priority}/></div>
             <div><StBadge s={j.status}/></div>
             <div style={{display:'flex',gap:4}} onClick={e=>e.stopPropagation()}>
               <button className="btn bg bs" onClick={()=>openEdit(j)}>✏️</button>
@@ -936,7 +1269,6 @@ function Files({files, onUpload, onDelete, uploading}) {
         {uploading&&<div className="loading"><div className="spin"/>Uploading...</div>}
       </div>
     </div>
-
     {viewing&&(
       <div className="mbg" onClick={()=>setViewing(null)}>
         <div style={{background:'var(--sur)',border:'1px solid var(--bdr2)',borderRadius:8,width:'100%',maxWidth:860,height:'88vh',display:'flex',flexDirection:'column'}} onClick={e=>e.stopPropagation()}>
@@ -951,11 +1283,7 @@ function Files({files, onUpload, onDelete, uploading}) {
             </div>
           </div>
           <div style={{flex:1,overflow:'hidden',borderRadius:'0 0 8px 8px'}}>
-            <iframe
-              src={viewing.url + '#toolbar=1&navpanes=0'}
-              style={{width:'100%',height:'100%',border:'none',borderRadius:'0 0 8px 8px'}}
-              title={viewing.name}
-            />
+            <iframe src={viewing.url + '#toolbar=1&navpanes=0'} style={{width:'100%',height:'100%',border:'none',borderRadius:'0 0 8px 8px'}} title={viewing.name}/>
           </div>
         </div>
       </div>
@@ -1042,8 +1370,20 @@ export default function App(){
 
   useEffect(()=>{load();},[load]);
 
-  const addJob=async(f)=>{try{const r=await db.insert('jobs',{job_id:f.job_id,customer:f.customer,equipment:f.equipment,technician:f.technician,status:f.status,priority:f.priority,date:f.date,amount:f.amount,invoice_status:f.invoice_status,notes:f.notes});setJobs(p=>[...p,...(Array.isArray(r)?r:[r])]);msg('✅ Job saved!');}catch{msg('⚠️ Save failed.');}};
-  const editJob=async(f)=>{try{await db.update('jobs',f.id,{job_id:f.job_id,customer:f.customer,equipment:f.equipment,technician:f.technician,status:f.status,priority:f.priority,date:f.date,amount:f.amount,invoice_status:f.invoice_status,notes:f.notes});setJobs(p=>p.map(x=>x.id===f.id?{...x,...f}:x));msg('✅ Updated!');}catch{msg('⚠️ Update failed.');}};
+  const addJob=async(f)=>{
+    try{
+      const r=await db.insert('jobs',{job_id:f.job_id,customer:f.customer,equipment:f.equipment,technician:f.technician,status:f.status,priority:f.priority,date:f.date,amount:f.amount,invoice_status:f.invoice_status,notes:f.notes,followup:f.followup||false,followup_date:f.followup_date||null,followup_note:f.followup_note||null});
+      setJobs(p=>[...p,...(Array.isArray(r)?r:[r])]);msg('✅ Job saved!');
+    }catch{msg('⚠️ Save failed.');}
+  };
+
+  const editJob=async(f)=>{
+    try{
+      await db.update('jobs',f.id,{job_id:f.job_id,customer:f.customer,equipment:f.equipment,technician:f.technician,status:f.status,priority:f.priority,date:f.date,amount:f.amount,invoice_status:f.invoice_status,notes:f.notes,followup:f.followup||false,followup_date:f.followup_date||null,followup_note:f.followup_note||null});
+      setJobs(p=>p.map(x=>x.id===f.id?{...x,...f}:x));msg('✅ Updated!');
+    }catch{msg('⚠️ Update failed.');}
+  };
+
   const delJob=async(id)=>{if(!window.confirm('Delete this job?'))return;try{await db.delete('jobs',id);setJobs(p=>p.filter(x=>x.id!==id));msg('🗑 Deleted.');}catch{msg('⚠️ Delete failed.');}};
 
   const addCust=async(f)=>{try{const r=await db.insert('customers',{company:f.company,contact:f.contact,phone:f.phone,email:f.email,address:f.address,notes:f.notes});setCustomers(p=>[...p,...(Array.isArray(r)?r:[r])]);msg('✅ Customer saved!');}catch{msg('⚠️ Save failed.');}};
@@ -1054,30 +1394,18 @@ export default function App(){
   const editTech=async(f)=>{try{await db.update('technicians',f.id,{name:f.name,initials:f.initials,email:f.email,phone:f.phone,status:f.status,current_job:f.current_job});setTechnicians(p=>p.map(x=>x.id===f.id?{...x,...f}:x));msg('✅ Updated!');}catch{msg('⚠️ Update failed.');}};
   const delTech=async(id)=>{if(!window.confirm('Delete?'))return;try{await db.delete('technicians',id);setTechnicians(p=>p.filter(x=>x.id!==id));msg('🗑 Deleted.');}catch{msg('⚠️ Delete failed.');}};
 
-  // ── Bulk PDF Import ────────────────────────────────────────────────────────
   const handleImport = async (toImport, setProgress) => {
     let count = 0;
     const newJobs = [];
     for (const job of toImport) {
       try {
         const jobId = 'PDF-' + Date.now().toString().slice(-5) + '-' + Math.floor(Math.random()*100);
-        const r = await db.insert('jobs', {
-          job_id: jobId,
-          customer: job.customer,
-          equipment: job.equipment,
-          technician: '',
-          status: job.status || 'Complete',
-          priority: 'Normal',
-          date: job.date,
-          amount: null,
-          invoice_status: 'Not Invoiced',
-          notes: job.notes
-        });
+        const r = await db.insert('jobs', {job_id:jobId,customer:job.customer,equipment:job.equipment,technician:'',status:job.status||'Complete',priority:'Normal',date:job.date,amount:null,invoice_status:'Not Invoiced',notes:job.notes,followup:false,followup_date:null,followup_note:null});
         if (Array.isArray(r)) newJobs.push(...r); else if (r?.id) newJobs.push(r);
         count++;
         setProgress(count);
         await new Promise(res => setTimeout(res, 80));
-      } catch(e) { /* skip failed */ }
+      } catch(e) {}
     }
     setJobs(p => [...p, ...newJobs]);
     msg(`✅ Imported ${count} jobs from PDF!`);
@@ -1107,8 +1435,12 @@ export default function App(){
     } catch(e) { msg('⚠️ Delete failed.'); }
   };
 
-  const pages=['Dashboard','Jobs','Schedule','Customers','Technicians','Files','Archive'];
-  const icons=['▣','◈','◎','◻','◑','◫','◧'];
+  // Follow-up counts for nav badge
+  const followupCount = jobs.filter(j => j.followup && j.status !== 'Complete' && !isArchived(j)).length;
+  const overdueFollowupCount = jobs.filter(j => j.followup && j.status !== 'Complete' && !isArchived(j) && isFollowupOverdue(j)).length;
+
+  const pages=['Dashboard','Jobs','Follow-ups','Schedule','Customers','Technicians','Files','Archive'];
+  const icons=['▣','◈','📞','◎','◻','◑','◫','◧'];
   const activeCount=jobs.filter(j=>['In Progress','Dispatched'].includes(j.status)).length;
   const archiveCount=jobs.filter(isArchived).length;
   const openMobileJobEdit=(j)=>{setJobForm(j);setShowJobForm(true);};
@@ -1121,18 +1453,29 @@ export default function App(){
       <div className="topbar">
         <div><div className="logo">⊞ AXISCRM</div><div className="logo-sub">CAD·CAM FIELD OPS</div></div>
         <div style={{flex:1}}/>
+        {overdueFollowupCount > 0 && (
+          <div onClick={()=>setPage('Follow-ups')} style={{display:'flex',alignItems:'center',gap:6,padding:'5px 12px',background:'var(--rdd)',border:'1px solid rgba(255,77,106,0.3)',borderRadius:4,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--rd)'}}>
+            ⚠ {overdueFollowupCount} overdue follow-up{overdueFollowupCount!==1?'s':''}
+          </div>
+        )}
         <button className="btn bimport" onClick={()=>setShowImport(true)} style={{fontSize:11}}>⬇ Import PDF</button>
         {page==='Jobs'&&<button className="btn bp" onClick={openMobileJobNew}>+ New Job</button>}
       </div>
       <div className="body">
         <div className="sidebar">
           <div className="nl">Operations</div>
-          {pages.slice(0,4).map((p,i)=><div key={p} className={"ni "+(page===p?'active':'')} onClick={()=>setPage(p)}>{icons[i]} {p}</div>)}
+          {['Dashboard','Jobs'].map((p,i)=><div key={p} className={"ni "+(page===p?'active':'')} onClick={()=>setPage(p)}>{icons[i]} {p}</div>)}
+          <div className={"ni "+(page==='Follow-ups'?'active':'')} onClick={()=>setPage('Follow-ups')} style={{position:'relative'}}>
+            📞 Follow-ups
+            {followupCount>0&&<span style={{marginLeft:'auto',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,background:overdueFollowupCount?'var(--rdd)':'var(--sur2)',border:`1px solid ${overdueFollowupCount?'rgba(255,77,106,0.3)':'var(--bdr)'}`,padding:'1px 5px',borderRadius:3,color:overdueFollowupCount?'var(--rd)':'var(--txd)'}}>{followupCount}</span>}
+          </div>
+          <div className={"ni "+(page==='Schedule'?'active':'')} onClick={()=>setPage('Schedule')}>◎ Schedule</div>
           <div className="nl">Resources</div>
+          <div className={"ni "+(page==='Customers'?'active':'')} onClick={()=>setPage('Customers')}>◻ Customers</div>
           <div className={"ni "+(page==='Technicians'?'active':'')} onClick={()=>setPage('Technicians')}>◑ Technicians</div>
           <div className={"ni "+(page==='Files'?'active':'')} onClick={()=>setPage('Files')}>◫ Files</div>
           <div className="nl">History</div>
-          <div className={"ni "+(page==='Archive'?'active':'')} onClick={()=>setPage('Archive')} style={{color:page==='Archive'?'var(--ac)':'var(--txd)'}}>
+          <div className={"ni "+(page==='Archive'?'active':'')} onClick={()=>setPage('Archive')}>
             ◧ Archive
             {archiveCount>0&&<span style={{marginLeft:'auto',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,background:'var(--sur2)',border:'1px solid var(--bdr)',padding:'1px 5px',borderRadius:3,color:'var(--txd)'}}>{archiveCount}</span>}
           </div>
@@ -1144,6 +1487,7 @@ export default function App(){
             <MobileDashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/>
           </>}
           {page==='Jobs'&&<Jobs jobs={jobs.filter(j=>!isArchived(j))} customers={customers} technicians={technicians} loading={loading.jobs} onAdd={addJob} onEdit={editJob} onDelete={delJob}/>}
+          {page==='Follow-ups'&&<Followups jobs={jobs} onEdit={editJob} loading={loading.jobs}/>}
           {page==='Schedule'&&<Schedule jobs={jobs.filter(j=>!isArchived(j))}/>}
           {page==='Customers'&&<Customers customers={customers} jobs={jobs} loading={loading.customers} onAdd={addCust} onEdit={editCust} onDelete={delCust}/>}
           {page==='Technicians'&&<Technicians technicians={technicians} loading={loading.technicians} onAdd={addTech} onEdit={editTech} onDelete={delTech}/>}
@@ -1153,12 +1497,12 @@ export default function App(){
       </div>
       <nav className="bnav">
         <div className="bnav-inner">
-          {pages.map((p,i)=>(
+          {['Dashboard','Jobs','Follow-ups','Schedule','Customers'].map((p,i)=>(
             <div key={p} className={"bnav-item "+(page===p?'active':'')} onClick={()=>setPage(p)}>
               <div className="bnav-icon">{icons[i]}</div>
               {p==='Jobs'&&activeCount>0&&<span className="bnav-badge">{activeCount}</span>}
-              {p==='Archive'&&archiveCount>0&&<span className="bnav-badge" style={{background:'var(--txd)'}}>{archiveCount}</span>}
-              <div className="bnav-label">{p==='Technicians'?'Techs':p}</div>
+              {p==='Follow-ups'&&followupCount>0&&<span className="bnav-badge" style={{background:overdueFollowupCount?'var(--rd)':'var(--am)'}}>{followupCount}</span>}
+              <div className="bnav-label">{p==='Follow-ups'?'Follow':p==='Customers'?'Clients':p==='Dashboard'?'Home':p}</div>
             </div>
           ))}
         </div>
