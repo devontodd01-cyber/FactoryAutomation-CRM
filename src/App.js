@@ -31,6 +31,21 @@ const db = {
       method: "DELETE",
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
     });
+  },
+  // Special query with filter
+  async getWhere(table, col, val) {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${col}=eq.${encodeURIComponent(val)}`, {
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+    });
+    return r.json();
+  },
+  async upsert(table, data, onConflict) {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?on_conflict=${onConflict}`, {
+      method: "POST",
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=representation,resolution=merge-duplicates" },
+      body: JSON.stringify(data)
+    });
+    return r.json();
   }
 };
 
@@ -275,8 +290,11 @@ const styles = `
   .tav.Offline{background:rgba(90,106,128,0.15);color:var(--txd);border-color:var(--bdr);}
   .cg{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;padding:14px;}
   .cdl{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--txd);text-align:center;padding:4px 0;letter-spacing:1px;}
-  .cd2{min-height:72px;background:var(--sur2);border:1px solid var(--bdr);border-radius:4px;padding:5px;}
+  .cd2{min-height:72px;background:var(--sur2);border:1px solid var(--bdr);border-radius:4px;padding:5px;cursor:pointer;transition:border-color .15s;}
+  .cd2:hover{border-color:var(--bdr2);}
   .cd2.today{border-color:var(--ac);}
+  .cd2.has-note{border-color:rgba(255,176,32,0.4);}
+  .cd2.today.has-note{border-color:var(--ac);}
   .cdn{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--txm);margin-bottom:3px;}
   .cdn.tn{color:var(--ac);font-weight:700;}
   .cj{font-size:8px;padding:1px 4px;border-radius:2px;margin-bottom:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -284,6 +302,7 @@ const styles = `
   .cj.InProgress{background:var(--amd);color:var(--am);}
   .cj.Pending{background:rgba(90,106,128,0.15);color:var(--txd);}
   .cj.Complete{background:var(--grd);color:var(--gr);}
+  .note-dot{width:5px;height:5px;border-radius:50%;background:var(--am);display:inline-block;margin-left:3px;vertical-align:middle;flex-shrink:0;}
   .empty{padding:40px;text-align:center;color:var(--txd);font-size:13px;}
   .ei{font-size:28px;margin-bottom:10px;}
   .loading{display:flex;align-items:center;justify-content:padding:40px;color:var(--txd);font-family:'IBM Plex Mono',monospace;font-size:12px;gap:10px;}
@@ -341,6 +360,17 @@ const styles = `
   .import-row{display:grid;grid-template-columns:24px 1fr 120px 90px;align-items:center;gap:8px;padding:8px 16px;border-bottom:1px solid var(--bdr);font-size:12px;}
   .import-row:hover{background:var(--sur2);}
   .import-check{width:16px;height:16px;accent-color:var(--ac);cursor:pointer;}
+
+  /* ── Calendar Note Panel ── */
+  .cal-note-panel{background:var(--sur);border:1px solid var(--bdr2);border-radius:8px;padding:16px;margin-top:12px;}
+  .cal-note-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
+  .cal-note-date{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:14px;letter-spacing:1px;color:var(--ac);}
+  .cal-note-close{background:none;border:none;color:var(--txd);font-size:18px;cursor:pointer;line-height:1;padding:2px 6px;}
+  .cal-note-close:hover{color:var(--tx);}
+  .cal-note-ta{width:100%;background:var(--sur2);border:1px solid var(--bdr);border-radius:4px;padding:10px 12px;color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px;resize:vertical;min-height:100px;line-height:1.6;}
+  .cal-note-ta:focus{outline:none;border-color:var(--ac);}
+  .cal-note-actions{display:flex;gap:8px;margin-top:10px;justify-content:flex-end;}
+  .cal-note-saved{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--gr);align-self:center;margin-right:auto;}
 
   /* ── Daily Focus Panel ── */
   .focus-panel{background:linear-gradient(135deg,rgba(0,200,255,0.06) 0%,rgba(255,176,32,0.04) 100%);border:1px solid var(--bdr2);border-radius:8px;margin-bottom:20px;overflow:hidden;}
@@ -408,7 +438,6 @@ function DailyFocusPanel({ jobs, onEditJob }) {
   const today = new Date();
   const dateStr = today.toLocaleDateString('en-CA', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
 
-  // Top priority jobs (Urgent first, then High, non-complete, non-archived)
   const priorityJobs = jobs
     .filter(j => !isArchived(j) && j.status !== 'Complete' && (j.priority === 'Urgent' || j.priority === 'High'))
     .sort((a,b) => {
@@ -417,7 +446,6 @@ function DailyFocusPanel({ jobs, onEditJob }) {
     })
     .slice(0, 5);
 
-  // Follow-ups: overdue first, then upcoming
   const followupJobs = jobs
     .filter(j => j.followup && j.status !== 'Complete')
     .sort((a,b) => {
@@ -445,7 +473,6 @@ function DailyFocusPanel({ jobs, onEditJob }) {
         </div>
       </div>
       <div className="focus-body">
-        {/* Priority Jobs column */}
         <div className="focus-col">
           <div className="focus-col-title">🔴 Priority Jobs</div>
           {priorityJobs.length === 0 && (
@@ -469,7 +496,6 @@ function DailyFocusPanel({ jobs, onEditJob }) {
           })}
         </div>
 
-        {/* Follow-ups column */}
         <div className="focus-col">
           <div className="focus-col-title">📞 Follow-ups Needed</div>
           {followupJobs.length === 0 && (
@@ -663,7 +689,6 @@ function JobDetailModal({job,onClose,onEdit}){
             <div><div className="detail-label">Invoice</div><div className="detail-value">{job.invoice_status||'—'}</div></div>
           </div>
 
-          {/* Follow-up section in detail modal */}
           {job.followup && (
             <div style={{borderTop:'1px solid var(--bdr)',paddingTop:14,marginBottom:16}}>
               <div className="detail-label" style={{marginBottom:8}}>Follow-up Required</div>
@@ -792,7 +817,6 @@ function MobileDashboard({jobs,onEditJob,onDeleteJob,onNewJob}){
 function DashJobTile({j,onClick}){
   const sc=(j.status||'Pending').replace(' ','');
   const border=sc==='InProgress'?'var(--am)':sc==='Dispatched'?'var(--ac)':sc==='Complete'?'var(--gr)':'var(--txd)';
-  const priorityCfg = PRIORITY_CONFIG[j.priority] || PRIORITY_CONFIG.Normal;
   return(
     <div onClick={()=>onClick(j)} style={{background:'var(--sur)',border:`1px solid ${j.priority==='Urgent'?'rgba(255,77,106,0.3)':j.priority==='High'?'rgba(255,176,32,0.25)':'var(--bdr)'}`,borderRadius:8,padding:'12px 14px',cursor:'pointer',position:'relative',overflow:'hidden',transition:'border-color .15s'}} onMouseEnter={e=>e.currentTarget.style.borderColor=border} onMouseLeave={e=>e.currentTarget.style.borderColor=j.priority==='Urgent'?'rgba(255,77,106,0.3)':j.priority==='High'?'rgba(255,176,32,0.25)':'var(--bdr)'}>
       <div style={{position:'absolute',left:0,top:0,bottom:0,width:3,background:j.priority==='Urgent'?'var(--rd)':j.priority==='High'?'var(--am)':border}}/>
@@ -827,7 +851,7 @@ function useDragResize(defaultWidth=280, min=180, max=520){
   useEffect(() => {
     const onMove = (e) => {
       if (!dragging.current) return;
-      const delta = startX.current - e.clientX; // drag left = bigger calendar
+      const delta = startX.current - e.clientX;
       const newW = Math.min(max, Math.max(min, startW.current + delta));
       setWidth(newW);
     };
@@ -844,18 +868,81 @@ function useDragResize(defaultWidth=280, min=180, max=520){
   return { width, onMouseDown };
 }
 
-function DashCalendar({jobs}){
-  const now=new Date();
-  const [vd,setVd]=useState(new Date(now.getFullYear(),now.getMonth(),1));
-  const dim=new Date(vd.getFullYear(),vd.getMonth()+1,0).getDate();
-  const fd=new Date(vd.getFullYear(),vd.getMonth(),1).getDay();
-  const days=['Su','Mo','Tu','We','Th','Fr','Sa'];
-  const jobsFor=d=>{
-    const s=`${vd.getFullYear()}-${String(vd.getMonth()+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    return jobs.filter(j=>j.date===s);
+// ── Calendar Note Panel ───────────────────────────────────────────────────────
+function CalendarNotePanel({ dateStr, note, onSave, onClose }) {
+  const [text, setText] = useState(note?.note_text || '');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const taRef = useRef(null);
+
+  useEffect(() => {
+    setText(note?.note_text || '');
+    setSaved(false);
+    setTimeout(() => taRef.current?.focus(), 50);
+  }, [dateStr, note]);
+
+  const fmt = (ds) => {
+    const [y, m, d] = ds.split('-').map(Number);
+    return new Date(y, m-1, d).toLocaleDateString('en-CA', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
   };
-  const cells=[...Array(fd).fill(null),...Array.from({length:dim},(_,i)=>i+1)];
-  return(
+
+  const handleSave = async () => {
+    setSaving(true);
+    await onSave(dateStr, text);
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const handleKeyDown = (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleSave();
+    if (e.key === 'Escape') onClose();
+  };
+
+  return (
+    <div className="cal-note-panel">
+      <div className="cal-note-header">
+        <div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:2,textTransform:'uppercase',marginBottom:3}}>📝 Day Note</div>
+          <div className="cal-note-date">{fmt(dateStr)}</div>
+        </div>
+        <button className="cal-note-close" onClick={onClose}>×</button>
+      </div>
+      <textarea
+        ref={taRef}
+        className="cal-note-ta"
+        placeholder="Type a note for this day... (Ctrl+Enter to save)"
+        value={text}
+        onChange={e => { setText(e.target.value); setSaved(false); }}
+        onKeyDown={handleKeyDown}
+      />
+      <div className="cal-note-actions">
+        {saved && <span className="cal-note-saved">✓ Saved</span>}
+        {text && (
+          <button className="btn bd bs" onClick={() => { setText(''); onSave(dateStr, ''); }}>Clear</button>
+        )}
+        <button className="btn bg bs" onClick={onClose}>Close</button>
+        <button className="btn bp bs" onClick={handleSave} disabled={saving}>
+          {saving ? 'Saving...' : 'Save Note'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Dashboard Calendar (mini, right panel) ────────────────────────────────────
+function DashCalendar({ jobs, calNotes }) {
+  const now = new Date();
+  const [vd, setVd] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
+  const dim = new Date(vd.getFullYear(), vd.getMonth()+1, 0).getDate();
+  const fd = new Date(vd.getFullYear(), vd.getMonth(), 1).getDay();
+  const days = ['Su','Mo','Tu','We','Th','Fr','Sa'];
+  const dateKey = (d) => `${vd.getFullYear()}-${String(vd.getMonth()+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+  const jobsFor = d => jobs.filter(j => j.date === dateKey(d));
+  const hasNote = d => calNotes[dateKey(d)]?.note_text?.trim();
+  const cells = [...Array(fd).fill(null), ...Array.from({length:dim}, (_,i) => i+1)];
+
+  return (
     <div style={{background:'var(--sur)',border:'1px solid var(--bdr)',borderRadius:6,overflow:'hidden',display:'flex',flexDirection:'column',height:'100%'}}>
       <div style={{padding:'10px 14px',borderBottom:'1px solid var(--bdr)',display:'flex',alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
         <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,fontSize:12,letterSpacing:1,textTransform:'uppercase',color:'var(--txm)'}}>
@@ -872,13 +959,17 @@ function DashCalendar({jobs}){
           {days.map(d=><div key={d} style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:'var(--txd)',textAlign:'center',padding:'2px 0',letterSpacing:1}}>{d}</div>)}
         </div>
         <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2}}>
-          {cells.map((d,i)=>{
-            if(!d) return <div key={'e'+i}/>;
-            const isToday=d===now.getDate()&&vd.getMonth()===now.getMonth()&&vd.getFullYear()===now.getFullYear();
-            const dj=jobsFor(d);
-            return(
-              <div key={d} style={{minHeight:52,background:isToday?'rgba(0,200,255,0.06)':'var(--sur2)',border:`1px solid ${isToday?'var(--ac)':'var(--bdr)'}`,borderRadius:3,padding:'3px 2px'}}>
-                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:isToday?'var(--ac)':'var(--txm)',fontWeight:isToday?700:400,marginBottom:2,textAlign:'center'}}>{d}</div>
+          {cells.map((d,i) => {
+            if (!d) return <div key={'e'+i}/>;
+            const isToday = d===now.getDate()&&vd.getMonth()===now.getMonth()&&vd.getFullYear()===now.getFullYear();
+            const dj = jobsFor(d);
+            const note = hasNote(d);
+            return (
+              <div key={d} style={{minHeight:52,background:isToday?'rgba(0,200,255,0.06)':'var(--sur2)',border:`1px solid ${isToday?'var(--ac)':note?'rgba(255,176,32,0.35)':'var(--bdr)'}`,borderRadius:3,padding:'3px 2px'}}>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:2}}>
+                  <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:isToday?'var(--ac)':'var(--txm)',fontWeight:isToday?700:400,marginBottom:2}}>{d}</div>
+                  {note && <div style={{width:4,height:4,borderRadius:'50%',background:'var(--am)',marginBottom:2,flexShrink:0}}/>}
+                </div>
                 {dj.slice(0,2).map(j=>(
                   <div key={j.id} style={{fontSize:7,padding:'1px 3px',borderRadius:2,marginBottom:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
                     background:j.status==='In Progress'?'var(--amd)':j.status==='Dispatched'?'var(--acd)':j.status==='Complete'?'var(--grd)':'rgba(90,106,128,0.15)',
@@ -895,7 +986,7 @@ function DashCalendar({jobs}){
   );
 }
 
-function Dashboard({jobs,onEditJob}){
+function Dashboard({jobs, onEditJob, calNotes}){
   const [viewJob,setViewJob]=useState(null);
   const boardJobs=jobs.filter(j=>!(['Invoiced','Paid'].includes(j.invoice_status)));
   const groups=[
@@ -909,7 +1000,6 @@ function Dashboard({jobs,onEditJob}){
   return(<>
     <DailyFocusPanel jobs={jobs} onEditJob={(j)=>{setViewJob(null);onEditJob(j);}}/>
     <div style={{display:'flex',gap:0,alignItems:'flex-start'}}>
-      {/* Job board — left */}
       <div style={{flex:1,minWidth:0,paddingRight:12}}>
         {groups.map(g=>(
           <div key={g.label} style={{marginBottom:20}}>
@@ -927,37 +1017,26 @@ function Dashboard({jobs,onEditJob}){
         {!boardJobs.length&&<div className="empty"><div className="ei">🎉</div>All jobs invoiced!</div>}
       </div>
 
-      {/* Drag handle */}
       <div
         onMouseDown={onDragStart}
-        style={{
-          width:8, flexShrink:0, cursor:'col-resize',
-          display:'flex', alignItems:'center', justifyContent:'center',
-          alignSelf:'stretch', position:'relative', zIndex:2,
-          marginRight:4,
-        }}
+        style={{width:8,flexShrink:0,cursor:'col-resize',display:'flex',alignItems:'center',justifyContent:'center',alignSelf:'stretch',position:'relative',zIndex:2,marginRight:4}}
         title="Drag to resize calendar"
       >
-        <div style={{
-          width:3, height:'60px', borderRadius:3,
-          background:'var(--bdr2)',
-          transition:'background 0.15s',
-        }}
-        onMouseEnter={e=>e.currentTarget.style.background='var(--ac)'}
-        onMouseLeave={e=>e.currentTarget.style.background='var(--bdr2)'}
+        <div style={{width:3,height:'60px',borderRadius:3,background:'var(--bdr2)',transition:'background 0.15s'}}
+          onMouseEnter={e=>e.currentTarget.style.background='var(--ac)'}
+          onMouseLeave={e=>e.currentTarget.style.background='var(--bdr2)'}
         />
       </div>
 
-      {/* Calendar — resizable right panel */}
-      <div style={{width:calWidth, flexShrink:0, position:'sticky', top:0, height:'calc(100vh - 140px)'}}>
-        <DashCalendar jobs={jobs}/>
+      <div style={{width:calWidth,flexShrink:0,position:'sticky',top:0,height:'calc(100vh - 140px)'}}>
+        <DashCalendar jobs={jobs} calNotes={calNotes}/>
       </div>
     </div>
     {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)} onEdit={(j)=>{setViewJob(null);onEditJob(j);}}/>}
   </>);
 }
 
-// ── Job Form Modal (with follow-up fields) ────────────────────────────────────
+// ── Job Form Modal ────────────────────────────────────────────────────────────
 function JobFormModal({job,customers,technicians,onSave,onClose}){
   const [f,setF]=useState(job?{...job}:{job_id:'JO-'+Date.now().toString().slice(-4),status:'Pending',priority:'Normal',invoice_status:'Not Invoiced',followup:false});
   return(
@@ -997,8 +1076,6 @@ function JobFormModal({job,customers,technicians,onSave,onClose}){
       </div>
       <div className="fg"><label className="fl">Invoice Status</label><select className="fsl" value={f.invoice_status||'Not Invoiced'} onChange={e=>setF({...f,invoice_status:e.target.value})}><option>Not Invoiced</option><option>Invoiced</option><option>Paid</option><option>Overdue</option></select></div>
       <div className="fg"><label className="fl">Notes</label><textarea className="fta" value={f.notes||''} onChange={e=>setF({...f,notes:e.target.value})}/></div>
-
-      {/* ── Follow-up section ── */}
       <div style={{borderTop:'1px solid var(--bdr)',paddingTop:14,marginTop:4}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:f.followup?12:0}}>
           <label className="fl" style={{margin:0,cursor:'pointer',display:'flex',alignItems:'center',gap:8}}>
@@ -1281,35 +1358,89 @@ function Technicians({technicians,onAdd,onEdit,onDelete,loading}){
   </>);
 }
 
-function Schedule({jobs}){
-  const now=new Date();
-  const [vd,setVd]=useState(new Date(now.getFullYear(),now.getMonth(),1));
-  const dim=new Date(vd.getFullYear(),vd.getMonth()+1,0).getDate();
-  const fd=new Date(vd.getFullYear(),vd.getMonth(),1).getDay();
-  const days=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  const jobsFor=d=>{const s=`${vd.getFullYear()}-${String(vd.getMonth()+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;return jobs.filter(j=>j.date===s);};
-  const cells=[...Array(fd).fill(null),...Array.from({length:dim},(_,i)=>i+1)];
-  return(
+// ── Schedule Page (full calendar with notes) ──────────────────────────────────
+function Schedule({ jobs, calNotes, onSaveNote }) {
+  const now = new Date();
+  const [vd, setVd] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
+  const [selectedDate, setSelectedDate] = useState(null);
+
+  const dim = new Date(vd.getFullYear(), vd.getMonth()+1, 0).getDate();
+  const fd = new Date(vd.getFullYear(), vd.getMonth(), 1).getDay();
+  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+  const dateKey = (d) => `${vd.getFullYear()}-${String(vd.getMonth()+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+  const jobsFor = d => jobs.filter(j => j.date === dateKey(d));
+  const noteFor = d => calNotes[dateKey(d)];
+  const hasNote = d => calNotes[dateKey(d)]?.note_text?.trim();
+
+  const cells = [...Array(fd).fill(null), ...Array.from({length:dim}, (_,i) => i+1)];
+
+  const handleDayClick = (d) => {
+    const key = dateKey(d);
+    setSelectedDate(prev => prev === key ? null : key);
+  };
+
+  return (
     <div className="panel">
       <div className="ph">
         <div className="pt">Schedule — {vd.toLocaleString('default',{month:'long',year:'numeric'})}</div>
-        <div style={{display:'flex',gap:8}}>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:1}}>
+            <span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:'var(--am)',marginRight:4,verticalAlign:'middle'}}/>
+            note
+          </span>
           <button className="btn bg bs" onClick={()=>setVd(new Date(vd.getFullYear(),vd.getMonth()-1,1))}>‹</button>
+          <button className="btn bg bs" onClick={()=>setVd(new Date(now.getFullYear(),now.getMonth(),1))}>●</button>
           <button className="btn bg bs" onClick={()=>setVd(new Date(vd.getFullYear(),vd.getMonth()+1,1))}>›</button>
         </div>
       </div>
       <div className="cg">
         {days.map(d=><div key={d} className="cdl">{d}</div>)}
-        {cells.map((d,i)=>{
-          if(!d)return<div key={"e"+i}/>;
-          const isToday=d===now.getDate()&&vd.getMonth()===now.getMonth()&&vd.getFullYear()===now.getFullYear();
-          const dj=jobsFor(d);
-          return(<div key={d} className={"cd2 "+(isToday?'today':'')}>
-            <div className={"cdn "+(isToday?'tn':'')}>{d}</div>
-            {dj.map(j=><div key={j.id} className={"cj "+(j.status||'Pending').replace(' ','')} title={j.job_id}>{j.customer||j.job_id}</div>)}
-          </div>);
+        {cells.map((d,i) => {
+          if (!d) return <div key={"e"+i}/>;
+          const isToday = d===now.getDate()&&vd.getMonth()===now.getMonth()&&vd.getFullYear()===now.getFullYear();
+          const key = dateKey(d);
+          const isSelected = selectedDate === key;
+          const dj = jobsFor(d);
+          const note = hasNote(d);
+          return (
+            <div
+              key={d}
+              className={"cd2 "+(isToday?'today ':'')+(note?'has-note ':'')}
+              style={{
+                border: isSelected
+                  ? '1px solid var(--ac)'
+                  : isToday
+                  ? '1px solid var(--ac)'
+                  : note
+                  ? '1px solid rgba(255,176,32,0.4)'
+                  : '1px solid var(--bdr)',
+                background: isSelected ? 'rgba(0,200,255,0.08)' : isToday ? 'rgba(0,200,255,0.04)' : 'var(--sur2)',
+                cursor: 'pointer',
+              }}
+              onClick={() => handleDayClick(d)}
+            >
+              <div style={{display:'flex',alignItems:'center',gap:2,marginBottom:2}}>
+                <div className={"cdn "+(isToday?'tn':'')}>{d}</div>
+                {note && <div style={{width:5,height:5,borderRadius:'50%',background:'var(--am)',flexShrink:0}}/>}
+              </div>
+              {dj.map(j=><div key={j.id} className={"cj "+(j.status||'Pending').replace(' ','')} title={j.job_id}>{j.customer||j.job_id}</div>)}
+            </div>
+          );
         })}
       </div>
+
+      {/* Note panel — shown below calendar when a date is selected */}
+      {selectedDate && (
+        <div style={{padding:'0 14px 14px'}}>
+          <CalendarNotePanel
+            dateStr={selectedDate}
+            note={noteFor(selectedDate.split('-')[2])}
+            onSave={onSaveNote}
+            onClose={() => setSelectedDate(null)}
+          />
+        </div>
+      )}
     </div>
   );
 }
@@ -1464,6 +1595,7 @@ export default function App(){
   const [customers,setCustomers]=useState([]);
   const [technicians,setTechnicians]=useState([]);
   const [files,setFiles]=useState([]);
+  const [calNotes,setCalNotes]=useState({}); // keyed by date string "YYYY-MM-DD"
   const [loading,setLoading]=useState({jobs:true,customers:true,technicians:true});
   const [filesLoading,setFilesLoading]=useState(false);
   const [fileUploading,setFileUploading]=useState(false);
@@ -1482,7 +1614,45 @@ export default function App(){
     setLoading({jobs:false,customers:false,technicians:false});
   },[msg]);
 
-  useEffect(()=>{load();},[load]);
+  // Load calendar notes separately
+  const loadCalNotes = useCallback(async () => {
+    try {
+      const notes = await db.get('calendar_notes');
+      if (Array.isArray(notes)) {
+        const map = {};
+        notes.forEach(n => { map[n.date] = n; });
+        setCalNotes(map);
+      }
+    } catch(e) {
+      // Table may not exist yet — that's fine, notes will be created on first save
+    }
+  }, []);
+
+  useEffect(()=>{load();loadCalNotes();},[load,loadCalNotes]);
+
+  // Save or update a calendar note
+  const saveCalNote = useCallback(async (dateStr, text) => {
+    try {
+      const existing = calNotes[dateStr];
+      if (existing?.id) {
+        // Update
+        await db.update('calendar_notes', existing.id, { note_text: text });
+        setCalNotes(prev => ({
+          ...prev,
+          [dateStr]: { ...existing, note_text: text }
+        }));
+      } else {
+        // Insert
+        const r = await db.insert('calendar_notes', { date: dateStr, note_text: text });
+        const rec = Array.isArray(r) ? r[0] : r;
+        if (rec?.id) {
+          setCalNotes(prev => ({ ...prev, [dateStr]: rec }));
+        }
+      }
+    } catch(e) {
+      msg('⚠️ Note save failed. Make sure the calendar_notes table exists in Supabase.');
+    }
+  }, [calNotes, msg]);
 
   const addJob=async(f)=>{
     try{
@@ -1549,7 +1719,6 @@ export default function App(){
     } catch(e) { msg('⚠️ Delete failed.'); }
   };
 
-  // Follow-up counts for nav badge
   const followupCount = jobs.filter(j => j.followup && j.status !== 'Complete' && !isArchived(j)).length;
   const overdueFollowupCount = jobs.filter(j => j.followup && j.status !== 'Complete' && !isArchived(j) && isFollowupOverdue(j)).length;
 
@@ -1597,12 +1766,12 @@ export default function App(){
         </div>
         <div className="main">
           {page==='Dashboard'&&<>
-            <Dashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit}/>
+            <Dashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} calNotes={calNotes}/>
             <MobileDashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/>
           </>}
           {page==='Jobs'&&<Jobs jobs={jobs.filter(j=>!isArchived(j))} customers={customers} technicians={technicians} loading={loading.jobs} onAdd={addJob} onEdit={editJob} onDelete={delJob}/>}
           {page==='Follow-ups'&&<Followups jobs={jobs} onEdit={editJob} loading={loading.jobs}/>}
-          {page==='Schedule'&&<Schedule jobs={jobs.filter(j=>!isArchived(j))}/>}
+          {page==='Schedule'&&<Schedule jobs={jobs.filter(j=>!isArchived(j))} calNotes={calNotes} onSaveNote={saveCalNote}/>}
           {page==='Customers'&&<Customers customers={customers} jobs={jobs} loading={loading.customers} onAdd={addCust} onEdit={editCust} onDelete={delCust}/>}
           {page==='Technicians'&&<Technicians technicians={technicians} loading={loading.technicians} onAdd={addTech} onEdit={editTech} onDelete={delTech}/>}
           {page==='Files'&&<Files files={files} onUpload={uploadFiles} onDelete={deleteFile} uploading={fileUploading}/>}
