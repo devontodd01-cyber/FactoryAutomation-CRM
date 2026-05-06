@@ -1358,11 +1358,13 @@ function Technicians({technicians,onAdd,onEdit,onDelete,loading}){
   </>);
 }
 
-// ── Schedule Page (full calendar with notes) ──────────────────────────────────
+// ── Schedule Page (full calendar with notes + search) ─────────────────────────
 function Schedule({ jobs, calNotes, onSaveNote }) {
   const now = new Date();
   const [vd, setVd] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
   const [selectedDate, setSelectedDate] = useState(null);
+  const [search, setSearch] = useState('');
+  const searchRef = useRef(null);
 
   const dim = new Date(vd.getFullYear(), vd.getMonth()+1, 0).getDate();
   const fd = new Date(vd.getFullYear(), vd.getMonth(), 1).getDay();
@@ -1370,7 +1372,7 @@ function Schedule({ jobs, calNotes, onSaveNote }) {
 
   const dateKey = (d) => `${vd.getFullYear()}-${String(vd.getMonth()+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
   const jobsFor = d => jobs.filter(j => j.date === dateKey(d));
-  const noteFor = d => calNotes[dateKey(d)];
+  const noteFor = (key) => calNotes[key];
   const hasNote = d => calNotes[dateKey(d)]?.note_text?.trim();
 
   const cells = [...Array(fd).fill(null), ...Array.from({length:dim}, (_,i) => i+1)];
@@ -1378,6 +1380,61 @@ function Schedule({ jobs, calNotes, onSaveNote }) {
   const handleDayClick = (d) => {
     const key = dateKey(d);
     setSelectedDate(prev => prev === key ? null : key);
+    setSearch('');
+  };
+
+  // ── Search logic: match against all jobs (all months) + cal notes ──
+  const q = search.trim().toLowerCase();
+  const searchResults = q ? (() => {
+    const matched = [];
+    // Check all jobs for customer / equipment / notes / job_id match
+    jobs.forEach(j => {
+      if (
+        (j.customer||'').toLowerCase().includes(q) ||
+        (j.equipment||'').toLowerCase().includes(q) ||
+        (j.notes||'').toLowerCase().includes(q) ||
+        (j.job_id||'').toLowerCase().includes(q)
+      ) {
+        matched.push({ date: j.date, job: j, noteText: null });
+      }
+    });
+    // Also check calendar notes
+    Object.entries(calNotes).forEach(([date, note]) => {
+      if ((note.note_text||'').toLowerCase().includes(q)) {
+        // Only add if not already represented by a job match on same date
+        if (!matched.find(m => m.date === date && !m.noteText)) {
+          matched.push({ date, job: null, noteText: note.note_text });
+        } else {
+          // Annotate existing entries on that date with the note
+          matched.filter(m => m.date === date).forEach(m => { m.noteText = note.note_text; });
+        }
+      }
+    });
+    // Sort by date desc
+    return matched
+      .filter(m => m.date)
+      .sort((a,b) => b.date.localeCompare(a.date));
+  })() : [];
+
+  // Highlight matching text
+  const highlight = (text, q) => {
+    if (!q || !text) return text;
+    const idx = text.toLowerCase().indexOf(q);
+    if (idx === -1) return text;
+    return <>{text.slice(0,idx)}<mark style={{background:'rgba(0,200,255,0.25)',color:'var(--ac)',borderRadius:2,padding:'0 2px'}}>{text.slice(idx,idx+q.length)}</mark>{text.slice(idx+q.length)}</>;
+  };
+
+  // Group search results by date for display
+  const groupedResults = searchResults.reduce((acc, m) => {
+    if (!acc[m.date]) acc[m.date] = { jobs: [], noteText: null };
+    if (m.job) acc[m.date].jobs.push(m.job);
+    if (m.noteText) acc[m.date].noteText = m.noteText;
+    return acc;
+  }, {});
+
+  const fmtDate = (ds) => {
+    const [y,mo,d] = ds.split('-').map(Number);
+    return new Date(y,mo-1,d).toLocaleDateString('en-CA',{weekday:'short',month:'short',day:'numeric',year:'numeric'});
   };
 
   return (
@@ -1394,52 +1451,114 @@ function Schedule({ jobs, calNotes, onSaveNote }) {
           <button className="btn bg bs" onClick={()=>setVd(new Date(vd.getFullYear(),vd.getMonth()+1,1))}>›</button>
         </div>
       </div>
-      <div className="cg">
-        {days.map(d=><div key={d} className="cdl">{d}</div>)}
-        {cells.map((d,i) => {
-          if (!d) return <div key={"e"+i}/>;
-          const isToday = d===now.getDate()&&vd.getMonth()===now.getMonth()&&vd.getFullYear()===now.getFullYear();
-          const key = dateKey(d);
-          const isSelected = selectedDate === key;
-          const dj = jobsFor(d);
-          const note = hasNote(d);
-          return (
-            <div
-              key={d}
-              className={"cd2 "+(isToday?'today ':'')+(note?'has-note ':'')}
-              style={{
-                border: isSelected
-                  ? '1px solid var(--ac)'
-                  : isToday
-                  ? '1px solid var(--ac)'
-                  : note
-                  ? '1px solid rgba(255,176,32,0.4)'
-                  : '1px solid var(--bdr)',
-                background: isSelected ? 'rgba(0,200,255,0.08)' : isToday ? 'rgba(0,200,255,0.04)' : 'var(--sur2)',
-                cursor: 'pointer',
-              }}
-              onClick={() => handleDayClick(d)}
-            >
-              <div style={{display:'flex',alignItems:'center',gap:2,marginBottom:2}}>
-                <div className={"cdn "+(isToday?'tn':'')}>{d}</div>
-                {note && <div style={{width:5,height:5,borderRadius:'50%',background:'var(--am)',flexShrink:0}}/>}
-              </div>
-              {dj.map(j=><div key={j.id} className={"cj "+(j.status||'Pending').replace(' ','')} title={j.job_id}>{j.customer||j.job_id}</div>)}
-            </div>
-          );
-        })}
+
+      {/* Search bar */}
+      <div style={{padding:'10px 14px',borderBottom:'1px solid var(--bdr)',display:'flex',gap:8,alignItems:'center'}}>
+        <input
+          ref={searchRef}
+          className="fi"
+          placeholder="🔍 Search customer, machine, notes across all dates..."
+          value={search}
+          onChange={e => { setSearch(e.target.value); setSelectedDate(null); }}
+          style={{marginBottom:0,flex:1}}
+        />
+        {search && (
+          <button className="btn bg bs" onClick={() => { setSearch(''); searchRef.current?.focus(); }}>✕ Clear</button>
+        )}
       </div>
 
-      {/* Note panel — shown below calendar when a date is selected */}
-      {selectedDate && (
-        <div style={{padding:'0 14px 14px'}}>
-          <CalendarNotePanel
-            dateStr={selectedDate}
-            note={noteFor(selectedDate.split('-')[2])}
-            onSave={onSaveNote}
-            onClose={() => setSelectedDate(null)}
-          />
+      {/* Search results view */}
+      {q ? (
+        <div style={{padding:14}}>
+          {Object.keys(groupedResults).length === 0 ? (
+            <div className="empty"><div className="ei">🔍</div>No matches for "{search}"</div>
+          ) : (
+            <>
+              <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:2,textTransform:'uppercase',marginBottom:12}}>
+                {Object.keys(groupedResults).length} date{Object.keys(groupedResults).length!==1?'s':''} matched
+              </div>
+              {Object.entries(groupedResults).map(([date, {jobs: matchedJobs, noteText}]) => (
+                <div key={date} style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:6,marginBottom:8,overflow:'hidden'}}>
+                  {/* Date header — click to open note panel */}
+                  <div
+                    style={{padding:'8px 12px',borderBottom: (matchedJobs.length||noteText)?'1px solid var(--bdr)':'none',display:'flex',alignItems:'center',justifyContent:'space-between',cursor:'pointer',background:'var(--sur3)'}}
+                    onClick={() => { setSearch(''); setSelectedDate(date); setVd(new Date(date.slice(0,7)+'-01')); }}
+                  >
+                    <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:'var(--ac)',fontWeight:700}}>{fmtDate(date)}</div>
+                    <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)'}}>click to open ›</div>
+                  </div>
+                  {/* Matched jobs */}
+                  {matchedJobs.map(j => (
+                    <div key={j.id} style={{padding:'8px 12px',borderBottom:'1px solid var(--bdr)',display:'grid',gridTemplateColumns:'1fr auto',gap:8,alignItems:'center'}}>
+                      <div>
+                        <div style={{fontSize:13,fontWeight:600}}>{highlight(j.customer||'—', q)}</div>
+                        <div style={{fontSize:11,color:'var(--txd)',marginTop:1}}>{highlight(j.equipment||'', q)}</div>
+                        {j.notes && q && j.notes.toLowerCase().includes(q) && (
+                          <div style={{fontSize:11,color:'var(--txm)',marginTop:4,fontStyle:'italic',borderLeft:'2px solid var(--bdr)',paddingLeft:6,lineHeight:1.5}}>
+                            {highlight(j.notes.slice(0, 120) + (j.notes.length > 120 ? '…' : ''), q)}
+                          </div>
+                        )}
+                      </div>
+                      <span className={"st "+(j.status||'Pending').replace(' ','')}>{j.status||'Pending'}</span>
+                    </div>
+                  ))}
+                  {/* Matched note text */}
+                  {noteText && (
+                    <div style={{padding:'8px 12px',fontSize:12,color:'var(--txm)',fontStyle:'italic',display:'flex',alignItems:'flex-start',gap:6}}>
+                      <span style={{color:'var(--am)',flexShrink:0}}>📝</span>
+                      <span style={{lineHeight:1.5}}>{highlight(noteText.slice(0,160)+(noteText.length>160?'…':''), q)}</span>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </>
+          )}
         </div>
+      ) : (
+        /* Normal calendar grid */
+        <>
+          <div className="cg">
+            {days.map(d=><div key={d} className="cdl">{d}</div>)}
+            {cells.map((d,i) => {
+              if (!d) return <div key={"e"+i}/>;
+              const isToday = d===now.getDate()&&vd.getMonth()===now.getMonth()&&vd.getFullYear()===now.getFullYear();
+              const key = dateKey(d);
+              const isSelected = selectedDate === key;
+              const dj = jobsFor(d);
+              const note = hasNote(d);
+              return (
+                <div
+                  key={d}
+                  className={"cd2 "+(isToday?'today ':'')+(note?'has-note ':'')}
+                  style={{
+                    border: isSelected ? '1px solid var(--ac)' : isToday ? '1px solid var(--ac)' : note ? '1px solid rgba(255,176,32,0.4)' : '1px solid var(--bdr)',
+                    background: isSelected ? 'rgba(0,200,255,0.08)' : isToday ? 'rgba(0,200,255,0.04)' : 'var(--sur2)',
+                    cursor: 'pointer',
+                  }}
+                  onClick={() => handleDayClick(d)}
+                >
+                  <div style={{display:'flex',alignItems:'center',gap:2,marginBottom:2}}>
+                    <div className={"cdn "+(isToday?'tn':'')}>{d}</div>
+                    {note && <div style={{width:5,height:5,borderRadius:'50%',background:'var(--am)',flexShrink:0}}/>}
+                  </div>
+                  {dj.map(j=><div key={j.id} className={"cj "+(j.status||'Pending').replace(' ','')} title={j.job_id}>{j.customer||j.job_id}</div>)}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Note panel — shown below calendar when a date is selected */}
+          {selectedDate && (
+            <div style={{padding:'0 14px 14px'}}>
+              <CalendarNotePanel
+                dateStr={selectedDate}
+                note={noteFor(selectedDate)}
+                onSave={onSaveNote}
+                onClose={() => setSelectedDate(null)}
+              />
+            </div>
+          )}
+        </>
       )}
     </div>
   );
