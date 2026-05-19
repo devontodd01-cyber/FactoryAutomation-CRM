@@ -32,7 +32,6 @@ const db = {
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
     });
   },
-  // Special query with filter
   async getWhere(table, col, val) {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${col}=eq.${encodeURIComponent(val)}`, {
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
@@ -200,13 +199,28 @@ function daysUntilFollowup(job) {
 const styles = `
   @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
   *{margin:0;padding:0;box-sizing:border-box;}
-  :root{--bg:#0a0c10;--sur:#0f1218;--sur2:#161b24;--sur3:#1c2230;--bdr:#1e2a3a;--bdr2:#243040;--ac:#00c8ff;--ac2:#0084a8;--acd:rgba(0,200,255,0.08);--am:#ffb020;--amd:rgba(255,176,32,0.10);--gr:#22d47a;--grd:rgba(34,212,122,0.10);--rd:#ff4d6a;--rdd:rgba(255,77,106,0.10);--tx:#d0dae8;--txd:#5a6a80;--txm:#8a9ab0;--sw:200px;}
-  html,body{background:var(--bg);font-family:'IBM Plex Sans',sans-serif;color:var(--tx);min-height:100vh;}
-  .app{display:flex;flex-direction:column;min-height:100vh;}
-  .topbar{height:52px;background:var(--sur);border-bottom:1px solid var(--bdr);display:flex;align-items:center;padding:0 20px;gap:12px;position:sticky;top:0;z-index:5;}
-  .logo{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:17px;letter-spacing:2px;color:var(--ac);}
+  :root{
+    --bg:#0a0c10;--sur:#0f1218;--sur2:#161b24;--sur3:#1c2230;
+    --bdr:#1e2a3a;--bdr2:#243040;
+    --ac:#00c8ff;--ac2:#0084a8;--acd:rgba(0,200,255,0.08);
+    --am:#ffb020;--amd:rgba(255,176,32,0.10);
+    --gr:#22d47a;--grd:rgba(34,212,122,0.10);
+    --rd:#ff4d6a;--rdd:rgba(255,77,106,0.10);
+    --tx:#d0dae8;--txd:#5a6a80;--txm:#8a9ab0;
+    --sw:200px;
+    --bnav-h:62px;
+  }
+  html,body{background:var(--bg);font-family:'IBM Plex Sans',sans-serif;color:var(--tx);min-height:100vh;-webkit-text-size-adjust:100%;}
+  .app{display:flex;flex-direction:column;min-height:100vh;min-height:100dvh;}
+
+  /* ── Topbar ── */
+  .topbar{height:52px;background:var(--sur);border-bottom:1px solid var(--bdr);display:flex;align-items:center;padding:0 16px;gap:8px;position:sticky;top:0;z-index:20;}
+  .logo{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:17px;letter-spacing:2px;color:var(--ac);white-space:nowrap;}
   .logo-sub{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--txd);letter-spacing:2px;}
-  .btn{display:flex;align-items:center;gap:6px;padding:6px 14px;border-radius:4px;font-size:12px;font-weight:600;letter-spacing:.5px;cursor:pointer;border:1px solid;font-family:'Rajdhani',sans-serif;text-transform:uppercase;white-space:nowrap;}
+  .topbar-spacer{flex:1;}
+
+  /* ── Buttons ── */
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;padding:0 14px;height:36px;border-radius:4px;font-size:12px;font-weight:600;letter-spacing:.5px;cursor:pointer;border:1px solid;font-family:'Rajdhani',sans-serif;text-transform:uppercase;white-space:nowrap;-webkit-tap-highlight-color:transparent;touch-action:manipulation;}
   .bp{background:var(--ac);color:#000;border-color:var(--ac);}
   .bp:hover{background:#33d4ff;}
   .bg{background:transparent;color:var(--txm);border-color:var(--bdr2);}
@@ -216,17 +230,21 @@ const styles = `
   .bimport:hover{background:rgba(255,176,32,0.25);}
   .bfollowup{background:rgba(34,212,122,0.12);color:var(--gr);border-color:rgba(34,212,122,0.3);}
   .bfollowup:hover{background:rgba(34,212,122,0.22);}
-  .bs{padding:4px 9px;font-size:10px;}
+  .bs{height:30px;padding:0 9px;font-size:10px;}
+
+  /* ── Layout ── */
   .body{display:flex;flex:1;}
-  .sidebar{width:var(--sw);background:var(--sur);border-right:1px solid var(--bdr);display:flex;flex-direction:column;position:fixed;top:52px;bottom:0;left:0;z-index:4;}
+  .sidebar{width:var(--sw);background:var(--sur);border-right:1px solid var(--bdr);display:flex;flex-direction:column;position:fixed;top:52px;bottom:0;left:0;z-index:4;overflow-y:auto;}
   .nl{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--txd);letter-spacing:2px;padding:14px 14px 6px;text-transform:uppercase;}
-  .ni{display:flex;align-items:center;gap:10px;padding:8px 14px;font-size:13px;font-weight:500;color:var(--txm);cursor:pointer;transition:all .15s;border-left:2px solid transparent;}
+  .ni{display:flex;align-items:center;gap:10px;padding:10px 14px;font-size:13px;font-weight:500;color:var(--txm);cursor:pointer;transition:all .15s;border-left:2px solid transparent;min-height:44px;}
   .ni:hover{background:var(--sur2);color:var(--tx);}
   .ni.active{background:var(--acd);color:var(--ac);border-left-color:var(--ac);}
   .sf{margin-top:auto;padding:14px;border-top:1px solid var(--bdr);}
   .up{display:flex;align-items:center;gap:8px;padding:8px;background:var(--sur2);border-radius:4px;border:1px solid var(--bdr);}
   .ua{width:26px;height:26px;border-radius:50%;background:var(--ac2);font-family:'Rajdhani',sans-serif;font-weight:700;font-size:11px;color:white;display:flex;align-items:center;justify-content:center;}
-  .main{margin-left:var(--sw);flex:1;padding:20px;padding-bottom:30px;}
+  .main{margin-left:var(--sw);flex:1;padding:20px;padding-bottom:30px;min-width:0;}
+
+  /* ── KPI Grid (desktop) ── */
   .kgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px;}
   .kc{background:var(--sur);border:1px solid var(--bdr);border-radius:6px;padding:14px 16px;position:relative;overflow:hidden;cursor:pointer;transition:border-color .15s;}
   .kc:hover{border-color:var(--bdr2);}
@@ -243,10 +261,14 @@ const styles = `
   .kc.gr .kv{color:var(--gr);}
   .kc.rd .kv{color:var(--rd);}
   .ks{font-size:11px;color:var(--txd);margin-top:4px;}
+
+  /* ── Panel ── */
   .panel{background:var(--sur);border:1px solid var(--bdr);border-radius:6px;overflow:hidden;margin-bottom:16px;}
-  .ph{padding:12px 16px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;justify-content:space-between;}
+  .ph{padding:12px 16px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;}
   .pt{font-family:'Rajdhani',sans-serif;font-weight:600;font-size:13px;letter-spacing:1px;text-transform:uppercase;}
   .pa{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--ac);cursor:pointer;}
+
+  /* ── Table ── */
   .tbl{width:100%;overflow-x:auto;}
   .tr{display:grid;align-items:center;padding:10px 16px;border-bottom:1px solid var(--bdr);transition:background .1s;}
   .tr:not(.hdr){cursor:pointer;}
@@ -259,6 +281,8 @@ const styles = `
   .cd{font-size:12px;color:var(--txm);}
   .cn{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--txm);}
   .cv{font-family:'Rajdhani',sans-serif;font-weight:600;font-size:14px;}
+
+  /* ── Status badges ── */
   .st{font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:1px;padding:2px 7px;border-radius:2px;font-weight:500;text-transform:uppercase;display:inline-block;white-space:nowrap;}
   .st.Dispatched{background:var(--acd);color:var(--ac);border:1px solid rgba(0,200,255,0.2);}
   .st.InProgress{background:var(--amd);color:var(--am);border:1px solid rgba(255,176,32,0.2);}
@@ -267,34 +291,42 @@ const styles = `
   .st.Available{background:var(--grd);color:var(--gr);border:1px solid rgba(34,212,122,0.2);}
   .st.Busy{background:var(--amd);color:var(--am);border:1px solid rgba(255,176,32,0.2);}
   .st.Offline{background:rgba(90,106,128,0.15);color:var(--txd);border:1px solid var(--bdr);}
-  .mbg{position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:50;display:flex;align-items:center;justify-content:center;padding:20px;-webkit-overflow-scrolling:touch;}
-  .modal{background:var(--sur);border:1px solid var(--bdr2);border-radius:8px;width:100%;max-width:500px;max-height:85vh;overflow-y:auto;}
-  .mh{padding:14px 18px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;justify-content:space-between;}
+  .st.Archived{background:rgba(90,106,128,0.12);color:#4a5a70;border:1px solid var(--bdr);}
+
+  /* ── Modals ── */
+  .mbg{position:fixed;inset:0;background:rgba(0,0,0,0.80);z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;-webkit-overflow-scrolling:touch;}
+  .modal{background:var(--sur);border:1px solid var(--bdr2);border-radius:8px;width:100%;max-width:500px;max-height:90vh;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+  .mh{padding:14px 18px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:var(--sur);z-index:1;}
   .mt{font-family:'Rajdhani',sans-serif;font-weight:600;font-size:15px;letter-spacing:1px;text-transform:uppercase;}
-  .mc{background:none;border:none;color:var(--txd);font-size:20px;cursor:pointer;line-height:1;}
+  .mc{background:none;border:none;color:var(--txd);font-size:24px;cursor:pointer;line-height:1;width:44px;height:44px;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;}
   .mc:hover{color:var(--tx);}
-  .mb{padding:18px;}
-  .mf{padding:14px 18px;border-top:1px solid var(--bdr);display:flex;gap:10px;justify-content:flex-end;}
+  .mb{padding:16px;}
+  .mf{padding:12px 16px;border-top:1px solid var(--bdr);display:flex;gap:10px;justify-content:flex-end;position:sticky;bottom:0;background:var(--sur);}
+
+  /* ── Form fields ── */
   .fg{margin-bottom:14px;}
   .fl{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--txd);letter-spacing:1px;text-transform:uppercase;margin-bottom:5px;display:block;}
-  .fi,.fsl,.fta{width:100%;background:var(--sur2);border:1px solid var(--bdr);border-radius:4px;padding:8px 10px;color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px;}
+  .fi,.fsl,.fta{width:100%;background:var(--sur2);border:1px solid var(--bdr);border-radius:4px;padding:10px 12px;color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:16px;-webkit-appearance:none;appearance:none;}
   .fi:focus,.fsl:focus,.fta:focus{outline:none;border-color:var(--ac);}
   .fsl{cursor:pointer;}
-  .fta{resize:vertical;min-height:70px;}
+  .fta{resize:vertical;min-height:70px;font-size:16px;}
   .fr{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+
+  /* ── Tech grid ── */
   .tgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px;padding:14px;}
   .tc{background:var(--sur2);border:1px solid var(--bdr);border-radius:6px;padding:14px;}
   .tav{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:'Rajdhani',sans-serif;font-weight:700;font-size:13px;border:2px solid;flex-shrink:0;}
   .tav.Available{background:var(--grd);color:var(--gr);border-color:rgba(34,212,122,0.3);}
   .tav.Busy{background:var(--amd);color:var(--am);border-color:rgba(255,176,32,0.3);}
   .tav.Offline{background:rgba(90,106,128,0.15);color:var(--txd);border-color:var(--bdr);}
+
+  /* ── Calendar ── */
   .cg{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;padding:14px;}
   .cdl{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--txd);text-align:center;padding:4px 0;letter-spacing:1px;}
   .cd2{min-height:72px;background:var(--sur2);border:1px solid var(--bdr);border-radius:4px;padding:5px;cursor:pointer;transition:border-color .15s;}
   .cd2:hover{border-color:var(--bdr2);}
   .cd2.today{border-color:var(--ac);}
   .cd2.has-note{border-color:rgba(255,176,32,0.4);}
-  .cd2.today.has-note{border-color:var(--ac);}
   .cdn{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--txm);margin-bottom:3px;}
   .cdn.tn{color:var(--ac);font-weight:700;}
   .cj{font-size:8px;padding:1px 4px;border-radius:2px;margin-bottom:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
@@ -302,40 +334,49 @@ const styles = `
   .cj.InProgress{background:var(--amd);color:var(--am);}
   .cj.Pending{background:rgba(90,106,128,0.15);color:var(--txd);}
   .cj.Complete{background:var(--grd);color:var(--gr);}
+
+  /* ── Misc ── */
   .note-dot{width:5px;height:5px;border-radius:50%;background:var(--am);display:inline-block;margin-left:3px;vertical-align:middle;flex-shrink:0;}
   .empty{padding:40px;text-align:center;color:var(--txd);font-size:13px;}
   .ei{font-size:28px;margin-bottom:10px;}
-  .loading{display:flex;align-items:center;justify-content:padding:40px;color:var(--txd);font-family:'IBM Plex Mono',monospace;font-size:12px;gap:10px;}
-  .spin{width:14px;height:14px;border:2px solid var(--bdr2);border-top-color:var(--ac);border-radius:50%;animation:spin .7s linear infinite;}
-  .toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--sur2);border:1px solid var(--bdr2);border-radius:6px;padding:9px 18px;font-family:'IBM Plex Mono',monospace;font-size:11px;z-index:100;white-space:nowrap;}
+  .loading{display:flex;align-items:center;justify-content:center;padding:40px;color:var(--txd);font-family:'IBM Plex Mono',monospace;font-size:12px;gap:10px;}
+  .spin{width:14px;height:14px;border:2px solid var(--bdr2);border-top-color:var(--ac);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0;}
+  .toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--sur2);border:1px solid var(--bdr2);border-radius:6px;padding:9px 18px;font-family:'IBM Plex Mono',monospace;font-size:11px;z-index:200;white-space:nowrap;pointer-events:none;}
   .g2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
-  .job-card{background:var(--sur);border:1px solid var(--bdr);border-radius:8px;padding:16px;margin-bottom:12px;position:relative;overflow:hidden;}
+
+  /* ── Job cards (mobile + dashboard tiles) ── */
+  .job-card{background:var(--sur);border:1px solid var(--bdr);border-radius:8px;padding:14px;margin-bottom:10px;position:relative;overflow:hidden;}
   .job-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;}
   .job-card.InProgress::before{background:var(--am);}
   .job-card.Dispatched::before{background:var(--ac);}
   .job-card.Pending::before{background:var(--txd);}
   .job-card.Complete::before{background:var(--gr);}
   .job-card.Urgent::before{background:var(--rd);}
-  .job-card-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;}
-  .job-card-id{font-family:'IBM Plex Mono',monospace;font-size:11px;color:var(--ac);margin-bottom:3px;}
-  .job-card-customer{font-size:15px;font-weight:600;}
+  .job-card-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px;gap:8px;}
+  .job-card-id{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--ac);margin-bottom:3px;}
+  .job-card-customer{font-size:15px;font-weight:600;line-height:1.3;}
   .job-card-equip{font-size:12px;color:var(--txd);margin-top:2px;}
-  .job-card-meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;}
+  .job-card-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
   .job-card-tag{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--txm);background:var(--sur2);padding:3px 8px;border-radius:3px;border:1px solid var(--bdr);}
-  .job-card-actions{display:flex;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid var(--bdr);}
-  .bnav{display:none;position:fixed;bottom:0;left:0;right:0;background:var(--sur);border-top:1px solid var(--bdr);z-index:10;padding:6px 0 8px;}
+  .job-card-actions{display:flex;gap:8px;margin-top:10px;padding-top:10px;border-top:1px solid var(--bdr);}
+
+  /* ── Bottom nav (mobile) ── */
+  .bnav{display:none;position:fixed;bottom:0;left:0;right:0;background:var(--sur);border-top:1px solid var(--bdr);z-index:30;padding-bottom:env(safe-area-inset-bottom,8px);}
   .bnav-inner{display:flex;justify-content:space-around;}
-  .bnav-item{display:flex;flex-direction:column;align-items:center;gap:3px;padding:4px 10px;cursor:pointer;flex:1;position:relative;}
-  .bnav-icon{font-size:18px;color:var(--txd);}
-  .bnav-label{font-family:'IBM Plex Mono',monospace;font-size:8px;color:var(--txd);letter-spacing:1px;text-transform:uppercase;}
-  .bnav-item.active .bnav-icon,.bnav-item.active .bnav-label{color:var(--ac);}
-  .bnav-badge{position:absolute;top:2px;right:8px;background:var(--rd);color:white;font-size:9px;font-weight:700;font-family:'IBM Plex Mono',monospace;padding:1px 5px;border-radius:8px;min-width:16px;text-align:center;}
-  .mob-section{display:flex;align-items:center;justify-content:space-between;margin:16px 0 10px;}
-  .mob-section-title{font-family:'Rajdhani',sans-serif;font-weight:600;font-size:14px;letter-spacing:1px;text-transform:uppercase;color:var(--txm);}
+  .bnav-item{display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 4px 4px;cursor:pointer;flex:1;position:relative;min-height:52px;-webkit-tap-highlight-color:transparent;}
+  .bnav-icon{font-size:20px;line-height:1;}
+  .bnav-label{font-family:'IBM Plex Mono',monospace;font-size:8px;color:var(--txd);letter-spacing:.5px;text-transform:uppercase;}
+  .bnav-item.active .bnav-icon{filter:drop-shadow(0 0 4px var(--ac));}
+  .bnav-item.active .bnav-label{color:var(--ac);}
+  .bnav-badge{position:absolute;top:4px;right:6px;background:var(--rd);color:white;font-size:9px;font-weight:700;font-family:'IBM Plex Mono',monospace;padding:1px 5px;border-radius:8px;min-width:16px;text-align:center;}
+
+  /* ── Mobile sections ── */
+  .mob-section{display:flex;align-items:center;justify-content:space-between;margin:14px 0 8px;}
+  .mob-section-title{font-family:'Rajdhani',sans-serif;font-weight:600;font-size:13px;letter-spacing:1px;text-transform:uppercase;color:var(--txm);}
   .mob-section-count{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--ac);}
-  .mob-kpi-row{display:flex;gap:10px;margin-bottom:16px;overflow-x:auto;padding-bottom:4px;}
-  .mob-kpi{background:var(--sur);border:1px solid var(--bdr);border-radius:6px;padding:12px 14px;flex-shrink:0;min-width:90px;position:relative;overflow:hidden;cursor:pointer;transition:border-color .15s;}
-  .mob-kpi:hover{border-color:var(--bdr2);}
+  .mob-kpi-row{display:flex;gap:8px;margin-bottom:14px;overflow-x:auto;padding-bottom:2px;-webkit-overflow-scrolling:touch;}
+  .mob-kpi-row::-webkit-scrollbar{display:none;}
+  .mob-kpi{background:var(--sur);border:1px solid var(--bdr);border-radius:6px;padding:10px 12px;flex-shrink:0;min-width:80px;position:relative;overflow:hidden;cursor:pointer;transition:border-color .15s;-webkit-tap-highlight-color:transparent;}
   .mob-kpi.selected{border-color:var(--ac);box-shadow:0 0 0 1px var(--ac);}
   .mob-kpi::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;}
   .mob-kpi.bl::before{background:var(--ac);}
@@ -348,40 +389,41 @@ const styles = `
   .mob-kpi.am .kv{color:var(--am);}
   .mob-kpi.rd .kv{color:var(--rd);}
   .mob-kpi.gr .kv{color:var(--gr);}
-  .filter-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;padding:8px 12px;background:var(--sur);border:1px solid var(--bdr);border-radius:6px;}
+  .filter-bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;padding:8px 12px;background:var(--sur);border:1px solid var(--bdr);border-radius:6px;}
   .filter-label{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--ac);letter-spacing:1px;}
-  .filter-clear{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--txd);cursor:pointer;padding:2px 8px;border:1px solid var(--bdr);border-radius:3px;}
-  .filter-clear:hover{color:var(--tx);border-color:var(--bdr2);}
-  .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;}
+  .filter-clear{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--txd);cursor:pointer;padding:4px 10px;border:1px solid var(--bdr);border-radius:3px;min-height:32px;-webkit-tap-highlight-color:transparent;}
+
+  /* ── Detail grid ── */
+  .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px;}
   .detail-label{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--txd);letter-spacing:2px;text-transform:uppercase;margin-bottom:4px;}
   .detail-value{font-size:13px;color:var(--tx);}
-  .st.Archived{background:rgba(90,106,128,0.12);color:#4a5a70;border:1px solid var(--bdr);}
-  .import-modal{background:var(--sur);border:1px solid var(--bdr2);border-radius:8px;width:100%;max-width:620px;max-height:85vh;overflow-y:auto;}
-  .import-row{display:grid;grid-template-columns:24px 1fr 120px 90px;align-items:center;gap:8px;padding:8px 16px;border-bottom:1px solid var(--bdr);font-size:12px;}
-  .import-row:hover{background:var(--sur2);}
-  .import-check{width:16px;height:16px;accent-color:var(--ac);cursor:pointer;}
 
-  /* ── Calendar Note Panel ── */
+  /* ── Import modal ── */
+  .import-modal{background:var(--sur);border:1px solid var(--bdr2);border-radius:8px;width:100%;max-width:620px;max-height:90vh;overflow-y:auto;}
+  .import-row{display:grid;grid-template-columns:24px 1fr 100px 80px;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--bdr);font-size:12px;}
+  .import-row:hover{background:var(--sur2);}
+  .import-check{width:18px;height:18px;accent-color:var(--ac);cursor:pointer;}
+
+  /* ── Calendar note panel ── */
   .cal-note-panel{background:var(--sur);border:1px solid var(--bdr2);border-radius:8px;padding:16px;margin-top:12px;}
   .cal-note-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;}
   .cal-note-date{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:14px;letter-spacing:1px;color:var(--ac);}
-  .cal-note-close{background:none;border:none;color:var(--txd);font-size:18px;cursor:pointer;line-height:1;padding:2px 6px;}
-  .cal-note-close:hover{color:var(--tx);}
-  .cal-note-ta{width:100%;background:var(--sur2);border:1px solid var(--bdr);border-radius:4px;padding:10px 12px;color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:13px;resize:vertical;min-height:100px;line-height:1.6;}
+  .cal-note-close{background:none;border:none;color:var(--txd);font-size:22px;cursor:pointer;line-height:1;padding:0;width:44px;height:44px;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;}
+  .cal-note-ta{width:100%;background:var(--sur2);border:1px solid var(--bdr);border-radius:4px;padding:10px 12px;color:var(--tx);font-family:'IBM Plex Sans',sans-serif;font-size:16px;resize:vertical;min-height:100px;line-height:1.6;}
   .cal-note-ta:focus{outline:none;border-color:var(--ac);}
-  .cal-note-actions{display:flex;gap:8px;margin-top:10px;justify-content:flex-end;}
+  .cal-note-actions{display:flex;gap:8px;margin-top:10px;justify-content:flex-end;flex-wrap:wrap;}
   .cal-note-saved{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--gr);align-self:center;margin-right:auto;}
 
   /* ── Daily Focus Panel ── */
-  .focus-panel{background:linear-gradient(135deg,rgba(0,200,255,0.06) 0%,rgba(255,176,32,0.04) 100%);border:1px solid var(--bdr2);border-radius:8px;margin-bottom:20px;overflow:hidden;}
-  .focus-header{padding:14px 18px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;justify-content:space-between;}
-  .focus-title{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:15px;letter-spacing:2px;text-transform:uppercase;color:var(--ac);}
+  .focus-panel{background:linear-gradient(135deg,rgba(0,200,255,0.06) 0%,rgba(255,176,32,0.04) 100%);border:1px solid var(--bdr2);border-radius:8px;margin-bottom:16px;overflow:hidden;}
+  .focus-header{padding:12px 16px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;}
+  .focus-title{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:14px;letter-spacing:2px;text-transform:uppercase;color:var(--ac);}
   .focus-date{font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--txd);}
-  .focus-body{display:grid;grid-template-columns:1fr 1fr;gap:0;}
-  .focus-col{padding:14px 18px;}
+  .focus-body{display:grid;grid-template-columns:1fr 1fr;}
+  .focus-col{padding:12px 14px;}
   .focus-col:first-child{border-right:1px solid var(--bdr);}
-  .focus-col-title{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--txd);letter-spacing:2px;text-transform:uppercase;margin-bottom:10px;}
-  .focus-item{display:flex;align-items:flex-start;gap:10px;padding:8px 10px;border-radius:5px;margin-bottom:6px;border:1px solid var(--bdr);background:var(--sur);cursor:pointer;transition:border-color .15s;}
+  .focus-col-title{font-family:'IBM Plex Mono',monospace;font-size:9px;color:var(--txd);letter-spacing:2px;text-transform:uppercase;margin-bottom:8px;}
+  .focus-item{display:flex;align-items:flex-start;gap:8px;padding:8px;border-radius:5px;margin-bottom:6px;border:1px solid var(--bdr);background:var(--sur);cursor:pointer;transition:border-color .15s;-webkit-tap-highlight-color:transparent;}
   .focus-item:hover{border-color:var(--bdr2);}
   .focus-item.urgent{border-color:rgba(255,77,106,0.3);background:var(--rdd);}
   .focus-item.high{border-color:rgba(255,176,32,0.25);background:var(--amd);}
@@ -392,28 +434,96 @@ const styles = `
   .focus-item-dot.followup{background:var(--gr);}
   .focus-item-dot.overdue{background:var(--rd);}
   .focus-item-info{flex:1;min-width:0;}
-  .focus-item-customer{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .focus-item-sub{font-size:11px;color:var(--txd);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .focus-item-badge{font-family:'IBM Plex Mono',monospace;font-size:9px;flex-shrink:0;padding:2px 6px;border-radius:3px;align-self:center;}
-  .focus-empty{padding:16px;text-align:center;color:var(--txd);font-size:12px;font-family:'IBM Plex Mono',monospace;}
+  .focus-item-customer{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .focus-item-sub{font-size:10px;color:var(--txd);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .focus-empty{padding:14px;text-align:center;color:var(--txd);font-size:11px;font-family:'IBM Plex Mono',monospace;}
 
-  /* ── Follow-up indicator on job tiles ── */
+  /* ── Follow-up pills & cards ── */
   .followup-pill{display:inline-flex;align-items:center;gap:4px;font-family:'IBM Plex Mono',monospace;font-size:9px;padding:2px 7px;border-radius:10px;border:1px solid;white-space:nowrap;}
   .followup-pill.due{color:var(--am);border-color:rgba(255,176,32,0.3);background:var(--amd);}
   .followup-pill.overdue{color:var(--rd);border-color:rgba(255,77,106,0.3);background:var(--rdd);}
   .followup-pill.done{color:var(--gr);border-color:rgba(34,212,122,0.3);background:var(--grd);}
-
-  /* ── Follow-ups page ── */
-  .followup-card{background:var(--sur);border:1px solid var(--bdr);border-radius:8px;padding:14px 16px;margin-bottom:10px;position:relative;overflow:hidden;}
+  .followup-card{background:var(--sur);border:1px solid var(--bdr);border-radius:8px;padding:14px;margin-bottom:10px;position:relative;overflow:hidden;}
   .followup-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;}
   .followup-card.overdue::before{background:var(--rd);}
   .followup-card.today::before{background:var(--am);}
   .followup-card.upcoming::before{background:var(--ac);}
 
   @keyframes spin{to{transform:rotate(360deg);}}
-  @media(max-width:900px){.kgrid{grid-template-columns:repeat(2,1fr);}.g2{grid-template-columns:1fr;}.fr{grid-template-columns:1fr;}.focus-body{grid-template-columns:1fr;}.focus-col:first-child{border-right:none;border-bottom:1px solid var(--bdr);}}
-  @media(max-width:640px){:root{--sw:0px;}.sidebar{display:none;}.main{margin-left:0;padding:14px;padding-bottom:80px;}.bnav{display:block;}.kgrid{display:none;}.desktop-table{display:none;}.mobile-cards{display:block;}.topbar{padding:0 14px;}.logo-sub{display:none;}.mbg{padding:0;align-items:flex-end;}.modal{max-width:100%;max-height:90vh;border-radius:16px 16px 0 0;border-left:none;border-right:none;border-bottom:none;}.mh{padding:16px 18px;}.mb{padding:14px 16px;}.mf{padding:12px 16px;}.fi,.fsl,.fta{font-size:16px;}.fr{grid-template-columns:1fr;}}
-  @media(min-width:641px){.mobile-cards{display:none;}.mob-kpi-row{display:none;}.mob-section{display:none;}.filter-bar{display:none;}}
+
+  /* ── RESPONSIVE ── */
+
+  /* Tablet */
+  @media(max-width:900px){
+    .kgrid{grid-template-columns:repeat(2,1fr);}
+    .g2{grid-template-columns:1fr;}
+    .focus-body{grid-template-columns:1fr;}
+    .focus-col:first-child{border-right:none;border-bottom:1px solid var(--bdr);}
+    .fr{grid-template-columns:1fr;}
+  }
+
+  /* Mobile */
+  @media(max-width:640px){
+    :root{--sw:0px;}
+    .sidebar{display:none;}
+    .main{margin-left:0;padding:12px;padding-bottom:calc(var(--bnav-h) + env(safe-area-inset-bottom,8px) + 8px);}
+    .bnav{display:block;}
+
+    /* Topbar mobile: just logo + essential actions */
+    .topbar{padding:0 12px;gap:6px;}
+    .logo-sub{display:none;}
+    .topbar-overdue{font-size:9px;padding:4px 8px;}
+
+    /* Hide desktop-only elements */
+    .kgrid{display:none;}
+    .desktop-table{display:none;}
+
+    /* Show mobile-only elements */
+    .mobile-cards{display:block;}
+
+    /* Modals slide up from bottom */
+    .mbg{padding:0;align-items:flex-end;}
+    .modal{
+      max-width:100%;
+      max-height:92vh;
+      border-radius:16px 16px 0 0;
+      border-left:none;border-right:none;border-bottom:none;
+    }
+    .import-modal{
+      max-width:100%;
+      max-height:92vh;
+      border-radius:16px 16px 0 0;
+      border-left:none;border-right:none;border-bottom:none;
+    }
+    .mh{padding:14px 16px;}
+    .mb{padding:14px;}
+    .mf{padding:12px 14px;gap:8px;}
+    .mf .btn{flex:1;height:44px;font-size:13px;}
+
+    /* Detail grid single col on small phones */
+    .detail-grid{grid-template-columns:1fr;}
+    .fr{grid-template-columns:1fr;}
+
+    /* Larger touch targets */
+    .btn{min-height:40px;}
+    .ni{min-height:48px;}
+
+    /* Focus panel single col */
+    .focus-body{grid-template-columns:1fr;}
+    .focus-col:first-child{border-right:none;border-bottom:1px solid var(--bdr);}
+  }
+
+  /* Show/hide helpers */
+  @media(min-width:641px){
+    .mobile-cards{display:none;}
+    .mob-kpi-row{display:none;}
+    .mob-section{display:none;}
+    .filter-bar{display:none;}
+    .mobile-only{display:none;}
+  }
+  @media(max-width:640px){
+    .desktop-only{display:none !important;}
+  }
 `;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -436,23 +546,16 @@ function Modal({title,onClose,onSave,saveLabel,children}){
 // ── Daily Focus Panel ─────────────────────────────────────────────────────────
 function DailyFocusPanel({ jobs, onEditJob }) {
   const today = new Date();
-  const dateStr = today.toLocaleDateString('en-CA', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+  const dateStr = today.toLocaleDateString('en-CA', { weekday:'long', month:'short', day:'numeric' });
 
   const priorityJobs = jobs
     .filter(j => !isArchived(j) && j.status !== 'Complete' && (j.priority === 'Urgent' || j.priority === 'High'))
-    .sort((a,b) => {
-      const order = { Urgent:0, High:1 };
-      return (order[a.priority]??2) - (order[b.priority]??2);
-    })
+    .sort((a,b) => { const order = { Urgent:0, High:1 }; return (order[a.priority]??2) - (order[b.priority]??2); })
     .slice(0, 5);
 
   const followupJobs = jobs
     .filter(j => j.followup && j.status !== 'Complete')
-    .sort((a,b) => {
-      const da = new Date(a.followup_date||'9999');
-      const db2 = new Date(b.followup_date||'9999');
-      return da - db2;
-    })
+    .sort((a,b) => new Date(a.followup_date||'9999') - new Date(b.followup_date||'9999'))
     .slice(0, 5);
 
   const overdueFollowups = followupJobs.filter(isFollowupOverdue);
@@ -467,55 +570,41 @@ function DailyFocusPanel({ jobs, onEditJob }) {
         </div>
         <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',textAlign:'right'}}>
           <div style={{color: overdueFollowups.length > 0 ? 'var(--rd)' : 'var(--txd)'}}>
-            {overdueFollowups.length > 0 ? `⚠ ${overdueFollowups.length} overdue follow-up${overdueFollowups.length>1?'s':''}` : '✓ No overdue follow-ups'}
+            {overdueFollowups.length > 0 ? `⚠ ${overdueFollowups.length} overdue` : '✓ No overdue'}
           </div>
-          <div style={{marginTop:2}}>{priorityJobs.length} priority job{priorityJobs.length!==1?'s':''} active</div>
+          <div style={{marginTop:2}}>{priorityJobs.length} priority</div>
         </div>
       </div>
       <div className="focus-body">
         <div className="focus-col">
           <div className="focus-col-title">🔴 Priority Jobs</div>
-          {priorityJobs.length === 0 && (
-            <div className="focus-empty">✅ No urgent or high priority jobs</div>
-          )}
-          {priorityJobs.map(j => {
-            const isUrgent = j.priority === 'Urgent';
-            return (
-              <div key={j.id} className={`focus-item ${isUrgent?'urgent':'high'}`} onClick={() => onEditJob(j)}>
-                <div className={`focus-item-dot ${isUrgent?'urgent':'high'}`}/>
-                <div className="focus-item-info">
-                  <div className="focus-item-customer">{j.customer}</div>
-                  <div className="focus-item-sub">{j.equipment || '—'}</div>
-                </div>
-                <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:4,flexShrink:0}}>
-                  <PriorityBadge p={j.priority}/>
-                  <StBadge s={j.status}/>
-                </div>
+          {priorityJobs.length === 0 && <div className="focus-empty">✅ Clear</div>}
+          {priorityJobs.map(j => (
+            <div key={j.id} className={`focus-item ${j.priority==='Urgent'?'urgent':'high'}`} onClick={() => onEditJob(j)}>
+              <div className={`focus-item-dot ${j.priority==='Urgent'?'urgent':'high'}`}/>
+              <div className="focus-item-info">
+                <div className="focus-item-customer">{j.customer}</div>
+                <div className="focus-item-sub">{j.equipment || '—'}</div>
               </div>
-            );
-          })}
+              <PriorityBadge p={j.priority}/>
+            </div>
+          ))}
         </div>
-
         <div className="focus-col">
-          <div className="focus-col-title">📞 Follow-ups Needed</div>
-          {followupJobs.length === 0 && (
-            <div className="focus-empty">✅ No pending follow-ups</div>
-          )}
-          {overdueFollowups.map(j => {
-            const days = daysUntilFollowup(j);
-            return (
-              <div key={j.id} className="focus-item overdue" onClick={() => onEditJob(j)}>
-                <div className="focus-item-dot overdue"/>
-                <div className="focus-item-info">
-                  <div className="focus-item-customer">{j.customer}</div>
-                  <div className="focus-item-sub">{j.followup_note || j.equipment || '—'}</div>
-                </div>
-                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--rd)',flexShrink:0,textAlign:'right'}}>
-                  {Math.abs(days)}d overdue
-                </div>
+          <div className="focus-col-title">📞 Follow-ups</div>
+          {followupJobs.length === 0 && <div className="focus-empty">✅ Clear</div>}
+          {overdueFollowups.map(j => (
+            <div key={j.id} className="focus-item overdue" onClick={() => onEditJob(j)}>
+              <div className="focus-item-dot overdue"/>
+              <div className="focus-item-info">
+                <div className="focus-item-customer">{j.customer}</div>
+                <div className="focus-item-sub">{j.followup_note || j.equipment || '—'}</div>
               </div>
-            );
-          })}
+              <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--rd)',flexShrink:0}}>
+                {Math.abs(daysUntilFollowup(j))}d over
+              </div>
+            </div>
+          ))}
           {upcomingFollowups.map(j => {
             const days = daysUntilFollowup(j);
             return (
@@ -525,8 +614,8 @@ function DailyFocusPanel({ jobs, onEditJob }) {
                   <div className="focus-item-customer">{j.customer}</div>
                   <div className="focus-item-sub">{j.followup_note || j.equipment || '—'}</div>
                 </div>
-                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:days<=1?'var(--am)':'var(--txd)',flexShrink:0,textAlign:'right'}}>
-                  {days===0?'Today':days===1?'Tomorrow':`${days}d`}
+                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:days<=1?'var(--am)':'var(--txd)',flexShrink:0}}>
+                  {days===0?'Today':days===1?'Tmrw':`${days}d`}
                 </div>
               </div>
             );
@@ -537,7 +626,6 @@ function DailyFocusPanel({ jobs, onEditJob }) {
   );
 }
 
-// ── Follow-up pill for job tiles ─────────────────────────────────────────────
 function FollowupPill({ job }) {
   if (!job.followup) return null;
   const overdue = isFollowupOverdue(job);
@@ -556,11 +644,12 @@ function ImportModal({onClose, onImport, existingJobs}) {
 
   const existingNotes = new Set(existingJobs.map(j => j.notes));
   const alreadyImported = (job) => existingNotes.has(job.notes);
+  const available = PDF_JOBS.filter((_,i)=>!alreadyImported(PDF_JOBS[i]));
 
   const toggleAll = () => {
-    const available = PDF_JOBS.map((_,i)=>i).filter(i=>!alreadyImported(PDF_JOBS[i]));
-    if(selected.size === available.length) setSelected(new Set());
-    else setSelected(new Set(available));
+    const avail = PDF_JOBS.map((_,i)=>i).filter(i=>!alreadyImported(PDF_JOBS[i]));
+    if(selected.size === avail.length) setSelected(new Set());
+    else setSelected(new Set(avail));
   };
 
   const toggle = (i) => {
@@ -577,28 +666,23 @@ function ImportModal({onClose, onImport, existingJobs}) {
     onClose();
   };
 
-  const available = PDF_JOBS.filter((_,i)=>!alreadyImported(PDF_JOBS[i]));
-
   return (
     <div className="mbg" onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div className="import-modal">
         <div className="mh">
           <div>
             <div className="mt">Import PDF Jobs</div>
-            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',marginTop:2}}>{PDF_JOBS.length} jobs from March 23, 2026 export</div>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',marginTop:2}}>{PDF_JOBS.length} jobs from export</div>
           </div>
           <button className="mc" onClick={onClose}>×</button>
         </div>
-        <div style={{padding:'10px 16px',borderBottom:'1px solid var(--bdr)',display:'flex',alignItems:'center',gap:12}}>
+        <div style={{padding:'10px 14px',borderBottom:'1px solid var(--bdr)',display:'flex',alignItems:'center',gap:12}}>
           <input type="checkbox" className="import-check" checked={selected.size===available.length&&available.length>0} onChange={toggleAll}/>
-          <span style={{fontSize:12,color:'var(--txm)',fontFamily:"'IBM Plex Mono',monospace"}}>{selected.size} of {available.length} selected (grayed = already imported)</span>
+          <span style={{fontSize:12,color:'var(--txm)',fontFamily:"'IBM Plex Mono',monospace"}}>{selected.size} of {available.length} selected</span>
         </div>
         <div style={{maxHeight:'50vh',overflowY:'auto'}}>
           <div className="import-row" style={{background:'var(--sur3)',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:1}}>
-            <div/>
-            <div>CUSTOMER / EQUIPMENT</div>
-            <div>DATE</div>
-            <div>STATUS</div>
+            <div/><div>CUSTOMER / EQUIP</div><div>DATE</div><div>STATUS</div>
           </div>
           {PDF_JOBS.map((job, i) => {
             const done = alreadyImported(job);
@@ -607,28 +691,26 @@ function ImportModal({onClose, onImport, existingJobs}) {
                 <input type="checkbox" className="import-check" checked={selected.has(i)} onChange={()=>toggle(i)} onClick={e=>e.stopPropagation()} disabled={done}/>
                 <div>
                   <div style={{fontWeight:500,color:'var(--tx)'}}>{job.customer}</div>
-                  <div style={{color:'var(--txd)',fontSize:11,marginTop:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{job.equipment}</div>
+                  <div style={{color:'var(--txd)',fontSize:11,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{job.equipment}</div>
                 </div>
                 <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txm)'}}>{job.date}</div>
-                <div>{done ? <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--gr)'}}>✓ Done</span> : <StBadge s={job.status}/>}</div>
+                <div>{done ? <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--gr)'}}>✓</span> : <StBadge s={job.status}/>}</div>
               </div>
             );
           })}
         </div>
         {importing && (
-          <div style={{padding:'12px 16px',borderTop:'1px solid var(--bdr)'}}>
+          <div style={{padding:'12px 14px',borderTop:'1px solid var(--bdr)'}}>
             <div style={{background:'var(--sur2)',borderRadius:4,overflow:'hidden',height:4,marginBottom:8}}>
               <div style={{width:`${Math.round((progress/selected.size)*100)}%`,background:'var(--ac)',height:'100%',transition:'width .2s'}}/>
             </div>
-            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',textAlign:'center'}}>
-              Importing {progress}/{selected.size}...
-            </div>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',textAlign:'center'}}>Importing {progress}/{selected.size}...</div>
           </div>
         )}
         <div className="mf">
           <button className="btn bg" onClick={onClose} disabled={importing}>Cancel</button>
           <button className="btn bp" onClick={doImport} disabled={importing||selected.size===0}>
-            {importing ? 'Importing...' : `Import ${selected.size} Jobs`}
+            {importing ? 'Importing...' : `Import ${selected.size}`}
           </button>
         </div>
       </div>
@@ -636,7 +718,7 @@ function ImportModal({onClose, onImport, existingJobs}) {
   );
 }
 
-// ── Job Components ────────────────────────────────────────────────────────────
+// ── Job Detail Modal ──────────────────────────────────────────────────────────
 function JobDetailModal({job,onClose,onEdit}){
   const [photos,setPhotos]=useState([]);
   const [uploading,setUploading]=useState(false);
@@ -651,18 +733,14 @@ function JobDetailModal({job,onClose,onEdit}){
     const files=[...e.target.files];
     if(!files.length) return;
     setUploading(true);
-    try{
-      const urls=await Promise.all(files.map(f=>storage.upload(f,job.id)));
-      setPhotos(p=>[...p,...urls]);
-    }catch(err){alert('Upload failed. Please try again.');}
-    setUploading(false);
-    e.target.value='';
+    try{ const urls=await Promise.all(files.map(f=>storage.upload(f,job.id))); setPhotos(p=>[...p,...urls]); }
+    catch{ alert('Upload failed.'); }
+    setUploading(false); e.target.value='';
   };
 
   const handleDelete=async(url)=>{
-    if(!window.confirm('Delete this photo?')) return;
-    await storage.delete(url);
-    setPhotos(p=>p.filter(x=>x!==url));
+    if(!window.confirm('Delete photo?')) return;
+    await storage.delete(url); setPhotos(p=>p.filter(x=>x!==url));
   };
 
   const days = daysUntilFollowup(job);
@@ -686,16 +764,15 @@ function JobDetailModal({job,onClose,onEdit}){
             <div><div className="detail-label">Date</div><div className="detail-value" style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11}}>{job.date||'—'}</div></div>
             <div><div className="detail-label">Amount</div><div className="detail-value" style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:18,color:'var(--ac)'}}>{job.amount?'$'+job.amount:'—'}</div></div>
             <div><div className="detail-label">Priority</div><div className="detail-value">{job.priority ? <PriorityBadge p={job.priority}/> : 'Normal'}</div></div>
-            <div><div className="detail-label">Invoice</div><div className="detail-value">{job.invoice_status||'—'}</div></div>
           </div>
 
           {job.followup && (
-            <div style={{borderTop:'1px solid var(--bdr)',paddingTop:14,marginBottom:16}}>
-              <div className="detail-label" style={{marginBottom:8}}>Follow-up Required</div>
-              <div style={{background: overdueFollowup ? 'var(--rdd)' : 'var(--amd)', border:`1px solid ${overdueFollowup?'rgba(255,77,106,0.3)':'rgba(255,176,32,0.3)'}`,borderRadius:6,padding:'10px 12px'}}>
-                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}>
+            <div style={{borderTop:'1px solid var(--bdr)',paddingTop:14,marginBottom:14}}>
+              <div className="detail-label" style={{marginBottom:8}}>Follow-up</div>
+              <div style={{background:overdueFollowup?'var(--rdd)':'var(--amd)',border:`1px solid ${overdueFollowup?'rgba(255,77,106,0.3)':'rgba(255,176,32,0.3)'}`,borderRadius:6,padding:'10px 12px'}}>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4}}>
                   <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:overdueFollowup?'var(--rd)':'var(--am)'}}>
-                    📞 {overdueFollowup ? `OVERDUE by ${Math.abs(days)} day${Math.abs(days)!==1?'s':''}` : days===0?'Due Today':days===1?'Due Tomorrow':`Due in ${days} days`}
+                    📞 {overdueFollowup ? `OVERDUE ${Math.abs(days)}d` : days===0?'Due Today':days===1?'Due Tomorrow':`Due ${days}d`}
                   </span>
                   <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)'}}>{job.followup_date}</span>
                 </div>
@@ -704,25 +781,26 @@ function JobDetailModal({job,onClose,onEdit}){
             </div>
           )}
 
-          <div style={{borderTop:'1px solid var(--bdr)',paddingTop:16,marginBottom:16}}>
+          <div style={{borderTop:'1px solid var(--bdr)',paddingTop:14,marginBottom:14}}>
             <div className="detail-label" style={{marginBottom:8}}>Notes</div>
-            <div style={{fontSize:13,color:job.notes?'var(--tx)':'var(--txd)',lineHeight:1.7,minHeight:60,background:'var(--sur2)',padding:'10px 12px',borderRadius:4,border:'1px solid var(--bdr)',fontStyle:job.notes?'normal':'italic',whiteSpace:'pre-wrap'}}>{job.notes||'No notes for this job.'}</div>
+            <div style={{fontSize:13,color:job.notes?'var(--tx)':'var(--txd)',lineHeight:1.7,minHeight:50,background:'var(--sur2)',padding:'10px 12px',borderRadius:4,border:'1px solid var(--bdr)',whiteSpace:'pre-wrap'}}>{job.notes||'No notes.'}</div>
           </div>
-          <div style={{borderTop:'1px solid var(--bdr)',paddingTop:16}}>
+
+          <div style={{borderTop:'1px solid var(--bdr)',paddingTop:14}}>
             <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:10}}>
               <div className="detail-label">Photos ({photos.length})</div>
               <button className="btn bp bs" onClick={()=>fileRef.current?.click()} disabled={uploading}>
-                {uploading?'Uploading...':'📷 Add Photo'}
+                {uploading?'Uploading...':'📷 Add'}
               </button>
               <input ref={fileRef} type="file" accept="image/*" capture="environment" multiple style={{display:'none'}} onChange={handleUpload}/>
             </div>
-            {photos.length===0&&!uploading&&<div style={{padding:'20px',textAlign:'center',color:'var(--txd)',fontSize:12,background:'var(--sur2)',borderRadius:6,border:'1px solid var(--bdr)'}}>No photos yet — tap Add Photo to upload</div>}
-            {uploading&&<div style={{padding:'20px',textAlign:'center',color:'var(--ac)',fontSize:12,background:'var(--sur2)',borderRadius:6,border:'1px solid var(--bdr)'}}>⏳ Uploading...</div>}
-            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:8,marginTop:8}}>
+            {photos.length===0&&!uploading&&<div style={{padding:'16px',textAlign:'center',color:'var(--txd)',fontSize:12,background:'var(--sur2)',borderRadius:6,border:'1px solid var(--bdr)'}}>No photos yet</div>}
+            {uploading&&<div style={{padding:'16px',textAlign:'center',color:'var(--ac)',fontSize:12}}>⏳ Uploading...</div>}
+            <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:6}}>
               {photos.map((url,i)=>(
                 <div key={i} style={{position:'relative',paddingBottom:'100%',borderRadius:6,overflow:'hidden',border:'1px solid var(--bdr)'}}>
                   <img src={url} alt="" style={{position:'absolute',inset:0,width:'100%',height:'100%',objectFit:'cover',cursor:'pointer'}} onClick={()=>setLightbox(url)}/>
-                  <button onClick={()=>handleDelete(url)} style={{position:'absolute',top:4,right:4,background:'rgba(0,0,0,0.7)',border:'none',color:'white',borderRadius:3,width:20,height:20,cursor:'pointer',fontSize:12,display:'flex',alignItems:'center',justifyContent:'center'}}>×</button>
+                  <button onClick={()=>handleDelete(url)} style={{position:'absolute',top:4,right:4,background:'rgba(0,0,0,0.7)',border:'none',color:'white',borderRadius:3,width:24,height:24,cursor:'pointer',fontSize:14,display:'flex',alignItems:'center',justifyContent:'center'}}>×</button>
                 </div>
               ))}
             </div>
@@ -730,13 +808,13 @@ function JobDetailModal({job,onClose,onEdit}){
         </div>
         <div className="mf">
           <button className="btn bg" onClick={onClose}>Close</button>
-          {onEdit&&<button className="btn bp" onClick={()=>onEdit(job)}>✏️ Edit Job</button>}
+          {onEdit&&<button className="btn bp" onClick={()=>onEdit(job)}>✏️ Edit</button>}
         </div>
       </div>
       {lightbox&&(
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.95)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:20}} onClick={()=>setLightbox(null)}>
           <img src={lightbox} alt="" style={{maxWidth:'100%',maxHeight:'100%',objectFit:'contain',borderRadius:6}}/>
-          <button style={{position:'absolute',top:20,right:20,background:'rgba(255,255,255,0.1)',border:'none',color:'white',fontSize:24,cursor:'pointer',borderRadius:4,padding:'4px 10px'}} onClick={()=>setLightbox(null)}>×</button>
+          <button style={{position:'absolute',top:20,right:20,background:'rgba(255,255,255,0.1)',border:'none',color:'white',fontSize:24,cursor:'pointer',borderRadius:4,width:44,height:44,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setLightbox(null)}>×</button>
         </div>
       )}
     </div>
@@ -748,12 +826,12 @@ function JobCard({j,onEdit,onDelete}){
   return(
     <div className={"job-card "+(j.priority==='Urgent'?'Urgent':statusClass)}>
       <div className="job-card-header">
-        <div>
+        <div style={{flex:1,minWidth:0}}>
           <div className="job-card-id">{j.job_id}</div>
           <div className="job-card-customer">{j.customer||'—'}</div>
           <div className="job-card-equip">{j.equipment||'—'}</div>
         </div>
-        <div style={{display:'flex',flexDirection:'column',gap:4,alignItems:'flex-end'}}>
+        <div style={{display:'flex',flexDirection:'column',gap:4,alignItems:'flex-end',flexShrink:0}}>
           <StBadge s={j.status}/>
           {j.priority && j.priority !== 'Normal' && <PriorityBadge p={j.priority}/>}
         </div>
@@ -765,10 +843,9 @@ function JobCard({j,onEdit,onDelete}){
         <FollowupPill job={j}/>
       </div>
       {j.notes&&<div style={{fontSize:11,color:'var(--txd)',marginTop:8,fontStyle:'italic',borderLeft:'2px solid var(--bdr)',paddingLeft:8,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{j.notes}</div>}
-      {j.followup && j.followup_note && <div style={{fontSize:11,color:'var(--am)',marginTop:6,borderLeft:'2px solid rgba(255,176,32,0.4)',paddingLeft:8}}>📞 {j.followup_note}</div>}
       <div className="job-card-actions">
-        <button className="btn bg bs" style={{flex:1}} onClick={()=>onEdit(j)}>✏️ Edit</button>
-        <button className="btn bd bs" onClick={()=>onDelete(j.id)}>🗑</button>
+        <button className="btn bg bs" style={{flex:1,height:40}} onClick={()=>onEdit(j)}>✏️ Edit</button>
+        <button className="btn bd bs" style={{height:40,width:44}} onClick={()=>onDelete(j.id)}>🗑</button>
       </div>
     </div>
   );
@@ -783,7 +860,8 @@ function MobileDashboard({jobs,onEditJob,onDeleteJob,onNewJob}){
   const urgent=jobs.filter(j=>j.priority==='Urgent'&&j.status!=='Complete');
   const toggleFilter=(f)=>setFilter(prev=>prev===f?null:f);
   const filteredJobs=filter==='active'?active:filter==='today'?todayJobs:filter==='pending'?pending:filter==='urgent'?urgent:null;
-  const filterLabel=filter==='active'?'In Progress / Dispatched':filter==='today'?'Scheduled Today':filter==='pending'?'Pending Jobs':filter==='urgent'?'Urgent Jobs':null;
+  const filterLabel=filter==='active'?'Active':filter==='today'?'Today':filter==='pending'?'Pending':filter==='urgent'?'Urgent':null;
+
   return(<>
     <div className="mob-kpi-row">
       <div className={"mob-kpi am"+(filter==='active'?' selected':'')} onClick={()=>toggleFilter('active')}><div className="kl">Active</div><div className="kv">{active.length}</div></div>
@@ -791,25 +869,25 @@ function MobileDashboard({jobs,onEditJob,onDeleteJob,onNewJob}){
       <div className={"mob-kpi rd"+(filter==='pending'?' selected':'')} onClick={()=>toggleFilter('pending')}><div className="kl">Pending</div><div className="kv">{pending.length}</div></div>
       <div className={"mob-kpi gr"+(filter==='urgent'?' selected':'')} onClick={()=>toggleFilter('urgent')}><div className="kl">Urgent</div><div className="kv">{urgent.length}</div></div>
     </div>
-    <button className="btn bp" style={{width:'100%',justifyContent:'center',padding:'12px',fontSize:13,marginBottom:16}} onClick={onNewJob}>+ New Job</button>
+    <button className="btn bp" style={{width:'100%',justifyContent:'center',height:48,fontSize:14,marginBottom:14}} onClick={onNewJob}>+ New Job</button>
     {filter&&filteredJobs&&<>
       <div className="filter-bar">
         <div className="filter-label">▸ {filterLabel} ({filteredJobs.length})</div>
         <div className="filter-clear" onClick={()=>setFilter(null)}>✕ Clear</div>
       </div>
       {filteredJobs.map(j=><JobCard key={j.id} j={j} onEdit={onEditJob} onDelete={onDeleteJob}/>)}
-      {!filteredJobs.length&&<div className="empty"><div className="ei">✅</div>No {filterLabel.toLowerCase()}</div>}
+      {!filteredJobs.length&&<div className="empty"><div className="ei">✅</div>No {filterLabel.toLowerCase()} jobs</div>}
     </>}
     {!filter&&<>
       {active.length>0&&<>
-        <div className="mob-section"><div className="mob-section-title">In Progress / Dispatched</div><div className="mob-section-count">{active.length} jobs</div></div>
+        <div className="mob-section"><div className="mob-section-title">Active</div><div className="mob-section-count">{active.length}</div></div>
         {active.map(j=><JobCard key={j.id} j={j} onEdit={onEditJob} onDelete={onDeleteJob}/>)}
       </>}
-      {todayJobs.length>0&&<>
-        <div className="mob-section"><div className="mob-section-title">Scheduled Today</div><div className="mob-section-count">{todayJobs.length} jobs</div></div>
+      {todayJobs.filter(j=>!active.includes(j)).length>0&&<>
+        <div className="mob-section"><div className="mob-section-title">Scheduled Today</div><div className="mob-section-count">{todayJobs.length}</div></div>
         {todayJobs.filter(j=>!['In Progress','Dispatched'].includes(j.status)).map(j=><JobCard key={j.id} j={j} onEdit={onEditJob} onDelete={onDeleteJob}/>)}
       </>}
-      {!active.length&&!todayJobs.length&&<div className="empty" style={{marginTop:20}}><div className="ei">✅</div>No active or scheduled jobs today</div>}
+      {!active.length&&!todayJobs.length&&<div className="empty" style={{marginTop:20}}><div className="ei">✅</div>No active jobs today</div>}
     </>}
   </>);
 }
@@ -818,7 +896,9 @@ function DashJobTile({j,onClick}){
   const sc=(j.status||'Pending').replace(' ','');
   const border=sc==='InProgress'?'var(--am)':sc==='Dispatched'?'var(--ac)':sc==='Complete'?'var(--gr)':'var(--txd)';
   return(
-    <div onClick={()=>onClick(j)} style={{background:'var(--sur)',border:`1px solid ${j.priority==='Urgent'?'rgba(255,77,106,0.3)':j.priority==='High'?'rgba(255,176,32,0.25)':'var(--bdr)'}`,borderRadius:8,padding:'12px 14px',cursor:'pointer',position:'relative',overflow:'hidden',transition:'border-color .15s'}} onMouseEnter={e=>e.currentTarget.style.borderColor=border} onMouseLeave={e=>e.currentTarget.style.borderColor=j.priority==='Urgent'?'rgba(255,77,106,0.3)':j.priority==='High'?'rgba(255,176,32,0.25)':'var(--bdr)'}>
+    <div onClick={()=>onClick(j)} style={{background:'var(--sur)',border:`1px solid ${j.priority==='Urgent'?'rgba(255,77,106,0.3)':j.priority==='High'?'rgba(255,176,32,0.25)':'var(--bdr)'}`,borderRadius:8,padding:'12px 14px',cursor:'pointer',position:'relative',overflow:'hidden',transition:'border-color .15s'}}
+      onMouseEnter={e=>e.currentTarget.style.borderColor=border}
+      onMouseLeave={e=>e.currentTarget.style.borderColor=j.priority==='Urgent'?'rgba(255,77,106,0.3)':j.priority==='High'?'rgba(255,176,32,0.25)':'var(--bdr)'}>
       <div style={{position:'absolute',left:0,top:0,bottom:0,width:3,background:j.priority==='Urgent'?'var(--rd)':j.priority==='High'?'var(--am)':border}}/>
       <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--ac)',letterSpacing:1,marginBottom:4}}>{j.job_id}</div>
       <div style={{fontSize:13,fontWeight:600,marginBottom:2,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{j.customer||'—'}</div>
@@ -827,8 +907,7 @@ function DashJobTile({j,onClick}){
         <StBadge s={j.status}/>
         {j.priority && j.priority !== 'Normal' && <PriorityBadge p={j.priority}/>}
       </div>
-      {j.technician&&<div style={{marginTop:6,fontSize:10,color:'var(--txm)',fontFamily:"'IBM Plex Mono',monospace"}}>👤 {j.technician}</div>}
-      {j.date&&<div style={{fontSize:10,color:'var(--txm)',fontFamily:"'IBM Plex Mono',monospace",marginTop:2}}>📅 {j.date}</div>}
+      {j.date&&<div style={{fontSize:10,color:'var(--txm)',fontFamily:"'IBM Plex Mono',monospace",marginTop:4}}>📅 {j.date}</div>}
       {j.followup&&<div style={{marginTop:6}}><FollowupPill job={j}/></div>}
     </div>
   );
@@ -841,25 +920,17 @@ function useDragResize(defaultWidth=280, min=180, max=520){
   const startW = useRef(defaultWidth);
 
   const onMouseDown = useCallback((e) => {
-    dragging.current = true;
-    startX.current = e.clientX;
-    startW.current = width;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
+    dragging.current = true; startX.current = e.clientX; startW.current = width;
+    document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
   }, [width]);
 
   useEffect(() => {
     const onMove = (e) => {
       if (!dragging.current) return;
       const delta = startX.current - e.clientX;
-      const newW = Math.min(max, Math.max(min, startW.current + delta));
-      setWidth(newW);
+      setWidth(Math.min(max, Math.max(min, startW.current + delta)));
     };
-    const onUp = () => {
-      dragging.current = false;
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
+    const onUp = () => { dragging.current = false; document.body.style.cursor = ''; document.body.style.userSelect = ''; };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
@@ -876,27 +947,18 @@ function CalendarNotePanel({ dateStr, note, onSave, onClose }) {
   const taRef = useRef(null);
 
   useEffect(() => {
-    setText(note?.note_text || '');
-    setSaved(false);
+    setText(note?.note_text || ''); setSaved(false);
     setTimeout(() => taRef.current?.focus(), 50);
   }, [dateStr, note]);
 
   const fmt = (ds) => {
     const [y, m, d] = ds.split('-').map(Number);
-    return new Date(y, m-1, d).toLocaleDateString('en-CA', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+    return new Date(y, m-1, d).toLocaleDateString('en-CA', { weekday:'long', month:'long', day:'numeric' });
   };
 
   const handleSave = async () => {
-    setSaving(true);
-    await onSave(dateStr, text);
-    setSaving(false);
-    setSaved(true);
+    setSaving(true); await onSave(dateStr, text); setSaving(false); setSaved(true);
     setTimeout(() => setSaved(false), 2000);
-  };
-
-  const handleKeyDown = (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleSave();
-    if (e.key === 'Escape') onClose();
   };
 
   return (
@@ -908,29 +970,20 @@ function CalendarNotePanel({ dateStr, note, onSave, onClose }) {
         </div>
         <button className="cal-note-close" onClick={onClose}>×</button>
       </div>
-      <textarea
-        ref={taRef}
-        className="cal-note-ta"
-        placeholder="Type a note for this day... (Ctrl+Enter to save)"
-        value={text}
-        onChange={e => { setText(e.target.value); setSaved(false); }}
-        onKeyDown={handleKeyDown}
-      />
+      <textarea ref={taRef} className="cal-note-ta" placeholder="Note for this day... (Ctrl+Enter to save)"
+        value={text} onChange={e=>{setText(e.target.value);setSaved(false);}}
+        onKeyDown={e=>{if((e.ctrlKey||e.metaKey)&&e.key==='Enter')handleSave();if(e.key==='Escape')onClose();}}/>
       <div className="cal-note-actions">
         {saved && <span className="cal-note-saved">✓ Saved</span>}
-        {text && (
-          <button className="btn bd bs" onClick={() => { setText(''); onSave(dateStr, ''); }}>Clear</button>
-        )}
+        {text && <button className="btn bd bs" onClick={()=>{setText('');onSave(dateStr,'');}}>Clear</button>}
         <button className="btn bg bs" onClick={onClose}>Close</button>
-        <button className="btn bp bs" onClick={handleSave} disabled={saving}>
-          {saving ? 'Saving...' : 'Save Note'}
-        </button>
+        <button className="btn bp bs" onClick={handleSave} disabled={saving}>{saving?'Saving...':'Save'}</button>
       </div>
     </div>
   );
 }
 
-// ── Dashboard Calendar (mini, right panel) ────────────────────────────────────
+// ── Dashboard Calendar (desktop only) ─────────────────────────────────────────
 function DashCalendar({ jobs, calNotes }) {
   const now = new Date();
   const [vd, setVd] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
@@ -948,15 +1001,15 @@ function DashCalendar({ jobs, calNotes }) {
         <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,fontSize:12,letterSpacing:1,textTransform:'uppercase',color:'var(--txm)'}}>
           {vd.toLocaleString('default',{month:'long',year:'numeric'})}
         </div>
-        <div style={{display:'flex',gap:6}}>
+        <div style={{display:'flex',gap:4}}>
           <button className="btn bg bs" onClick={()=>setVd(new Date(vd.getFullYear(),vd.getMonth()-1,1))}>‹</button>
           <button className="btn bg bs" onClick={()=>setVd(new Date(now.getFullYear(),now.getMonth(),1))}>●</button>
           <button className="btn bg bs" onClick={()=>setVd(new Date(vd.getFullYear(),vd.getMonth()+1,1))}>›</button>
         </div>
       </div>
-      <div style={{flex:1,overflow:'auto',padding:'8px'}}>
+      <div style={{flex:1,overflow:'auto',padding:'6px'}}>
         <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2,marginBottom:2}}>
-          {days.map(d=><div key={d} style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:'var(--txd)',textAlign:'center',padding:'2px 0',letterSpacing:1}}>{d}</div>)}
+          {days.map(d=><div key={d} style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:'var(--txd)',textAlign:'center',padding:'2px 0'}}>{d}</div>)}
         </div>
         <div style={{display:'grid',gridTemplateColumns:'repeat(7,1fr)',gap:2}}>
           {cells.map((d,i) => {
@@ -965,16 +1018,16 @@ function DashCalendar({ jobs, calNotes }) {
             const dj = jobsFor(d);
             const note = hasNote(d);
             return (
-              <div key={d} style={{minHeight:52,background:isToday?'rgba(0,200,255,0.06)':'var(--sur2)',border:`1px solid ${isToday?'var(--ac)':note?'rgba(255,176,32,0.35)':'var(--bdr)'}`,borderRadius:3,padding:'3px 2px'}}>
+              <div key={d} style={{minHeight:48,background:isToday?'rgba(0,200,255,0.06)':'var(--sur2)',border:`1px solid ${isToday?'var(--ac)':note?'rgba(255,176,32,0.35)':'var(--bdr)'}`,borderRadius:3,padding:'3px 2px'}}>
                 <div style={{display:'flex',alignItems:'center',justifyContent:'center',gap:2}}>
-                  <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:isToday?'var(--ac)':'var(--txm)',fontWeight:isToday?700:400,marginBottom:2}}>{d}</div>
-                  {note && <div style={{width:4,height:4,borderRadius:'50%',background:'var(--am)',marginBottom:2,flexShrink:0}}/>}
+                  <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:8,color:isToday?'var(--ac)':'var(--txm)',fontWeight:isToday?700:400}}>{d}</div>
+                  {note && <div style={{width:4,height:4,borderRadius:'50%',background:'var(--am)',flexShrink:0}}/>}
                 </div>
                 {dj.slice(0,2).map(j=>(
-                  <div key={j.id} style={{fontSize:7,padding:'1px 3px',borderRadius:2,marginBottom:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
+                  <div key={j.id} style={{fontSize:7,padding:'1px 2px',borderRadius:2,marginBottom:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',
                     background:j.status==='In Progress'?'var(--amd)':j.status==='Dispatched'?'var(--acd)':j.status==='Complete'?'var(--grd)':'rgba(90,106,128,0.15)',
                     color:j.status==='In Progress'?'var(--am)':j.status==='Dispatched'?'var(--ac)':j.status==='Complete'?'var(--gr)':'var(--txd)'
-                  }} title={j.customer}>{j.customer}</div>
+                  }}>{j.customer}</div>
                 ))}
                 {dj.length>2&&<div style={{fontSize:7,color:'var(--txd)',textAlign:'center'}}>+{dj.length-2}</div>}
               </div>
@@ -995,41 +1048,37 @@ function Dashboard({jobs, onEditJob, calNotes}){
     {label:'In Progress',color:'var(--am)',jobs:boardJobs.filter(j=>j.status==='In Progress')},
     {label:'Complete',color:'var(--gr)',jobs:boardJobs.filter(j=>j.status==='Complete')},
   ];
-  const {width: calWidth, onMouseDown: onDragStart} = useDragResize(280, 180, 520);
+  const {width: calWidth, onMouseDown: onDragStart} = useDragResize(260, 180, 480);
 
   return(<>
     <DailyFocusPanel jobs={jobs} onEditJob={(j)=>{setViewJob(null);onEditJob(j);}}/>
     <div style={{display:'flex',gap:0,alignItems:'flex-start'}}>
-      <div style={{flex:1,minWidth:0,paddingRight:12}}>
+      <div style={{flex:1,minWidth:0,paddingRight:10}}>
         {groups.map(g=>(
-          <div key={g.label} style={{marginBottom:20}}>
-            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+          <div key={g.label} style={{marginBottom:18}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8}}>
               <div style={{width:3,height:14,borderRadius:2,background:g.color}}/>
               <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txm)',letterSpacing:2,textTransform:'uppercase'}}>{g.label}</div>
               <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:g.color}}>{g.jobs.length}</div>
             </div>
             {g.jobs.length===0&&<div style={{padding:'10px 14px',background:'var(--sur)',border:'1px solid var(--bdr)',borderRadius:6,fontSize:12,color:'var(--txd)'}}>No {g.label.toLowerCase()} jobs</div>}
-            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(200px,1fr))',gap:10}}>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(190px,1fr))',gap:8}}>
               {g.jobs.map(j=><DashJobTile key={j.id} j={j} onClick={setViewJob}/>)}
             </div>
           </div>
         ))}
-        {!boardJobs.length&&<div className="empty"><div className="ei">🎉</div>All jobs invoiced!</div>}
       </div>
-
-      <div
-        onMouseDown={onDragStart}
-        style={{width:8,flexShrink:0,cursor:'col-resize',display:'flex',alignItems:'center',justifyContent:'center',alignSelf:'stretch',position:'relative',zIndex:2,marginRight:4}}
-        title="Drag to resize calendar"
-      >
-        <div style={{width:3,height:'60px',borderRadius:3,background:'var(--bdr2)',transition:'background 0.15s'}}
-          onMouseEnter={e=>e.currentTarget.style.background='var(--ac)'}
-          onMouseLeave={e=>e.currentTarget.style.background='var(--bdr2)'}
-        />
-      </div>
-
-      <div style={{width:calWidth,flexShrink:0,position:'sticky',top:0,height:'calc(100vh - 140px)'}}>
-        <DashCalendar jobs={jobs} calNotes={calNotes}/>
+      {/* Resizable calendar — desktop only */}
+      <div className="desktop-only" style={{display:'flex',alignItems:'stretch'}}>
+        <div onMouseDown={onDragStart} style={{width:8,flexShrink:0,cursor:'col-resize',display:'flex',alignItems:'center',justifyContent:'center',alignSelf:'stretch',marginRight:4}}
+          title="Drag to resize">
+          <div style={{width:3,height:60,borderRadius:3,background:'var(--bdr2)',transition:'background 0.15s'}}
+            onMouseEnter={e=>e.currentTarget.style.background='var(--ac)'}
+            onMouseLeave={e=>e.currentTarget.style.background='var(--bdr2)'}/>
+        </div>
+        <div style={{width:calWidth,flexShrink:0,position:'sticky',top:0,height:'calc(100vh - 120px)'}}>
+          <DashCalendar jobs={jobs} calNotes={calNotes}/>
+        </div>
       </div>
     </div>
     {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)} onEdit={(j)=>{setViewJob(null);onEditJob(j);}}/>}
@@ -1040,10 +1089,14 @@ function Dashboard({jobs, onEditJob, calNotes}){
 function JobFormModal({job,customers,technicians,onSave,onClose}){
   const [f,setF]=useState(job?{...job}:{job_id:'JO-'+Date.now().toString().slice(-4),status:'Pending',priority:'Normal',invoice_status:'Not Invoiced',followup:false});
   return(
-    <Modal title={job?.id?'Edit Job':'New Job'} onClose={onClose} onSave={()=>onSave(f)} saveLabel={job?.id?'Save Changes':'Create Job'}>
+    <Modal title={job?.id?'Edit Job':'New Job'} onClose={onClose} onSave={()=>onSave(f)} saveLabel={job?.id?'Save':'Create Job'}>
       <div className="fr">
         <div className="fg"><label className="fl">Job ID</label><input className="fi" value={f.job_id||''} onChange={e=>setF({...f,job_id:e.target.value})}/></div>
-        <div className="fg"><label className="fl">Status</label><select className="fsl" value={f.status||'Pending'} onChange={e=>setF({...f,status:e.target.value})}><option>Pending</option><option>Dispatched</option><option>In Progress</option><option>Complete</option></select></div>
+        <div className="fg"><label className="fl">Status</label>
+          <select className="fsl" value={f.status||'Pending'} onChange={e=>setF({...f,status:e.target.value})}>
+            <option>Pending</option><option>Dispatched</option><option>In Progress</option><option>Complete</option>
+          </select>
+        </div>
       </div>
       <div className="fg"><label className="fl">Customer</label>
         <select className="fsl" value={f.customer||''} onChange={e=>setF({...f,customer:e.target.value})}>
@@ -1063,10 +1116,8 @@ function JobFormModal({job,customers,technicians,onSave,onClose}){
           <label className="fl">Priority</label>
           <select className="fsl" value={f.priority||'Normal'} onChange={e=>setF({...f,priority:e.target.value})}
             style={{color:f.priority==='Urgent'?'var(--rd)':f.priority==='High'?'var(--am)':f.priority==='Low'?'var(--txd)':'var(--tx)',borderColor:f.priority==='Urgent'?'rgba(255,77,106,0.4)':f.priority==='High'?'rgba(255,176,32,0.3)':'var(--bdr)'}}>
-            <option value="Low">🔵 Low</option>
-            <option value="Normal">⚪ Normal</option>
-            <option value="High">🟡 High</option>
-            <option value="Urgent">🔴 Urgent</option>
+            <option value="Low">🔵 Low</option><option value="Normal">⚪ Normal</option>
+            <option value="High">🟡 High</option><option value="Urgent">🔴 Urgent</option>
           </select>
         </div>
       </div>
@@ -1074,27 +1125,28 @@ function JobFormModal({job,customers,technicians,onSave,onClose}){
         <div className="fg"><label className="fl">Date</label><input className="fi" type="date" value={f.date||''} onChange={e=>setF({...f,date:e.target.value})}/></div>
         <div className="fg"><label className="fl">Amount ($)</label><input className="fi" type="number" value={f.amount||''} onChange={e=>setF({...f,amount:e.target.value})}/></div>
       </div>
-      <div className="fg"><label className="fl">Invoice Status</label><select className="fsl" value={f.invoice_status||'Not Invoiced'} onChange={e=>setF({...f,invoice_status:e.target.value})}><option>Not Invoiced</option><option>Invoiced</option><option>Paid</option><option>Overdue</option></select></div>
+      <div className="fg"><label className="fl">Invoice Status</label>
+        <select className="fsl" value={f.invoice_status||'Not Invoiced'} onChange={e=>setF({...f,invoice_status:e.target.value})}>
+          <option>Not Invoiced</option><option>Invoiced</option><option>Paid</option><option>Overdue</option>
+        </select>
+      </div>
       <div className="fg"><label className="fl">Notes</label><textarea className="fta" value={f.notes||''} onChange={e=>setF({...f,notes:e.target.value})}/></div>
       <div style={{borderTop:'1px solid var(--bdr)',paddingTop:14,marginTop:4}}>
-        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:f.followup?12:0}}>
-          <label className="fl" style={{margin:0,cursor:'pointer',display:'flex',alignItems:'center',gap:8}}>
-            <input type="checkbox" checked={!!f.followup} onChange={e=>setF({...f,followup:e.target.checked,followup_date:e.target.checked?(f.followup_date||new Date(Date.now()+86400000*3).toISOString().split('T')[0]):null})}
-              style={{width:16,height:16,accentColor:'var(--gr)',cursor:'pointer'}}/>
-            <span style={{color:'var(--gr)'}}>📞 Needs Follow-up</span>
-          </label>
-          {f.followup && <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)'}}>FOLLOW-UP DETAILS</span>}
-        </div>
+        <label style={{display:'flex',alignItems:'center',gap:10,cursor:'pointer',marginBottom:f.followup?12:0,minHeight:44}}>
+          <input type="checkbox" checked={!!f.followup} onChange={e=>setF({...f,followup:e.target.checked,followup_date:e.target.checked?(f.followup_date||new Date(Date.now()+86400000*3).toISOString().split('T')[0]):null})}
+            style={{width:20,height:20,accentColor:'var(--gr)',cursor:'pointer'}}/>
+          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:'var(--gr)',letterSpacing:.5}}>📞 NEEDS FOLLOW-UP</span>
+        </label>
         {f.followup && (
-          <div style={{background:'rgba(34,212,122,0.05)',border:'1px solid rgba(34,212,122,0.2)',borderRadius:6,padding:'12px',marginTop:8}}>
+          <div style={{background:'rgba(34,212,122,0.05)',border:'1px solid rgba(34,212,122,0.2)',borderRadius:6,padding:12,marginTop:4}}>
             <div className="fr">
               <div className="fg" style={{marginBottom:0}}>
                 <label className="fl">Follow-up Date</label>
                 <input className="fi" type="date" value={f.followup_date||''} onChange={e=>setF({...f,followup_date:e.target.value})}/>
               </div>
               <div className="fg" style={{marginBottom:0}}>
-                <label className="fl">Reason / Action</label>
-                <input className="fi" placeholder="e.g. Call re: quote, Part arrived..." value={f.followup_note||''} onChange={e=>setF({...f,followup_note:e.target.value})}/>
+                <label className="fl">Reason</label>
+                <input className="fi" placeholder="e.g. Call re: quote..." value={f.followup_note||''} onChange={e=>setF({...f,followup_note:e.target.value})}/>
               </div>
             </div>
           </div>
@@ -1107,11 +1159,9 @@ function JobFormModal({job,customers,technicians,onSave,onClose}){
 // ── Follow-ups Page ───────────────────────────────────────────────────────────
 function Followups({ jobs, onEdit, loading }) {
   const [viewJob, setViewJob] = useState(null);
-
   const followupJobs = jobs
     .filter(j => j.followup && j.status !== 'Complete' && !isArchived(j))
     .sort((a,b) => new Date(a.followup_date||'9999') - new Date(b.followup_date||'9999'));
-
   const overdue = followupJobs.filter(isFollowupOverdue);
   const today = followupJobs.filter(j => !isFollowupOverdue(j) && daysUntilFollowup(j) === 0);
   const upcoming = followupJobs.filter(j => !isFollowupOverdue(j) && daysUntilFollowup(j) > 0);
@@ -1137,15 +1187,15 @@ function Followups({ jobs, onEdit, loading }) {
                 </div>
                 <div style={{textAlign:'right',flexShrink:0}}>
                   <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,fontWeight:700,color:cardClass==='overdue'?'var(--rd)':cardClass==='today'?'var(--am)':'var(--ac)',marginBottom:6}}>
-                    {cardClass==='overdue'?`${Math.abs(days)}d overdue`:cardClass==='today'?'Today':`${days}d away`}
+                    {cardClass==='overdue'?`${Math.abs(days)}d over`:cardClass==='today'?'Today':`${days}d`}
                   </div>
                   <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',marginBottom:6}}>{j.followup_date}</div>
                   <StBadge s={j.status}/>
                 </div>
               </div>
               <div style={{display:'flex',gap:8,marginTop:12,paddingTop:10,borderTop:'1px solid var(--bdr)'}}>
-                <button className="btn bfollowup bs" style={{flex:1}} onClick={e=>{e.stopPropagation();onEdit(j);}}>✏️ Edit Job</button>
-                <button className="btn bg bs" onClick={e=>{e.stopPropagation();onEdit({...j,followup:false,followup_date:null,followup_note:null});}}>✓ Mark Done</button>
+                <button className="btn bfollowup bs" style={{flex:1,height:40}} onClick={e=>{e.stopPropagation();onEdit(j);}}>✏️ Edit Job</button>
+                <button className="btn bg bs" style={{height:40}} onClick={e=>{e.stopPropagation();onEdit({...j,followup:false,followup_date:null,followup_note:null});}}>✓ Done</button>
               </div>
             </div>
           );
@@ -1157,15 +1207,15 @@ function Followups({ jobs, onEdit, loading }) {
   return (<>
     <div className="panel">
       <div className="ph">
-        <div style={{display:'flex',alignItems:'center',gap:10}}>
+        <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
           <div className="pt">Follow-ups</div>
           {overdue.length > 0 && <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--rd)',background:'var(--rdd)',border:'1px solid rgba(255,77,106,0.3)',padding:'2px 7px',borderRadius:3}}>⚠ {overdue.length} OVERDUE</span>}
         </div>
         <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)'}}>{followupJobs.length} total</div>
       </div>
-      <div style={{padding:16}}>
+      <div style={{padding:14}}>
         {loading ? <Loading/> : <>
-          {!followupJobs.length && <div className="empty"><div className="ei">✅</div>No follow-ups needed right now.<br/>Flag jobs with "Needs Follow-up" when editing them.</div>}
+          {!followupJobs.length && <div className="empty"><div className="ei">✅</div>No follow-ups needed.</div>}
           {renderGroup('⚠ Overdue', overdue, 'overdue')}
           {renderGroup('📅 Due Today', today, 'today')}
           {renderGroup('📆 Upcoming', upcoming, 'upcoming')}
@@ -1186,9 +1236,9 @@ function Jobs({jobs,customers,technicians,onAdd,onEdit,onDelete,loading}){
   const clients=[...new Set(jobs.map(j=>j.customer).filter(Boolean))].sort();
   const filtered=[...jobs].reverse().filter(j=>{
     const q=search.toLowerCase();
-    const matchSearch=!q||(j.customer||'').toLowerCase().includes(q)||(j.equipment||'').toLowerCase().includes(q)||(j.notes||'').toLowerCase().includes(q)||(j.job_id||'').toLowerCase().includes(q);
-    const matchClient=!clientFilter||j.customer===clientFilter;
-    return matchSearch&&matchClient;
+    const ms=!q||(j.customer||'').toLowerCase().includes(q)||(j.equipment||'').toLowerCase().includes(q)||(j.notes||'').toLowerCase().includes(q)||(j.job_id||'').toLowerCase().includes(q);
+    const mc=!clientFilter||j.customer===clientFilter;
+    return ms&&mc;
   });
 
   const save=(f)=>{editJob?.id?onEdit({...f}):onAdd({...f});setShowForm(false);setEditJob(null);};
@@ -1201,25 +1251,21 @@ function Jobs({jobs,customers,technicians,onAdd,onEdit,onDelete,loading}){
         <div className="pt">Jobs ({filtered.length}{filtered.length!==jobs.length?` of ${jobs.length}`:''})</div>
         <button className="btn bp bs" onClick={openNew}>+ New Job</button>
       </div>
-      <div style={{padding:'10px 16px',borderBottom:'1px solid var(--bdr)',display:'flex',gap:10}}>
-        <input className="fi" placeholder="🔍 Search jobs, equipment, notes..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:0,flex:2}}/>
-        <select className="fsl" value={clientFilter} onChange={e=>setClientFilter(e.target.value)} style={{flex:1}}>
+      <div style={{padding:'10px 14px',borderBottom:'1px solid var(--bdr)',display:'flex',gap:8,flexWrap:'wrap'}}>
+        <input className="fi" placeholder="🔍 Search jobs, equipment, notes..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:0,flex:2,minWidth:160}}/>
+        <select className="fsl" value={clientFilter} onChange={e=>setClientFilter(e.target.value)} style={{flex:1,minWidth:120,marginBottom:0}}>
           <option value="">All clients</option>
           {clients.map(c=><option key={c}>{c}</option>)}
         </select>
       </div>
       {loading?<Loading/>:<div className="tbl">
         <div className="tr hdr" style={{gridTemplateColumns:'90px 1fr 110px 90px 80px 100px 80px 70px'}}>
-          <div className="cl">ID</div><div className="cl">Customer/Equip</div><div className="cl">Technician</div><div className="cl">Date</div><div className="cl">Amount</div><div className="cl">Priority</div><div className="cl">Status</div><div className="cl">Act.</div>
+          <div className="cl">ID</div><div className="cl">Customer/Equip</div><div className="cl">Tech</div><div className="cl">Date</div><div className="cl">Amount</div><div className="cl">Priority</div><div className="cl">Status</div><div className="cl">Act.</div>
         </div>
         {filtered.map(j=>(
           <div key={j.id} className="tr" style={{gridTemplateColumns:'90px 1fr 110px 90px 80px 100px 80px 70px',borderLeft:j.priority==='Urgent'?'2px solid var(--rd)':j.priority==='High'?'2px solid var(--am)':'2px solid transparent'}} onClick={()=>setViewJob(j)}>
             <div className="ci">{j.job_id}</div>
-            <div>
-              <div className="cm">{j.customer||'—'}</div>
-              <div className="cs">{j.equipment||'—'}</div>
-              {j.followup && <FollowupPill job={j}/>}
-            </div>
+            <div><div className="cm">{j.customer||'—'}</div><div className="cs">{j.equipment||'—'}</div>{j.followup&&<FollowupPill job={j}/>}</div>
             <div className="cd">{j.technician||'—'}</div>
             <div className="cn">{j.date||'—'}</div>
             <div className="cv">{j.amount?'$'+j.amount:'—'}</div>
@@ -1231,13 +1277,17 @@ function Jobs({jobs,customers,technicians,onAdd,onEdit,onDelete,loading}){
             </div>
           </div>
         ))}
-        {!filtered.length&&<div className="empty"><div className="ei">📋</div>{search||clientFilter?'No jobs match your search.':'No jobs yet!'}</div>}
+        {!filtered.length&&<div className="empty"><div className="ei">📋</div>{search||clientFilter?'No jobs match.':'No jobs yet!'}</div>}
       </div>}
     </div>
+    {/* Mobile jobs */}
     <div className="mobile-cards">
-      <button className="btn bp" style={{width:'100%',justifyContent:'center',padding:'12px',fontSize:13,marginBottom:16}} onClick={openNew}>+ New Job</button>
-      {loading?<Loading/>:[...jobs].reverse().map(j=><JobCard key={j.id} j={j} onEdit={openEdit} onDelete={onDelete}/>)}
-      {!loading&&!jobs.length&&<div className="empty"><div className="ei">📋</div>No jobs yet!</div>}
+      <div style={{display:'flex',gap:8,marginBottom:12}}>
+        <input className="fi" placeholder="🔍 Search..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:0,flex:1}}/>
+      </div>
+      <button className="btn bp" style={{width:'100%',height:48,fontSize:14,justifyContent:'center',marginBottom:14}} onClick={openNew}>+ New Job</button>
+      {loading?<Loading/>:filtered.map(j=><JobCard key={j.id} j={j} onEdit={openEdit} onDelete={onDelete}/>)}
+      {!loading&&!filtered.length&&<div className="empty"><div className="ei">📋</div>{search?'No match.':'No jobs yet!'}</div>}
     </div>
     {showForm&&<JobFormModal job={editJob} customers={customers} technicians={technicians} onSave={save} onClose={()=>{setShowForm(false);setEditJob(null);}}/>}
     {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)} onEdit={(j)=>{setViewJob(null);openEdit(j);}}/>}
@@ -1252,56 +1302,92 @@ function Customers({customers,jobs,onAdd,onEdit,onDelete,loading}){
   const [viewJob,setViewJob]=useState(null);
   const filtered=[...customers].sort((a,b)=>(a.company||'').localeCompare(b.company||'')).filter(c=>
     (c.company||'').toLowerCase().includes(search.toLowerCase())||
-    (c.contact||'').toLowerCase().includes(search.toLowerCase())||
-    (c.email||'').toLowerCase().includes(search.toLowerCase())||
-    (c.phone||'').toLowerCase().includes(search.toLowerCase())
+    (c.contact||'').toLowerCase().includes(search.toLowerCase())
   );
   const open=(c)=>{setF(c?{...c}:{});setForm(c||{});};
   const save=()=>{form?.id?onEdit({...f}):onAdd({...f});setForm(null);};
+
   return(<>
     <div className="panel">
-      <div className="ph"><div className="pt">Customers ({customers.length})</div><button className="btn bp bs" onClick={()=>open(null)}>+ New Customer</button></div>
-      <div style={{padding:'10px 16px',borderBottom:'1px solid var(--bdr)'}}>
+      <div className="ph"><div className="pt">Customers ({customers.length})</div><button className="btn bp bs" onClick={()=>open(null)}>+ New</button></div>
+      <div style={{padding:'10px 14px',borderBottom:'1px solid var(--bdr)'}}>
         <input className="fi" placeholder="🔍 Search customers..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:0}}/>
       </div>
-      {loading?<Loading/>:<div className="tbl">
-        <div className="tr hdr" style={{gridTemplateColumns:'1fr 130px 60px 70px'}}>
-          <div className="cl">Company/Contact</div><div className="cl">Phone</div><div className="cl">Jobs</div><div className="cl">Act.</div>
-        </div>
-        {filtered.map(c=>{
-          const cJobs=jobs.filter(j=>j.customer===c.company);
-          const isOpen=expanded===c.id;
-          return(<>
-            <div key={c.id} className="tr" style={{gridTemplateColumns:'1fr 130px 60px 70px',background:isOpen?'var(--sur2)':''}} onClick={()=>setExpanded(isOpen?null:c.id)}>
-              <div><div className="cm">{c.company||'—'}</div><div className="cs">{c.contact||''}</div></div>
-              <div className="cn">{c.phone||'—'}</div>
-              <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,color:'var(--ac)'}}>{cJobs.length}</div>
-              <div style={{display:'flex',gap:4}} onClick={e=>e.stopPropagation()}>
-                <button className="btn bg bs" onClick={()=>open(c)}>✏️</button>
-                <button className="btn bd bs" onClick={()=>onDelete(c.id)}>🗑</button>
-              </div>
-            </div>
-            {isOpen&&<div key={c.id+'-jobs'} style={{background:'var(--sur3)',borderBottom:'1px solid var(--bdr)',padding:'0 0 8px 0'}}>
-              <div style={{padding:'8px 16px 4px',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:2,textTransform:'uppercase'}}>Job History — {c.company}</div>
-              {cJobs.length===0&&<div style={{padding:'10px 16px',fontSize:12,color:'var(--txd)'}}>No jobs found for this customer.</div>}
-              {cJobs.map(j=>(
-                <div key={j.id} style={{display:'grid',gridTemplateColumns:'90px 1fr 100px 90px 80px',alignItems:'center',padding:'8px 16px',borderTop:'1px solid var(--bdr)',cursor:'pointer',transition:'background .1s'}} onClick={()=>setViewJob(j)} onMouseEnter={e=>e.currentTarget.style.background='var(--sur2)'} onMouseLeave={e=>e.currentTarget.style.background=''}>
-                  <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:'var(--ac)'}}>{j.job_id}</div>
-                  <div><div style={{fontSize:12,fontWeight:500}}>{j.equipment||'—'}</div><div style={{fontSize:11,color:'var(--txd)'}}>{j.technician||'Unassigned'}</div></div>
-                  <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txm)'}}>{j.date||'—'}</div>
-                  <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,fontSize:13}}>{j.amount?'$'+j.amount:'—'}</div>
-                  <div><span className={"st "+(j.status||'Pending').replace(' ','')}>{j.status||'Pending'}</span></div>
+      {loading?<Loading/>:<>
+        {/* Desktop table */}
+        <div className="desktop-table tbl">
+          <div className="tr hdr" style={{gridTemplateColumns:'1fr 130px 60px 70px'}}>
+            <div className="cl">Company/Contact</div><div className="cl">Phone</div><div className="cl">Jobs</div><div className="cl">Act.</div>
+          </div>
+          {filtered.map(c=>{
+            const cJobs=jobs.filter(j=>j.customer===c.company);
+            const isOpen=expanded===c.id;
+            return(<>
+              <div key={c.id} className="tr" style={{gridTemplateColumns:'1fr 130px 60px 70px',background:isOpen?'var(--sur2)':''}} onClick={()=>setExpanded(isOpen?null:c.id)}>
+                <div><div className="cm">{c.company||'—'}</div><div className="cs">{c.contact||''}</div></div>
+                <div className="cn">{c.phone||'—'}</div>
+                <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:600,color:'var(--ac)'}}>{cJobs.length}</div>
+                <div style={{display:'flex',gap:4}} onClick={e=>e.stopPropagation()}>
+                  <button className="btn bg bs" onClick={()=>open(c)}>✏️</button>
+                  <button className="btn bd bs" onClick={()=>onDelete(c.id)}>🗑</button>
                 </div>
-              ))}
-            </div>}
-          </>);
-        })}
-        {!customers.length&&<div className="empty"><div className="ei">🏢</div>No customers yet.</div>}
-      </div>}
+              </div>
+              {isOpen&&<div key={c.id+'-jobs'} style={{background:'var(--sur3)',borderBottom:'1px solid var(--bdr)',padding:'0 0 8px 0'}}>
+                <div style={{padding:'8px 14px 4px',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:2,textTransform:'uppercase'}}>Job History — {c.company}</div>
+                {cJobs.length===0&&<div style={{padding:'10px 14px',fontSize:12,color:'var(--txd)'}}>No jobs.</div>}
+                {cJobs.map(j=>(
+                  <div key={j.id} style={{display:'grid',gridTemplateColumns:'90px 1fr 90px 80px',alignItems:'center',padding:'8px 14px',borderTop:'1px solid var(--bdr)',cursor:'pointer',transition:'background .1s'}} onClick={()=>setViewJob(j)} onMouseEnter={e=>e.currentTarget.style.background='var(--sur2)'} onMouseLeave={e=>e.currentTarget.style.background=''}>
+                    <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:'var(--ac)'}}>{j.job_id}</div>
+                    <div><div style={{fontSize:12,fontWeight:500}}>{j.equipment||'—'}</div></div>
+                    <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txm)'}}>{j.date||'—'}</div>
+                    <StBadge s={j.status}/>
+                  </div>
+                ))}
+              </div>}
+            </>);
+          })}
+          {!customers.length&&<div className="empty"><div className="ei">🏢</div>No customers yet.</div>}
+        </div>
+        {/* Mobile cards */}
+        <div className="mobile-cards" style={{padding:12}}>
+          {filtered.map(c=>{
+            const cJobs=jobs.filter(j=>j.customer===c.company);
+            const isOpen=expanded===c.id;
+            return(
+              <div key={c.id} style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:8,marginBottom:10,overflow:'hidden'}}>
+                <div style={{padding:'12px 14px',display:'flex',alignItems:'center',justifyContent:'space-between'}} onClick={()=>setExpanded(isOpen?null:c.id)}>
+                  <div>
+                    <div style={{fontSize:15,fontWeight:600}}>{c.company||'—'}</div>
+                    {c.contact&&<div style={{fontSize:12,color:'var(--txd)',marginTop:2}}>{c.contact}</div>}
+                    {c.phone&&<div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:'var(--txm)',marginTop:2}}>📞 {c.phone}</div>}
+                  </div>
+                  <div style={{display:'flex',flexDirection:'column',alignItems:'flex-end',gap:8}}>
+                    <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:18,color:'var(--ac)'}}>{cJobs.length} jobs</div>
+                    <div style={{display:'flex',gap:6}}>
+                      <button className="btn bg bs" onClick={e=>{e.stopPropagation();open(c);}}>✏️</button>
+                      <button className="btn bd bs" onClick={e=>{e.stopPropagation();onDelete(c.id);}}>🗑</button>
+                    </div>
+                  </div>
+                </div>
+                {isOpen&&cJobs.map(j=>(
+                  <div key={j.id} style={{padding:'10px 14px',borderTop:'1px solid var(--bdr)',background:'var(--sur3)',display:'flex',alignItems:'center',justifyContent:'space-between',gap:8}} onClick={()=>setViewJob(j)}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:12,fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{j.equipment||j.job_id}</div>
+                      <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',marginTop:2}}>{j.date||'—'}</div>
+                    </div>
+                    <StBadge s={j.status}/>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+          {!customers.length&&<div className="empty"><div className="ei">🏢</div>No customers yet.</div>}
+        </div>
+      </>}
     </div>
     {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)}/>}
     {form!==null&&(
-      <Modal title={form?.id?'Edit Customer':'New Customer'} onClose={()=>setForm(null)} onSave={save} saveLabel={form?.id?'Save Changes':'Add Customer'}>
+      <Modal title={form?.id?'Edit Customer':'New Customer'} onClose={()=>setForm(null)} onSave={save} saveLabel={form?.id?'Save':'Add Customer'}>
         <div className="fg"><label className="fl">Company Name</label><input className="fi" value={f.company||''} onChange={e=>setF({...f,company:e.target.value})}/></div>
         <div className="fr">
           <div className="fg"><label className="fl">Contact Name</label><input className="fi" value={f.contact||''} onChange={e=>setF({...f,contact:e.target.value})}/></div>
@@ -1322,7 +1408,7 @@ function Technicians({technicians,onAdd,onEdit,onDelete,loading}){
   const save=()=>{const ini=(f.name||'').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);form?.id?onEdit({...f,initials:ini}):onAdd({...f,initials:ini});setForm(null);};
   return(<>
     <div className="panel">
-      <div className="ph"><div className="pt">Technicians ({technicians.length})</div><button className="btn bp bs" onClick={()=>open(null)}>+ Add Technician</button></div>
+      <div className="ph"><div className="pt">Technicians ({technicians.length})</div><button className="btn bp bs" onClick={()=>open(null)}>+ Add</button></div>
       {loading?<Loading/>:<div className="tgrid">
         {technicians.map(t=>(
           <div key={t.id} className="tc">
@@ -1332,10 +1418,9 @@ function Technicians({technicians,onAdd,onEdit,onDelete,loading}){
             </div>
             <div style={{fontSize:11,color:'var(--txd)',marginBottom:3,fontFamily:"'IBM Plex Mono',monospace"}}>📧 {t.email||'—'}</div>
             <div style={{fontSize:11,color:'var(--txd)',marginBottom:3,fontFamily:"'IBM Plex Mono',monospace"}}>📞 {t.phone||'—'}</div>
-            <div style={{fontSize:11,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace"}}>🔧 {t.current_job||'No active job'}</div>
             <div style={{display:'flex',gap:6,marginTop:10}}>
-              <button className="btn bg bs" style={{flex:1}} onClick={()=>open(t)}>✏️ Edit</button>
-              <button className="btn bd bs" onClick={()=>onDelete(t.id)}>🗑</button>
+              <button className="btn bg bs" style={{flex:1,height:40}} onClick={()=>open(t)}>✏️ Edit</button>
+              <button className="btn bd bs" style={{height:40}} onClick={()=>onDelete(t.id)}>🗑</button>
             </div>
           </div>
         ))}
@@ -1343,10 +1428,14 @@ function Technicians({technicians,onAdd,onEdit,onDelete,loading}){
       </div>}
     </div>
     {form!==null&&(
-      <Modal title={form?.id?'Edit Technician':'New Technician'} onClose={()=>setForm(null)} onSave={save} saveLabel={form?.id?'Save Changes':'Add Technician'}>
+      <Modal title={form?.id?'Edit Technician':'New Technician'} onClose={()=>setForm(null)} onSave={save} saveLabel={form?.id?'Save':'Add'}>
         <div className="fr">
           <div className="fg"><label className="fl">Full Name</label><input className="fi" value={f.name||''} onChange={e=>setF({...f,name:e.target.value})}/></div>
-          <div className="fg"><label className="fl">Status</label><select className="fsl" value={f.status||'Available'} onChange={e=>setF({...f,status:e.target.value})}><option>Available</option><option>Busy</option><option>Offline</option></select></div>
+          <div className="fg"><label className="fl">Status</label>
+            <select className="fsl" value={f.status||'Available'} onChange={e=>setF({...f,status:e.target.value})}>
+              <option>Available</option><option>Busy</option><option>Offline</option>
+            </select>
+          </div>
         </div>
         <div className="fr">
           <div className="fg"><label className="fl">Email</label><input className="fi" type="email" value={f.email||''} onChange={e=>setF({...f,email:e.target.value})}/></div>
@@ -1358,7 +1447,7 @@ function Technicians({technicians,onAdd,onEdit,onDelete,loading}){
   </>);
 }
 
-// ── Schedule Page (full calendar with notes + search) ─────────────────────────
+// ── Schedule Page ─────────────────────────────────────────────────────────────
 function Schedule({ jobs, calNotes, onSaveNote }) {
   const now = new Date();
   const [vd, setVd] = useState(new Date(now.getFullYear(), now.getMonth(), 1));
@@ -1369,12 +1458,10 @@ function Schedule({ jobs, calNotes, onSaveNote }) {
   const dim = new Date(vd.getFullYear(), vd.getMonth()+1, 0).getDate();
   const fd = new Date(vd.getFullYear(), vd.getMonth(), 1).getDay();
   const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-
   const dateKey = (d) => `${vd.getFullYear()}-${String(vd.getMonth()+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
   const jobsFor = d => jobs.filter(j => j.date === dateKey(d));
   const noteFor = (key) => calNotes[key];
   const hasNote = d => calNotes[dateKey(d)]?.note_text?.trim();
-
   const cells = [...Array(fd).fill(null), ...Array.from({length:dim}, (_,i) => i+1)];
 
   const handleDayClick = (d) => {
@@ -1383,179 +1470,115 @@ function Schedule({ jobs, calNotes, onSaveNote }) {
     setSearch('');
   };
 
-  // ── Search logic: match against all jobs (all months) + cal notes ──
   const q = search.trim().toLowerCase();
   const searchResults = q ? (() => {
     const matched = [];
-    // Check all jobs for customer / equipment / notes / job_id match
     jobs.forEach(j => {
-      if (
-        (j.customer||'').toLowerCase().includes(q) ||
-        (j.equipment||'').toLowerCase().includes(q) ||
-        (j.notes||'').toLowerCase().includes(q) ||
-        (j.job_id||'').toLowerCase().includes(q)
-      ) {
+      if((j.customer||'').toLowerCase().includes(q)||(j.equipment||'').toLowerCase().includes(q)||(j.notes||'').toLowerCase().includes(q)||(j.job_id||'').toLowerCase().includes(q))
         matched.push({ date: j.date, job: j, noteText: null });
-      }
     });
-    // Also check calendar notes
     Object.entries(calNotes).forEach(([date, note]) => {
-      if ((note.note_text||'').toLowerCase().includes(q)) {
-        // Only add if not already represented by a job match on same date
-        if (!matched.find(m => m.date === date && !m.noteText)) {
-          matched.push({ date, job: null, noteText: note.note_text });
-        } else {
-          // Annotate existing entries on that date with the note
-          matched.filter(m => m.date === date).forEach(m => { m.noteText = note.note_text; });
-        }
+      if((note.note_text||'').toLowerCase().includes(q)){
+        if(!matched.find(m=>m.date===date&&!m.noteText)) matched.push({date,job:null,noteText:note.note_text});
+        else matched.filter(m=>m.date===date).forEach(m=>{m.noteText=note.note_text;});
       }
     });
-    // Sort by date desc
-    return matched
-      .filter(m => m.date)
-      .sort((a,b) => b.date.localeCompare(a.date));
+    return matched.filter(m=>m.date).sort((a,b)=>b.date.localeCompare(a.date));
   })() : [];
 
-  // Highlight matching text
   const highlight = (text, q) => {
-    if (!q || !text) return text;
-    const idx = text.toLowerCase().indexOf(q);
-    if (idx === -1) return text;
+    if(!q||!text) return text;
+    const idx=text.toLowerCase().indexOf(q);
+    if(idx===-1) return text;
     return <>{text.slice(0,idx)}<mark style={{background:'rgba(0,200,255,0.25)',color:'var(--ac)',borderRadius:2,padding:'0 2px'}}>{text.slice(idx,idx+q.length)}</mark>{text.slice(idx+q.length)}</>;
   };
 
-  // Group search results by date for display
-  const groupedResults = searchResults.reduce((acc, m) => {
-    if (!acc[m.date]) acc[m.date] = { jobs: [], noteText: null };
-    if (m.job) acc[m.date].jobs.push(m.job);
-    if (m.noteText) acc[m.date].noteText = m.noteText;
+  const groupedResults = searchResults.reduce((acc,m)=>{
+    if(!acc[m.date]) acc[m.date]={jobs:[],noteText:null};
+    if(m.job) acc[m.date].jobs.push(m.job);
+    if(m.noteText) acc[m.date].noteText=m.noteText;
     return acc;
-  }, {});
+  },{});
 
   const fmtDate = (ds) => {
-    const [y,mo,d] = ds.split('-').map(Number);
-    return new Date(y,mo-1,d).toLocaleDateString('en-CA',{weekday:'short',month:'short',day:'numeric',year:'numeric'});
+    const [y,mo,d]=ds.split('-').map(Number);
+    return new Date(y,mo-1,d).toLocaleDateString('en-CA',{weekday:'short',month:'short',day:'numeric'});
   };
 
   return (
     <div className="panel">
       <div className="ph">
-        <div className="pt">Schedule — {vd.toLocaleString('default',{month:'long',year:'numeric'})}</div>
-        <div style={{display:'flex',gap:8,alignItems:'center'}}>
-          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:1}}>
-            <span style={{display:'inline-block',width:8,height:8,borderRadius:'50%',background:'var(--am)',marginRight:4,verticalAlign:'middle'}}/>
-            note
-          </span>
+        <div className="pt">{vd.toLocaleString('default',{month:'long',year:'numeric'})}</div>
+        <div style={{display:'flex',gap:6,alignItems:'center'}}>
           <button className="btn bg bs" onClick={()=>setVd(new Date(vd.getFullYear(),vd.getMonth()-1,1))}>‹</button>
           <button className="btn bg bs" onClick={()=>setVd(new Date(now.getFullYear(),now.getMonth(),1))}>●</button>
           <button className="btn bg bs" onClick={()=>setVd(new Date(vd.getFullYear(),vd.getMonth()+1,1))}>›</button>
         </div>
       </div>
-
-      {/* Search bar */}
-      <div style={{padding:'10px 14px',borderBottom:'1px solid var(--bdr)',display:'flex',gap:8,alignItems:'center'}}>
-        <input
-          ref={searchRef}
-          className="fi"
-          placeholder="🔍 Search customer, machine, notes across all dates..."
-          value={search}
-          onChange={e => { setSearch(e.target.value); setSelectedDate(null); }}
-          style={{marginBottom:0,flex:1}}
-        />
-        {search && (
-          <button className="btn bg bs" onClick={() => { setSearch(''); searchRef.current?.focus(); }}>✕ Clear</button>
-        )}
+      <div style={{padding:'10px 12px',borderBottom:'1px solid var(--bdr)',display:'flex',gap:8}}>
+        <input ref={searchRef} className="fi" placeholder="🔍 Search all dates..." value={search}
+          onChange={e=>{setSearch(e.target.value);setSelectedDate(null);}} style={{marginBottom:0,flex:1}}/>
+        {search&&<button className="btn bg bs" onClick={()=>{setSearch('');searchRef.current?.focus();}}>✕</button>}
       </div>
 
-      {/* Search results view */}
       {q ? (
-        <div style={{padding:14}}>
-          {Object.keys(groupedResults).length === 0 ? (
+        <div style={{padding:12}}>
+          {Object.keys(groupedResults).length===0 ? (
             <div className="empty"><div className="ei">🔍</div>No matches for "{search}"</div>
           ) : (
             <>
-              <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:2,textTransform:'uppercase',marginBottom:12}}>
+              <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:2,marginBottom:10}}>
                 {Object.keys(groupedResults).length} date{Object.keys(groupedResults).length!==1?'s':''} matched
               </div>
-              {Object.entries(groupedResults).map(([date, {jobs: matchedJobs, noteText}]) => (
+              {Object.entries(groupedResults).map(([date,{jobs:mj,noteText}])=>(
                 <div key={date} style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:6,marginBottom:8,overflow:'hidden'}}>
-                  {/* Date header — click to open note panel */}
-                  <div
-                    style={{padding:'8px 12px',borderBottom: (matchedJobs.length||noteText)?'1px solid var(--bdr)':'none',display:'flex',alignItems:'center',justifyContent:'space-between',cursor:'pointer',background:'var(--sur3)'}}
-                    onClick={() => { setSearch(''); setSelectedDate(date); setVd(new Date(date.slice(0,7)+'-01')); }}
-                  >
+                  <div style={{padding:'8px 12px',borderBottom:(mj.length||noteText)?'1px solid var(--bdr)':'none',display:'flex',alignItems:'center',justifyContent:'space-between',cursor:'pointer',background:'var(--sur3)'}}
+                    onClick={()=>{setSearch('');setSelectedDate(date);setVd(new Date(date.slice(0,7)+'-01'));}}>
                     <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:'var(--ac)',fontWeight:700}}>{fmtDate(date)}</div>
-                    <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)'}}>click to open ›</div>
+                    <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)'}}>open ›</div>
                   </div>
-                  {/* Matched jobs */}
-                  {matchedJobs.map(j => (
-                    <div key={j.id} style={{padding:'8px 12px',borderBottom:'1px solid var(--bdr)',display:'grid',gridTemplateColumns:'1fr auto',gap:8,alignItems:'center'}}>
-                      <div>
-                        <div style={{fontSize:13,fontWeight:600}}>{highlight(j.customer||'—', q)}</div>
-                        <div style={{fontSize:11,color:'var(--txd)',marginTop:1}}>{highlight(j.equipment||'', q)}</div>
-                        {j.notes && q && j.notes.toLowerCase().includes(q) && (
-                          <div style={{fontSize:11,color:'var(--txm)',marginTop:4,fontStyle:'italic',borderLeft:'2px solid var(--bdr)',paddingLeft:6,lineHeight:1.5}}>
-                            {highlight(j.notes.slice(0, 120) + (j.notes.length > 120 ? '…' : ''), q)}
-                          </div>
-                        )}
+                  {mj.map(j=>(
+                    <div key={j.id} style={{padding:'8px 12px',borderBottom:'1px solid var(--bdr)',display:'flex',justifyContent:'space-between',gap:8,alignItems:'center'}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:600}}>{highlight(j.customer||'—',q)}</div>
+                        <div style={{fontSize:11,color:'var(--txd)',marginTop:1}}>{highlight(j.equipment||'',q)}</div>
                       </div>
-                      <span className={"st "+(j.status||'Pending').replace(' ','')}>{j.status||'Pending'}</span>
+                      <StBadge s={j.status}/>
                     </div>
                   ))}
-                  {/* Matched note text */}
-                  {noteText && (
-                    <div style={{padding:'8px 12px',fontSize:12,color:'var(--txm)',fontStyle:'italic',display:'flex',alignItems:'flex-start',gap:6}}>
-                      <span style={{color:'var(--am)',flexShrink:0}}>📝</span>
-                      <span style={{lineHeight:1.5}}>{highlight(noteText.slice(0,160)+(noteText.length>160?'…':''), q)}</span>
-                    </div>
-                  )}
+                  {noteText&&<div style={{padding:'8px 12px',fontSize:12,color:'var(--txm)',display:'flex',gap:6}}><span style={{color:'var(--am)',flexShrink:0}}>📝</span><span style={{lineHeight:1.5}}>{highlight(noteText.slice(0,160),q)}</span></div>}
                 </div>
               ))}
             </>
           )}
         </div>
       ) : (
-        /* Normal calendar grid */
         <>
           <div className="cg">
-            {days.map(d=><div key={d} className="cdl">{d}</div>)}
+            {days.map(d=><div key={d} className="cdl">{d.slice(0,2)}</div>)}
             {cells.map((d,i) => {
               if (!d) return <div key={"e"+i}/>;
-              const isToday = d===now.getDate()&&vd.getMonth()===now.getMonth()&&vd.getFullYear()===now.getFullYear();
-              const key = dateKey(d);
-              const isSelected = selectedDate === key;
-              const dj = jobsFor(d);
-              const note = hasNote(d);
+              const isToday=d===now.getDate()&&vd.getMonth()===now.getMonth()&&vd.getFullYear()===now.getFullYear();
+              const key=dateKey(d);
+              const isSelected=selectedDate===key;
+              const dj=jobsFor(d);
+              const note=hasNote(d);
               return (
-                <div
-                  key={d}
-                  className={"cd2 "+(isToday?'today ':'')+(note?'has-note ':'')}
-                  style={{
-                    border: isSelected ? '1px solid var(--ac)' : isToday ? '1px solid var(--ac)' : note ? '1px solid rgba(255,176,32,0.4)' : '1px solid var(--bdr)',
-                    background: isSelected ? 'rgba(0,200,255,0.08)' : isToday ? 'rgba(0,200,255,0.04)' : 'var(--sur2)',
-                    cursor: 'pointer',
-                  }}
-                  onClick={() => handleDayClick(d)}
-                >
+                <div key={d} className={"cd2 "+(isToday?'today ':'')+(note?'has-note ':'')}
+                  style={{border:isSelected?'1px solid var(--ac)':isToday?'1px solid var(--ac)':note?'1px solid rgba(255,176,32,0.4)':'1px solid var(--bdr)',background:isSelected?'rgba(0,200,255,0.08)':isToday?'rgba(0,200,255,0.04)':'var(--sur2)',cursor:'pointer'}}
+                  onClick={()=>handleDayClick(d)}>
                   <div style={{display:'flex',alignItems:'center',gap:2,marginBottom:2}}>
                     <div className={"cdn "+(isToday?'tn':'')}>{d}</div>
-                    {note && <div style={{width:5,height:5,borderRadius:'50%',background:'var(--am)',flexShrink:0}}/>}
+                    {note&&<div style={{width:5,height:5,borderRadius:'50%',background:'var(--am)',flexShrink:0}}/>}
                   </div>
-                  {dj.map(j=><div key={j.id} className={"cj "+(j.status||'Pending').replace(' ','')} title={j.job_id}>{j.customer||j.job_id}</div>)}
+                  {dj.map(j=><div key={j.id} className={"cj "+(j.status||'Pending').replace(' ','')} title={j.customer}>{j.customer||j.job_id}</div>)}
                 </div>
               );
             })}
           </div>
-
-          {/* Note panel — shown below calendar when a date is selected */}
           {selectedDate && (
-            <div style={{padding:'0 14px 14px'}}>
-              <CalendarNotePanel
-                dateStr={selectedDate}
-                note={noteFor(selectedDate)}
-                onSave={onSaveNote}
-                onClose={() => setSelectedDate(null)}
-              />
+            <div style={{padding:'0 12px 12px'}}>
+              <CalendarNotePanel dateStr={selectedDate} note={noteFor(selectedDate)} onSave={onSaveNote} onClose={()=>setSelectedDate(null)}/>
             </div>
           )}
         </>
@@ -1569,85 +1592,77 @@ function Files({files, onUpload, onDelete, uploading}) {
   const [search, setSearch] = useState('');
   const fileRef = useRef(null);
 
-  const filtered = files.filter(f =>
-    (f.name||'').toLowerCase().includes(search.toLowerCase()) ||
-    (f.tag||'').toLowerCase().includes(search.toLowerCase())
-  );
-
+  const filtered = files.filter(f=>(f.name||'').toLowerCase().includes(search.toLowerCase()));
   const fmt = (bytes) => {
-    if (!bytes) return '—';
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024*1024) return Math.round(bytes/1024) + ' KB';
-    return (bytes/(1024*1024)).toFixed(1) + ' MB';
-  };
-
-  const fmtDate = (iso) => {
-    if (!iso) return '—';
-    return new Date(iso).toLocaleDateString('en-CA');
+    if(!bytes) return '—';
+    if(bytes<1024) return bytes+' B';
+    if(bytes<1024*1024) return Math.round(bytes/1024)+' KB';
+    return (bytes/(1024*1024)).toFixed(1)+' MB';
   };
 
   return (<>
     <div className="panel">
       <div className="ph">
-        <div style={{display:'flex',alignItems:'center',gap:10}}>
-          <div className="pt">Files</div>
-          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:1,background:'var(--sur2)',border:'1px solid var(--bdr)',padding:'2px 7px',borderRadius:3}}>REFERENCE DOCS</span>
-        </div>
-        <button className="btn bimport" onClick={()=>fileRef.current?.click()} disabled={uploading} style={{fontSize:11}}>
-          {uploading ? '⏳ Uploading...' : '⬆ Upload PDF'}
+        <div className="pt">Files</div>
+        <button className="btn bimport" onClick={()=>fileRef.current?.click()} disabled={uploading}>
+          {uploading?'⏳ Uploading...':'⬆ Upload PDF'}
         </button>
         <input ref={fileRef} type="file" accept="application/pdf" multiple style={{display:'none'}} onChange={e=>onUpload([...e.target.files]).then(()=>e.target.value='')}/>
       </div>
-      <div style={{padding:'10px 16px',borderBottom:'1px solid var(--bdr)'}}>
+      <div style={{padding:'10px 12px',borderBottom:'1px solid var(--bdr)'}}>
         <input className="fi" placeholder="🔍 Search files..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:0}}/>
       </div>
-      <div className="tbl">
+      {/* Desktop table */}
+      <div className="desktop-table tbl">
         <div className="tr hdr" style={{gridTemplateColumns:'28px 1fr 80px 90px 70px'}}>
-          <div className="cl"/>
-          <div className="cl">File Name</div>
-          <div className="cl">Size</div>
-          <div className="cl">Uploaded</div>
-          <div className="cl">Act.</div>
+          <div className="cl"/><div className="cl">File Name</div><div className="cl">Size</div><div className="cl">Uploaded</div><div className="cl">Act.</div>
         </div>
         {filtered.map(f=>(
           <div key={f.id} className="tr" style={{gridTemplateColumns:'28px 1fr 80px 90px 70px'}} onClick={()=>setViewing(f)}>
-            <div style={{fontSize:18,lineHeight:1}}>📄</div>
-            <div>
-              <div className="cm" style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{f.name||'Unnamed'}</div>
-              {f.tag&&<div className="cs">{f.tag}</div>}
-            </div>
+            <div style={{fontSize:18}}>📄</div>
+            <div><div className="cm" style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{f.name||'Unnamed'}</div></div>
             <div className="cn">{fmt(f.size)}</div>
-            <div className="cn">{fmtDate(f.created_at)}</div>
+            <div className="cn">{f.created_at?new Date(f.created_at).toLocaleDateString('en-CA'):'—'}</div>
             <div style={{display:'flex',gap:4}} onClick={e=>e.stopPropagation()}>
-              <button className="btn bg bs" onClick={()=>setViewing(f)} title="View">👁</button>
+              <button className="btn bg bs" onClick={()=>setViewing(f)}>👁</button>
               <button className="btn bd bs" onClick={()=>onDelete(f)}>🗑</button>
             </div>
           </div>
         ))}
-        {!filtered.length&&!uploading&&(
-          <div className="empty">
-            <div className="ei">📁</div>
-            {search ? 'No files match your search.' : 'No files yet — upload a PDF to get started.'}
+        {!filtered.length&&!uploading&&<div className="empty"><div className="ei">📁</div>{search?'No match.':'No files yet.'}</div>}
+        {uploading&&<Loading/>}
+      </div>
+      {/* Mobile cards */}
+      <div className="mobile-cards" style={{padding:12}}>
+        {filtered.map(f=>(
+          <div key={f.id} style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:8,padding:'12px 14px',marginBottom:10,display:'flex',alignItems:'center',gap:12}}>
+            <div style={{fontSize:28,flexShrink:0}}>📄</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:13,fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{f.name||'Unnamed'}</div>
+              <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',marginTop:3}}>{fmt(f.size)}</div>
+            </div>
+            <div style={{display:'flex',gap:6,flexShrink:0}}>
+              <button className="btn bg bs" style={{height:40}} onClick={()=>setViewing(f)}>👁</button>
+              <button className="btn bd bs" style={{height:40}} onClick={()=>onDelete(f)}>🗑</button>
+            </div>
           </div>
-        )}
-        {uploading&&<div className="loading"><div className="spin"/>Uploading...</div>}
+        ))}
+        {!filtered.length&&!uploading&&<div className="empty"><div className="ei">📁</div>No files yet.</div>}
+        {uploading&&<Loading/>}
       </div>
     </div>
     {viewing&&(
       <div className="mbg" onClick={()=>setViewing(null)}>
         <div style={{background:'var(--sur)',border:'1px solid var(--bdr2)',borderRadius:8,width:'100%',maxWidth:860,height:'88vh',display:'flex',flexDirection:'column'}} onClick={e=>e.stopPropagation()}>
           <div className="mh">
-            <div>
-              <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:2,marginBottom:3}}>REFERENCE FILE</div>
-              <div className="mt" style={{fontSize:13}}>{viewing.name}</div>
-            </div>
-            <div style={{display:'flex',gap:8,alignItems:'center'}}>
-              <a href={viewing.url} target="_blank" rel="noreferrer" className="btn bg bs" style={{textDecoration:'none',fontSize:11}} onClick={e=>e.stopPropagation()}>⬇ Download</a>
+            <div className="mt" style={{fontSize:13}}>{viewing.name}</div>
+            <div style={{display:'flex',gap:8}}>
+              <a href={viewing.url} target="_blank" rel="noreferrer" className="btn bg bs" style={{textDecoration:'none'}}>⬇</a>
               <button className="mc" onClick={()=>setViewing(null)}>×</button>
             </div>
           </div>
-          <div style={{flex:1,overflow:'hidden',borderRadius:'0 0 8px 8px'}}>
-            <iframe src={viewing.url + '#toolbar=1&navpanes=0'} style={{width:'100%',height:'100%',border:'none',borderRadius:'0 0 8px 8px'}} title={viewing.name}/>
+          <div style={{flex:1,overflow:'hidden'}}>
+            <iframe src={viewing.url+'#toolbar=1&navpanes=0'} style={{width:'100%',height:'100%',border:'none'}} title={viewing.name}/>
           </div>
         </div>
       </div>
@@ -1663,31 +1678,33 @@ function Archive({jobs,onEdit,onDelete,loading}){
   const clients=[...new Set(archived.map(j=>j.customer).filter(Boolean))].sort();
   const filtered=[...archived].sort((a,b)=>new Date(b.date)-new Date(a.date)).filter(j=>{
     const q=search.toLowerCase();
-    const matchSearch=!q||(j.customer||'').toLowerCase().includes(q)||(j.equipment||'').toLowerCase().includes(q)||(j.notes||'').toLowerCase().includes(q)||(j.job_id||'').toLowerCase().includes(q);
-    const matchClient=!clientFilter||j.customer===clientFilter;
-    return matchSearch&&matchClient;
+    const ms=!q||(j.customer||'').toLowerCase().includes(q)||(j.equipment||'').toLowerCase().includes(q)||(j.job_id||'').toLowerCase().includes(q);
+    const mc=!clientFilter||j.customer===clientFilter;
+    return ms&&mc;
   });
+
   return(<>
-    <div className="panel desktop-table">
+    <div className="panel">
       <div className="ph">
-        <div style={{display:'flex',alignItems:'center',gap:10}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
           <div className="pt">Archive</div>
-          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:1,background:'var(--sur2)',border:'1px solid var(--bdr)',padding:'2px 7px',borderRadius:3}}>COMPLETE &gt; 30 DAYS</span>
+          <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',background:'var(--sur2)',border:'1px solid var(--bdr)',padding:'2px 7px',borderRadius:3}}>30+ DAYS</span>
         </div>
         <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)'}}>{filtered.length} jobs</div>
       </div>
-      <div style={{padding:'10px 16px',borderBottom:'1px solid var(--bdr)',display:'flex',gap:10}}>
-        <input className="fi" placeholder="🔍 Search archived jobs..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:0,flex:2}}/>
-        <select className="fsl" value={clientFilter} onChange={e=>setClientFilter(e.target.value)} style={{flex:1}}>
+      <div style={{padding:'10px 12px',borderBottom:'1px solid var(--bdr)',display:'flex',gap:8,flexWrap:'wrap'}}>
+        <input className="fi" placeholder="🔍 Search archive..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:0,flex:2,minWidth:140}}/>
+        <select className="fsl" value={clientFilter} onChange={e=>setClientFilter(e.target.value)} style={{flex:1,minWidth:120,marginBottom:0}}>
           <option value="">All clients</option>
           {clients.map(c=><option key={c}>{c}</option>)}
         </select>
       </div>
-      {loading?<Loading/>:<div className="tbl">
+      {/* Desktop */}
+      <div className="desktop-table tbl">
         <div className="tr hdr" style={{gridTemplateColumns:'90px 1fr 110px 90px 80px 70px'}}>
-          <div className="cl">ID</div><div className="cl">Customer/Equip</div><div className="cl">Technician</div><div className="cl">Date</div><div className="cl">Amount</div><div className="cl">Act.</div>
+          <div className="cl">ID</div><div className="cl">Customer/Equip</div><div className="cl">Tech</div><div className="cl">Date</div><div className="cl">Amount</div><div className="cl">Act.</div>
         </div>
-        {filtered.map(j=>(
+        {loading?<Loading/>:filtered.map(j=>(
           <div key={j.id} className="tr" style={{gridTemplateColumns:'90px 1fr 110px 90px 80px 70px',opacity:.8}} onClick={()=>setViewJob(j)}>
             <div className="ci" style={{color:'var(--txd)'}}>{j.job_id}</div>
             <div><div className="cm" style={{color:'var(--txm)'}}>{j.customer||'—'}</div><div className="cs">{j.equipment||'—'}</div></div>
@@ -1700,8 +1717,27 @@ function Archive({jobs,onEdit,onDelete,loading}){
             </div>
           </div>
         ))}
-        {!filtered.length&&<div className="empty"><div className="ei">🗄</div>{search||clientFilter?'No archived jobs match.':'No archived jobs yet — completed jobs older than 30 days appear here.'}</div>}
-      </div>}
+        {!filtered.length&&!loading&&<div className="empty"><div className="ei">🗄</div>{search||clientFilter?'No match.':'No archived jobs yet.'}</div>}
+      </div>
+      {/* Mobile */}
+      <div className="mobile-cards" style={{padding:12}}>
+        {loading?<Loading/>:filtered.map(j=>(
+          <div key={j.id} style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:8,padding:'12px 14px',marginBottom:10,opacity:.85,cursor:'pointer'}} onClick={()=>setViewJob(j)}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',gap:8}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',marginBottom:3}}>{j.job_id}</div>
+                <div style={{fontSize:14,fontWeight:600,color:'var(--txm)'}}>{j.customer||'—'}</div>
+                <div style={{fontSize:11,color:'var(--txd)',marginTop:2}}>{j.equipment||'—'}</div>
+              </div>
+              <div style={{textAlign:'right',flexShrink:0}}>
+                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',marginBottom:4}}>{j.date||'—'}</div>
+                {j.amount&&<div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:16,color:'var(--txm)'}}>${j.amount}</div>}
+              </div>
+            </div>
+          </div>
+        ))}
+        {!loading&&!filtered.length&&<div className="empty"><div className="ei">🗄</div>No archived jobs.</div>}
+      </div>
     </div>
     {viewJob&&<JobDetailModal job={viewJob} onClose={()=>setViewJob(null)} onEdit={onEdit}/>}
   </>);
@@ -1714,9 +1750,8 @@ export default function App(){
   const [customers,setCustomers]=useState([]);
   const [technicians,setTechnicians]=useState([]);
   const [files,setFiles]=useState([]);
-  const [calNotes,setCalNotes]=useState({}); // keyed by date string "YYYY-MM-DD"
+  const [calNotes,setCalNotes]=useState({});
   const [loading,setLoading]=useState({jobs:true,customers:true,technicians:true});
-  const [filesLoading,setFilesLoading]=useState(false);
   const [fileUploading,setFileUploading]=useState(false);
   const [toast,setToast]=useState('');
   const [jobForm,setJobForm]=useState(null);
@@ -1729,147 +1764,127 @@ export default function App(){
     try{
       const [j,c,t,f]=await Promise.all([db.get('jobs'),db.get('customers'),db.get('technicians'),db.get('ref_files')]);
       setJobs(j||[]);setCustomers(c||[]);setTechnicians(t||[]);setFiles(f||[]);
-    }catch(e){msg('⚠️ Could not connect to database.');}
+    }catch{msg('⚠️ Could not connect.');}
     setLoading({jobs:false,customers:false,technicians:false});
   },[msg]);
 
-  // Load calendar notes separately
-  const loadCalNotes = useCallback(async () => {
-    try {
-      const notes = await db.get('calendar_notes');
-      if (Array.isArray(notes)) {
-        const map = {};
-        notes.forEach(n => { map[n.date] = n; });
-        setCalNotes(map);
-      }
-    } catch(e) {
-      // Table may not exist yet — that's fine, notes will be created on first save
-    }
-  }, []);
+  const loadCalNotes=useCallback(async()=>{
+    try{
+      const notes=await db.get('calendar_notes');
+      if(Array.isArray(notes)){const map={};notes.forEach(n=>{map[n.date]=n;});setCalNotes(map);}
+    }catch{}
+  },[]);
 
   useEffect(()=>{load();loadCalNotes();},[load,loadCalNotes]);
 
-  // Save or update a calendar note
-  const saveCalNote = useCallback(async (dateStr, text) => {
-    try {
-      const existing = calNotes[dateStr];
-      if (existing?.id) {
-        // Update
-        await db.update('calendar_notes', existing.id, { note_text: text });
-        setCalNotes(prev => ({
-          ...prev,
-          [dateStr]: { ...existing, note_text: text }
-        }));
-      } else {
-        // Insert
-        const r = await db.insert('calendar_notes', { date: dateStr, note_text: text });
-        const rec = Array.isArray(r) ? r[0] : r;
-        if (rec?.id) {
-          setCalNotes(prev => ({ ...prev, [dateStr]: rec }));
-        }
+  const saveCalNote=useCallback(async(dateStr,text)=>{
+    try{
+      const existing=calNotes[dateStr];
+      if(existing?.id){
+        await db.update('calendar_notes',existing.id,{note_text:text});
+        setCalNotes(prev=>({...prev,[dateStr]:{...existing,note_text:text}}));
+      }else{
+        const r=await db.insert('calendar_notes',{date:dateStr,note_text:text});
+        const rec=Array.isArray(r)?r[0]:r;
+        if(rec?.id) setCalNotes(prev=>({...prev,[dateStr]:rec}));
       }
-    } catch(e) {
-      msg('⚠️ Note save failed. Make sure the calendar_notes table exists in Supabase.');
-    }
-  }, [calNotes, msg]);
+    }catch{msg('⚠️ Note save failed.');}
+  },[calNotes,msg]);
 
-  const addJob=async(f)=>{
-    try{
-      const r=await db.insert('jobs',{job_id:f.job_id,customer:f.customer,equipment:f.equipment,technician:f.technician,status:f.status,priority:f.priority,date:f.date,amount:f.amount,invoice_status:f.invoice_status,notes:f.notes,followup:f.followup||false,followup_date:f.followup_date||null,followup_note:f.followup_note||null});
-      setJobs(p=>[...p,...(Array.isArray(r)?r:[r])]);msg('✅ Job saved!');
-    }catch{msg('⚠️ Save failed.');}
-  };
-
-  const editJob=async(f)=>{
-    try{
-      await db.update('jobs',f.id,{job_id:f.job_id,customer:f.customer,equipment:f.equipment,technician:f.technician,status:f.status,priority:f.priority,date:f.date,amount:f.amount,invoice_status:f.invoice_status,notes:f.notes,followup:f.followup||false,followup_date:f.followup_date||null,followup_note:f.followup_note||null});
-      setJobs(p=>p.map(x=>x.id===f.id?{...x,...f}:x));msg('✅ Updated!');
-    }catch{msg('⚠️ Update failed.');}
-  };
-
+  const addJob=async(f)=>{try{const r=await db.insert('jobs',{job_id:f.job_id,customer:f.customer,equipment:f.equipment,technician:f.technician,status:f.status,priority:f.priority,date:f.date,amount:f.amount,invoice_status:f.invoice_status,notes:f.notes,followup:f.followup||false,followup_date:f.followup_date||null,followup_note:f.followup_note||null});setJobs(p=>[...p,...(Array.isArray(r)?r:[r])]);msg('✅ Job saved!');}catch{msg('⚠️ Save failed.');}};
+  const editJob=async(f)=>{try{await db.update('jobs',f.id,{job_id:f.job_id,customer:f.customer,equipment:f.equipment,technician:f.technician,status:f.status,priority:f.priority,date:f.date,amount:f.amount,invoice_status:f.invoice_status,notes:f.notes,followup:f.followup||false,followup_date:f.followup_date||null,followup_note:f.followup_note||null});setJobs(p=>p.map(x=>x.id===f.id?{...x,...f}:x));msg('✅ Updated!');}catch{msg('⚠️ Update failed.');}};
   const delJob=async(id)=>{if(!window.confirm('Delete this job?'))return;try{await db.delete('jobs',id);setJobs(p=>p.filter(x=>x.id!==id));msg('🗑 Deleted.');}catch{msg('⚠️ Delete failed.');}};
 
   const addCust=async(f)=>{try{const r=await db.insert('customers',{company:f.company,contact:f.contact,phone:f.phone,email:f.email,address:f.address,notes:f.notes});setCustomers(p=>[...p,...(Array.isArray(r)?r:[r])]);msg('✅ Customer saved!');}catch{msg('⚠️ Save failed.');}};
   const editCust=async(f)=>{try{await db.update('customers',f.id,{company:f.company,contact:f.contact,phone:f.phone,email:f.email,address:f.address,notes:f.notes});setCustomers(p=>p.map(x=>x.id===f.id?{...x,...f}:x));msg('✅ Updated!');}catch{msg('⚠️ Update failed.');}};
   const delCust=async(id)=>{if(!window.confirm('Delete?'))return;try{await db.delete('customers',id);setCustomers(p=>p.filter(x=>x.id!==id));msg('🗑 Deleted.');}catch{msg('⚠️ Delete failed.');}};
 
-  const addTech=async(f)=>{try{const r=await db.insert('technicians',{name:f.name,initials:f.initials,email:f.email,phone:f.phone,status:f.status,current_job:f.current_job});setTechnicians(p=>[...p,...(Array.isArray(r)?r:[r])]);msg('✅ Technician saved!');}catch{msg('⚠️ Save failed.');}};
+  const addTech=async(f)=>{try{const r=await db.insert('technicians',{name:f.name,initials:f.initials,email:f.email,phone:f.phone,status:f.status,current_job:f.current_job});setTechnicians(p=>[...p,...(Array.isArray(r)?r:[r])]);msg('✅ Saved!');}catch{msg('⚠️ Save failed.');}};
   const editTech=async(f)=>{try{await db.update('technicians',f.id,{name:f.name,initials:f.initials,email:f.email,phone:f.phone,status:f.status,current_job:f.current_job});setTechnicians(p=>p.map(x=>x.id===f.id?{...x,...f}:x));msg('✅ Updated!');}catch{msg('⚠️ Update failed.');}};
   const delTech=async(id)=>{if(!window.confirm('Delete?'))return;try{await db.delete('technicians',id);setTechnicians(p=>p.filter(x=>x.id!==id));msg('🗑 Deleted.');}catch{msg('⚠️ Delete failed.');}};
 
-  const handleImport = async (toImport, setProgress) => {
-    let count = 0;
-    const newJobs = [];
-    for (const job of toImport) {
-      try {
-        const jobId = 'PDF-' + Date.now().toString().slice(-5) + '-' + Math.floor(Math.random()*100);
-        const r = await db.insert('jobs', {job_id:jobId,customer:job.customer,equipment:job.equipment,technician:'',status:job.status||'Complete',priority:'Normal',date:job.date,amount:null,invoice_status:'Not Invoiced',notes:job.notes,followup:false,followup_date:null,followup_note:null});
-        if (Array.isArray(r)) newJobs.push(...r); else if (r?.id) newJobs.push(r);
-        count++;
-        setProgress(count);
-        await new Promise(res => setTimeout(res, 80));
-      } catch(e) {}
+  const handleImport=async(toImport,setProgress)=>{
+    let count=0;const newJobs=[];
+    for(const job of toImport){
+      try{
+        const jobId='PDF-'+Date.now().toString().slice(-5)+'-'+Math.floor(Math.random()*100);
+        const r=await db.insert('jobs',{job_id:jobId,customer:job.customer,equipment:job.equipment,technician:'',status:job.status||'Complete',priority:'Normal',date:job.date,amount:null,invoice_status:'Not Invoiced',notes:job.notes,followup:false,followup_date:null,followup_note:null});
+        if(Array.isArray(r))newJobs.push(...r);else if(r?.id)newJobs.push(r);
+        count++;setProgress(count);await new Promise(res=>setTimeout(res,80));
+      }catch{}
     }
-    setJobs(p => [...p, ...newJobs]);
-    msg(`✅ Imported ${count} jobs from PDF!`);
+    setJobs(p=>[...p,...newJobs]);msg(`✅ Imported ${count} jobs!`);
   };
 
-  const uploadFiles = async (fileList) => {
+  const uploadFiles=async(fileList)=>{
     setFileUploading(true);
-    try {
-      for (const file of fileList) {
-        const {url, name, size, path} = await storage.uploadFile(file);
-        const r = await db.insert('ref_files', {name, url, size, storage_path: path});
-        const rec = Array.isArray(r) ? r[0] : r;
-        if (rec?.id) setFiles(p=>[...p, rec]);
+    try{
+      for(const file of fileList){
+        const {url,name,size,path}=await storage.uploadFile(file);
+        const r=await db.insert('ref_files',{name,url,size,storage_path:path});
+        const rec=Array.isArray(r)?r[0]:r;
+        if(rec?.id) setFiles(p=>[...p,rec]);
       }
       msg(`✅ ${fileList.length} file${fileList.length>1?'s':''} uploaded!`);
-    } catch(e) { msg('⚠️ Upload failed. Check storage bucket.'); }
+    }catch{msg('⚠️ Upload failed.');}
     setFileUploading(false);
   };
 
-  const deleteFile = async (f) => {
-    if (!window.confirm(`Delete "${f.name}"?`)) return;
-    try {
-      if (f.storage_path) await storage.deleteFile(f.storage_path);
-      await db.delete('ref_files', f.id);
-      setFiles(p=>p.filter(x=>x.id!==f.id));
-      msg('🗑 File deleted.');
-    } catch(e) { msg('⚠️ Delete failed.'); }
+  const deleteFile=async(f)=>{
+    if(!window.confirm(`Delete "${f.name}"?`))return;
+    try{
+      if(f.storage_path)await storage.deleteFile(f.storage_path);
+      await db.delete('ref_files',f.id);
+      setFiles(p=>p.filter(x=>x.id!==f.id));msg('🗑 Deleted.');
+    }catch{msg('⚠️ Delete failed.');}
   };
 
-  const followupCount = jobs.filter(j => j.followup && j.status !== 'Complete' && !isArchived(j)).length;
-  const overdueFollowupCount = jobs.filter(j => j.followup && j.status !== 'Complete' && !isArchived(j) && isFollowupOverdue(j)).length;
-
-  const pages=['Dashboard','Jobs','Follow-ups','Schedule','Customers','Technicians','Files','Archive'];
-  const icons=['▣','◈','📞','◎','◻','◑','◫','◧'];
+  const followupCount=jobs.filter(j=>j.followup&&j.status!=='Complete'&&!isArchived(j)).length;
+  const overdueFollowupCount=jobs.filter(j=>j.followup&&j.status!=='Complete'&&!isArchived(j)&&isFollowupOverdue(j)).length;
   const activeCount=jobs.filter(j=>['In Progress','Dispatched'].includes(j.status)).length;
   const archiveCount=jobs.filter(isArchived).length;
+
   const openMobileJobEdit=(j)=>{setJobForm(j);setShowJobForm(true);};
   const openMobileJobNew=()=>{setJobForm(null);setShowJobForm(true);};
   const saveMobileJob=(f)=>{jobForm?.id?editJob({...f}):addJob({...f});setShowJobForm(false);setJobForm(null);};
 
+  // Bottom nav pages — 5 items max for mobile
+  const bnavItems = [
+    { page:'Dashboard', icon:'▣', label:'Home' },
+    { page:'Jobs',      icon:'◈', label:'Jobs', badge: activeCount },
+    { page:'Follow-ups',icon:'📞',label:'Follow', badge: followupCount, badgeColor: overdueFollowupCount?'var(--rd)':'var(--am)' },
+    { page:'Schedule',  icon:'◎', label:'Schedule' },
+    { page:'Customers', icon:'◻', label:'Clients' },
+  ];
+
   return(<>
     <style>{styles}</style>
     <div className="app">
+      {/* Topbar */}
       <div className="topbar">
-        <div><div className="logo">⊞ AXISCRM</div><div className="logo-sub">CAD·CAM FIELD OPS</div></div>
-        <div style={{flex:1}}/>
+        <div>
+          <div className="logo">⊞ AXISCRM</div>
+          <div className="logo-sub">CAD·CAM FIELD OPS</div>
+        </div>
+        <div className="topbar-spacer"/>
         {overdueFollowupCount > 0 && (
-          <div onClick={()=>setPage('Follow-ups')} style={{display:'flex',alignItems:'center',gap:6,padding:'5px 12px',background:'var(--rdd)',border:'1px solid rgba(255,77,106,0.3)',borderRadius:4,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--rd)'}}>
-            ⚠ {overdueFollowupCount} overdue follow-up{overdueFollowupCount!==1?'s':''}
+          <div onClick={()=>setPage('Follow-ups')} className="topbar-overdue" style={{display:'flex',alignItems:'center',gap:6,padding:'5px 10px',background:'var(--rdd)',border:'1px solid rgba(255,77,106,0.3)',borderRadius:4,cursor:'pointer',fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--rd)',whiteSpace:'nowrap'}}>
+            ⚠ {overdueFollowupCount} overdue
           </div>
         )}
-        <button className="btn bimport" onClick={()=>setShowImport(true)} style={{fontSize:11}}>⬇ Import PDF</button>
-        {page==='Jobs'&&<button className="btn bp" onClick={openMobileJobNew}>+ New Job</button>}
+        <button className="btn bimport desktop-only" onClick={()=>setShowImport(true)} style={{fontSize:11}}>⬇ Import PDF</button>
+        {page==='Jobs'&&<button className="btn bp desktop-only" onClick={openMobileJobNew}>+ New Job</button>}
       </div>
+
       <div className="body">
+        {/* Sidebar (desktop) */}
         <div className="sidebar">
           <div className="nl">Operations</div>
-          {['Dashboard','Jobs'].map((p,i)=><div key={p} className={"ni "+(page===p?'active':'')} onClick={()=>setPage(p)}>{icons[i]} {p}</div>)}
+          <div className={"ni "+(page==='Dashboard'?'active':'')} onClick={()=>setPage('Dashboard')}>▣ Dashboard</div>
+          <div className={"ni "+(page==='Jobs'?'active':'')} onClick={()=>setPage('Jobs')}>◈ Jobs</div>
           <div className={"ni "+(page==='Follow-ups'?'active':'')} onClick={()=>setPage('Follow-ups')} style={{position:'relative'}}>
             📞 Follow-ups
-            {followupCount>0&&<span style={{marginLeft:'auto',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,background:overdueFollowupCount?'var(--rdd)':'var(--sur2)',border:`1px solid ${overdueFollowupCount?'rgba(255,77,106,0.3)':'var(--bdr)'}`,padding:'1px 5px',borderRadius:3,color:overdueFollowupCount?'var(--rd)':'var(--txd)'}}>{followupCount}</span>}
+            {followupCount>0&&<span style={{marginLeft:'auto',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,background:overdueFollowupCount?'var(--rdd)':'var(--sur2)',border:`1px solid ${overdueFollowupCount?'rgba(255,77,106,0.3)':'var(--bdr)'}`,padding:'1px 6px',borderRadius:3,color:overdueFollowupCount?'var(--rd)':'var(--txd)'}}>{followupCount}</span>}
           </div>
           <div className={"ni "+(page==='Schedule'?'active':'')} onClick={()=>setPage('Schedule')}>◎ Schedule</div>
           <div className="nl">Resources</div>
@@ -1879,11 +1894,19 @@ export default function App(){
           <div className="nl">History</div>
           <div className={"ni "+(page==='Archive'?'active':'')} onClick={()=>setPage('Archive')}>
             ◧ Archive
-            {archiveCount>0&&<span style={{marginLeft:'auto',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,background:'var(--sur2)',border:'1px solid var(--bdr)',padding:'1px 5px',borderRadius:3,color:'var(--txd)'}}>{archiveCount}</span>}
+            {archiveCount>0&&<span style={{marginLeft:'auto',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,background:'var(--sur2)',border:'1px solid var(--bdr)',padding:'1px 6px',borderRadius:3,color:'var(--txd)'}}>{archiveCount}</span>}
           </div>
           <div className="sf"><div className="up"><div className="ua">AD</div><div><div style={{fontSize:12,fontWeight:500}}>Admin</div><div style={{fontSize:10,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace"}}>DISPATCH MGR</div></div></div></div>
         </div>
+
+        {/* Main content */}
         <div className="main">
+          {/* Mobile: import + new job buttons at top */}
+          <div className="mobile-only" style={{display:'flex',gap:8,marginBottom:12}}>
+            <button className="btn bimport" style={{flex:1,height:44,fontSize:12}} onClick={()=>setShowImport(true)}>⬇ Import PDF</button>
+            <button className="btn bp" style={{flex:1,height:44,fontSize:12}} onClick={openMobileJobNew}>+ New Job</button>
+          </div>
+
           {page==='Dashboard'&&<>
             <Dashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} calNotes={calNotes}/>
             <MobileDashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/>
@@ -1897,18 +1920,20 @@ export default function App(){
           {page==='Archive'&&<Archive jobs={jobs} onEdit={editJob} onDelete={delJob} loading={loading.jobs}/>}
         </div>
       </div>
+
+      {/* Bottom nav (mobile) */}
       <nav className="bnav">
         <div className="bnav-inner">
-          {['Dashboard','Jobs','Follow-ups','Schedule','Customers'].map((p,i)=>(
-            <div key={p} className={"bnav-item "+(page===p?'active':'')} onClick={()=>setPage(p)}>
-              <div className="bnav-icon">{icons[i]}</div>
-              {p==='Jobs'&&activeCount>0&&<span className="bnav-badge">{activeCount}</span>}
-              {p==='Follow-ups'&&followupCount>0&&<span className="bnav-badge" style={{background:overdueFollowupCount?'var(--rd)':'var(--am)'}}>{followupCount}</span>}
-              <div className="bnav-label">{p==='Follow-ups'?'Follow':p==='Customers'?'Clients':p==='Dashboard'?'Home':p}</div>
+          {bnavItems.map(item=>(
+            <div key={item.page} className={"bnav-item "+(page===item.page?'active':'')} onClick={()=>setPage(item.page)}>
+              <div className="bnav-icon">{item.icon}</div>
+              {item.badge>0&&<span className="bnav-badge" style={item.badgeColor?{background:item.badgeColor}:{}}>{item.badge}</span>}
+              <div className="bnav-label">{item.label}</div>
             </div>
           ))}
         </div>
       </nav>
+
       {showJobForm&&<JobFormModal job={jobForm} customers={customers} technicians={technicians} onSave={saveMobileJob} onClose={()=>{setShowJobForm(false);setJobForm(null);}}/>}
       {showImport&&<ImportModal onClose={()=>setShowImport(false)} onImport={handleImport} existingJobs={jobs}/>}
       <Toast msg={toast}/>
