@@ -210,8 +210,8 @@ const styles = `
     --sw:200px;
     --bnav-h:62px;
   }
-  html,body{background:var(--bg);font-family:'IBM Plex Sans',sans-serif;color:var(--tx);min-height:100vh;-webkit-text-size-adjust:100%;}
-  .app{display:flex;flex-direction:column;min-height:100vh;min-height:100dvh;}
+  html,body{background:var(--bg);font-family:'IBM Plex Sans',sans-serif;color:var(--tx);min-height:100vh;-webkit-text-size-adjust:100%;overflow-x:hidden;max-width:100vw;}
+  .app{display:flex;flex-direction:column;min-height:100vh;min-height:100dvh;overflow-x:hidden;max-width:100vw;}
 
   /* ── Topbar ── */
   .topbar{height:52px;background:var(--sur);border-bottom:1px solid var(--bdr);display:flex;align-items:center;padding:0 16px;gap:8px;position:sticky;top:0;z-index:20;}
@@ -294,8 +294,8 @@ const styles = `
   .st.Archived{background:rgba(90,106,128,0.12);color:#4a5a70;border:1px solid var(--bdr);}
 
   /* ── Modals ── */
-  .mbg{position:fixed;inset:0;background:rgba(0,0,0,0.80);z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;-webkit-overflow-scrolling:touch;}
-  .modal{background:var(--sur);border:1px solid var(--bdr2);border-radius:8px;width:100%;max-width:500px;max-height:90vh;overflow-y:auto;-webkit-overflow-scrolling:touch;}
+  .mbg{position:fixed;inset:0;width:100vw;background:rgba(0,0,0,0.80);z-index:50;display:flex;align-items:center;justify-content:center;padding:16px;-webkit-overflow-scrolling:touch;overflow:hidden;}
+  .modal{background:var(--sur);border:1px solid var(--bdr2);border-radius:8px;width:100%;max-width:500px;max-height:90vh;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;box-sizing:border-box;}
   .mh{padding:14px 18px;border-bottom:1px solid var(--bdr);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:var(--sur);z-index:1;}
   .mt{font-family:'Rajdhani',sans-serif;font-weight:600;font-size:15px;letter-spacing:1px;text-transform:uppercase;}
   .mc{background:none;border:none;color:var(--txd);font-size:24px;cursor:pointer;line-height:1;width:44px;height:44px;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;}
@@ -544,9 +544,36 @@ function Modal({title,onClose,onSave,saveLabel,children}){
 }
 
 // ── Daily Focus Panel ─────────────────────────────────────────────────────────
-function DailyFocusPanel({ jobs, onEditJob }) {
+function DailyFocusPanel({ jobs, onEditJob, calNotes, onSaveNote }) {
   const today = new Date();
+  const todayKey = today.toISOString().split('T')[0];
   const dateStr = today.toLocaleDateString('en-CA', { weekday:'long', month:'short', day:'numeric' });
+
+  const [editingNote, setEditingNote] = useState(false);
+  const [noteText, setNoteText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const taRef = useRef(null);
+
+  // Sync noteText from calNotes whenever it changes externally (e.g. saved via Schedule)
+  useEffect(() => {
+    setNoteText(calNotes[todayKey]?.note_text || '');
+  }, [calNotes, todayKey]);
+
+  const openNote = () => {
+    setNoteText(calNotes[todayKey]?.note_text || '');
+    setEditingNote(true);
+    setSaved(false);
+    setTimeout(() => taRef.current?.focus(), 50);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    await onSaveNote(todayKey, noteText);
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => { setSaved(false); setEditingNote(false); }, 1200);
+  };
 
   const priorityJobs = jobs
     .filter(j => !isArchived(j) && j.status !== 'Complete' && (j.priority === 'Urgent' || j.priority === 'High'))
@@ -560,6 +587,8 @@ function DailyFocusPanel({ jobs, onEditJob }) {
 
   const overdueFollowups = followupJobs.filter(isFollowupOverdue);
   const upcomingFollowups = followupJobs.filter(j => !isFollowupOverdue(j));
+
+  const existingNote = calNotes[todayKey]?.note_text?.trim();
 
   return (
     <div className="focus-panel">
@@ -575,6 +604,46 @@ function DailyFocusPanel({ jobs, onEditJob }) {
           <div style={{marginTop:2}}>{priorityJobs.length} priority</div>
         </div>
       </div>
+
+      {/* Today's Note */}
+      <div style={{borderBottom:'1px solid var(--bdr)',padding:'10px 14px'}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:editingNote?8:existingNote?6:0}}>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:2,textTransform:'uppercase'}}>📝 Today's Note</div>
+          {!editingNote && (
+            <button className="btn bg bs" style={{height:26,fontSize:10}} onClick={openNote}>
+              {existingNote ? '✏️ Edit' : '+ Add Note'}
+            </button>
+          )}
+        </div>
+        {editingNote ? (
+          <div>
+            <textarea
+              ref={taRef}
+              style={{width:'100%',background:'var(--sur2)',border:'1px solid var(--ac)',borderRadius:4,padding:'8px 10px',color:'var(--tx)',fontFamily:"'IBM Plex Sans',sans-serif",fontSize:14,resize:'vertical',minHeight:70,lineHeight:1.6,boxSizing:'border-box'}}
+              value={noteText}
+              onChange={e => { setNoteText(e.target.value); setSaved(false); }}
+              onKeyDown={e => { if((e.ctrlKey||e.metaKey)&&e.key==='Enter') handleSave(); if(e.key==='Escape'){setEditingNote(false);} }}
+              placeholder="What's on for today..."
+            />
+            <div style={{display:'flex',gap:8,marginTop:6,alignItems:'center'}}>
+              {saved && <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--gr)'}}>✓ Saved</span>}
+              <div style={{flex:1}}/>
+              {noteText && <button className="btn bd bs" style={{height:30}} onClick={()=>{setNoteText('');onSaveNote(todayKey,'');}}>Clear</button>}
+              <button className="btn bg bs" style={{height:30}} onClick={()=>setEditingNote(false)}>Cancel</button>
+              <button className="btn bp bs" style={{height:30}} onClick={handleSave} disabled={saving}>
+                {saving?'Saving...':'Save'}
+              </button>
+            </div>
+          </div>
+        ) : existingNote ? (
+          <div onClick={openNote} style={{fontSize:13,color:'var(--tx)',lineHeight:1.6,whiteSpace:'pre-wrap',cursor:'pointer',padding:'6px 8px',borderRadius:4,border:'1px solid var(--bdr)',background:'var(--sur2)',transition:'border-color .15s'}}
+            onMouseEnter={e=>e.currentTarget.style.borderColor='var(--ac)'}
+            onMouseLeave={e=>e.currentTarget.style.borderColor='var(--bdr)'}>
+            {existingNote}
+          </div>
+        ) : null}
+      </div>
+
       <div className="focus-body">
         <div className="focus-col">
           <div className="focus-col-title">🔴 Priority Jobs</div>
@@ -1039,7 +1108,7 @@ function DashCalendar({ jobs, calNotes }) {
   );
 }
 
-function Dashboard({jobs, onEditJob, calNotes}){
+function Dashboard({jobs, onEditJob, calNotes, onSaveNote}){
   const [viewJob,setViewJob]=useState(null);
   const boardJobs=jobs.filter(j=>!(['Invoiced','Paid'].includes(j.invoice_status)));
   const groups=[
@@ -1051,7 +1120,7 @@ function Dashboard({jobs, onEditJob, calNotes}){
   const {width: calWidth, onMouseDown: onDragStart} = useDragResize(260, 180, 480);
 
   return(<>
-    <DailyFocusPanel jobs={jobs} onEditJob={(j)=>{setViewJob(null);onEditJob(j);}}/>
+    <DailyFocusPanel jobs={jobs} onEditJob={(j)=>{setViewJob(null);onEditJob(j);}} calNotes={calNotes} onSaveNote={onSaveNote}/>
     <div style={{display:'flex',gap:0,alignItems:'flex-start'}}>
       <div style={{flex:1,minWidth:0,paddingRight:10}}>
         {groups.map(g=>(
@@ -1908,7 +1977,7 @@ export default function App(){
           </div>
 
           {page==='Dashboard'&&<>
-            <Dashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} calNotes={calNotes}/>
+            <Dashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} calNotes={calNotes} onSaveNote={saveCalNote}/>
             <MobileDashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/>
           </>}
           {page==='Jobs'&&<Jobs jobs={jobs.filter(j=>!isArchived(j))} customers={customers} technicians={technicians} loading={loading.jobs} onAdd={addJob} onEdit={editJob} onDelete={delJob}/>}
