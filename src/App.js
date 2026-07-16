@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from "recharts";
 
 const SUPABASE_URL = "https://untsjmmqtfasejkwjnlf.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVudHNqbW1xdGZhc2Vqa3dqbmxmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM3OTc3NDksImV4cCI6MjA4OTM3Mzc0OX0.dqBbwFHC1tsPEtl9KD_qNUvhGW0H33NFj19h6MFeqAo";
@@ -1652,6 +1653,84 @@ function DiagnosticReportCard({ raw, report, diagnostics, diceCheck, index, onCh
   );
 }
 
+// ── Trend Charts — points of interest plotted across Correction Count ──────────
+// Pulls straight from the already-saved `diagnostics` array on each history
+// row (no re-parsing needed), so this reflects whatever was flagged at save
+// time for each report.
+function extractCheck(diagArr, checkKey) {
+  return (diagArr || []).find(d => d.check === checkKey) || null;
+}
+
+function trendPointsFromHistory(history) {
+  return history
+    .filter(row => row.correction_count != null)
+    .map(row => {
+      const gx = extractCheck(row.diagnostics, 'spindle_gradient_x_collet_wear');
+      const gy = extractCheck(row.diagnostics, 'spindle_gradient_y_sign_flip');
+      const ag = extractCheck(row.diagnostics, 'a_axis_p1_p2_gap');
+      const bg = extractCheck(row.diagnostics, 'b_axis_p1_p2_gap');
+      return {
+        corr: row.correction_count,
+        gradientX: gx ? gx.currentX : null,
+        gradientY: gy ? gy.currentY : null,
+        aGap: ag ? ag.gap : null,
+        bGap: bg ? bg.gap : null,
+      };
+    })
+    .sort((a, b) => a.corr - b.corr);
+}
+
+function TrendChart({ title, data, lines, refLines, yFormat }) {
+  return (
+    <div style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:6,padding:'12px 14px',marginBottom:14}}>
+      <div className="cl" style={{marginBottom:8}}>{title}</div>
+      <div style={{width:'100%',height:190}}>
+        <ResponsiveContainer>
+          <LineChart data={data} margin={{top:5,right:14,left:0,bottom:5}}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#1e2a3a"/>
+            <XAxis dataKey="corr" stroke="#5a6a80" tick={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}} label={{value:'Correction Count',position:'insideBottom',offset:-3,fontSize:9,fill:'#5a6a80'}}/>
+            <YAxis stroke="#5a6a80" tick={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}} tickFormatter={yFormat}/>
+            <Tooltip contentStyle={{background:'#161b24',border:'1px solid #243040',fontSize:11,fontFamily:"IBM Plex Mono, monospace"}} labelFormatter={v=>`Corr ${v}`}/>
+            <Legend wrapperStyle={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}}/>
+            {(refLines||[]).map((rl,i) => <ReferenceLine key={i} y={rl.y} stroke="#ff4d6a" strokeDasharray="4 4" label={{value:rl.label,fontSize:9,fill:'#ff4d6a',position:'right'}}/>)}
+            {lines.map(l => <Line key={l.key} type="monotone" dataKey={l.key} name={l.name} stroke={l.color} dot={{r:3}} connectNulls/>)}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function TrendCharts({ history }) {
+  const points = trendPointsFromHistory(history);
+  if (points.length < 2) {
+    return <div style={{fontSize:11,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",padding:'6px 2px 14px'}}>Need at least 2 saved reports for this serial to plot a trend.</div>;
+  }
+  return (
+    <div style={{marginBottom:4}}>
+      <TrendChart
+        title="Spindle Gradient X / Y"
+        data={points}
+        lines={[{key:'gradientX',color:'#00c8ff',name:'Gradient X'},{key:'gradientY',color:'#ffb020',name:'Gradient Y'}]}
+        refLines={[{y:0.001,label:'X threshold ±0.001'},{y:-0.001}]}
+        yFormat={v=>v.toFixed(4)}
+      />
+      <TrendChart
+        title="A-Axis P1/P2 Y-Gap"
+        data={points}
+        lines={[{key:'aGap',color:'#22d47a',name:'A-axis Y-gap'}]}
+        refLines={[{y:40,label:'threshold 40'}]}
+      />
+      <TrendChart
+        title="B-Axis P1/P2 X-Gap"
+        data={points}
+        lines={[{key:'bGap',color:'#ff4d6a',name:'B-axis X-gap'}]}
+        refLines={[{y:40,label:'threshold 40'}]}
+      />
+    </div>
+  );
+}
+
 function Diagnostics({ msg }) {
   const [reportTexts, setReportTexts] = useState(['']);
   const [diceEntries, setDiceEntries] = useState([emptyDiceEntry('')]);
@@ -1838,6 +1917,7 @@ function Diagnostics({ msg }) {
           </div>
           {historyLoading && <Loading/>}
           {!historyLoading && historyLoaded && history.length === 0 && <div className="empty"><div className="ei">📭</div>No saved reports for this serial yet.</div>}
+          {!historyLoading && history.length > 0 && <TrendCharts history={history}/>}
           {!historyLoading && history.map(row => {
             const flaggedCount = (row.diagnostics||[]).filter(d=>d.flagged).length + (Array.isArray(row.dice) && row.dice.length ? (diagnoseDice3B9B(row.dice[row.dice.length-1])?.flagged?1:0) : 0);
             return (
