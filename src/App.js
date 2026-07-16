@@ -1533,9 +1533,11 @@ function diagnoseReport(r, prev = {}) {
 // 9.11 vs 8.91 (0.20mm, flagged bad) down to 9.05 vs 9.04 / 9.00 vs 9.01
 // (0.01mm, confirmed fine after repair). Default set conservatively at
 // 0.05mm; adjust in the UI if your own data suggests otherwise.
-function diagnoseDice3B9B(dice) {
-  const b3 = dice?.p3b?.bottomWidthY;
-  const b9 = dice?.p9b?.bottomWidthY;
+function diagnoseDice3B9B(diceEntry) {
+  // bottomWidth columns are [1B X, 3B Y, 6B X, 9B Y] — the Y-pair (3B/9B)
+  // is Devon's most trusted physical signal, indices 1 and 3.
+  const b3 = diceEntry?.bottomWidth?.[1];
+  const b9 = diceEntry?.bottomWidth?.[3];
   if (b3 == null || b3 === "" || b9 == null || b9 === "") return null;
   const v3 = parseFloat(b3), v9 = parseFloat(b9);
   if (Number.isNaN(v3) || Number.isNaN(v9)) return null;
@@ -1556,28 +1558,42 @@ const CHECK_INFO = {
 
 
 // ── Diagnostics Tab ────────────────────────────────────────────────────────────
-function DiceInputGrid({ dice, setDice }) {
-  const setVal = (point, field, val) => setDice(d => ({ ...d, [point]: { ...d[point], [field]: val } }));
+const DICE_COLS = {
+  height: ['Pos 1  B', 'Pos 3  A', 'Pos 6  B', 'Pos 9  A'],
+  topWidth: ['1T X', '3T Y', '6T X', '9T Y'],
+  bottomWidth: ['1B X', '3B Y', '6B X', '9B Y'],
+};
+
+function emptyDiceEntry(label) {
+  return { id: Date.now() + Math.random(), label: label || '', height: ['', '', '', ''], topWidth: ['', '', '', ''], bottomWidth: ['', '', '', ''] };
+}
+
+function DiceRunGrid({ label, cols, values, onChange }) {
   return (
-    <div>
-      <div className="diag-dice-grid" style={{marginBottom:6}}>
-        <div/>
-        <div className="cl" style={{textAlign:'center'}}>Top Width Y (mm)</div>
-        <div className="cl" style={{textAlign:'center'}}>Bottom Width Y (mm)</div>
+    <div style={{marginBottom:12}}>
+      <div className="cl" style={{marginBottom:5}}>{label}</div>
+      <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:6}}>
+        {cols.map((c, i) => (
+          <div key={c}>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',marginBottom:3,textAlign:'center'}}>{c}</div>
+            <input className="fi" style={{marginBottom:0,textAlign:'center'}} inputMode="decimal" placeholder="—" value={values[i]} onChange={e => onChange(i, e.target.value)}/>
+          </div>
+        ))}
       </div>
-      <div className="diag-dice-grid" style={{marginBottom:6}}>
-        <div className="cl">Point 3B</div>
-        <input className="fi" style={{marginBottom:0}} inputMode="decimal" placeholder="e.g. 9.05" value={dice.p3b.topWidthY} onChange={e=>setVal('p3b','topWidthY',e.target.value)}/>
-        <input className="fi" style={{marginBottom:0}} inputMode="decimal" placeholder="e.g. 9.05" value={dice.p3b.bottomWidthY} onChange={e=>setVal('p3b','bottomWidthY',e.target.value)}/>
+    </div>
+  );
+}
+
+function DiceEntryCard({ entry, onChangeLabel, onChangeCell, onRemove, removable }) {
+  return (
+    <div className="diag-report-card">
+      <div className="diag-report-head">
+        <input className="fi" style={{marginBottom:0,maxWidth:260}} placeholder="Label (optional — e.g. before repair, after repair)" value={entry.label} onChange={e => onChangeLabel(e.target.value)}/>
+        {removable && <button className="btn bd bs" onClick={onRemove}>🗑</button>}
       </div>
-      <div className="diag-dice-grid">
-        <div className="cl">Point 9B</div>
-        <input className="fi" style={{marginBottom:0}} inputMode="decimal" placeholder="e.g. 9.04" value={dice.p9b.topWidthY} onChange={e=>setVal('p9b','topWidthY',e.target.value)}/>
-        <input className="fi" style={{marginBottom:0}} inputMode="decimal" placeholder="e.g. 9.04" value={dice.p9b.bottomWidthY} onChange={e=>setVal('p9b','bottomWidthY',e.target.value)}/>
-      </div>
-      <div style={{fontSize:10,color:'var(--txd)',marginTop:8,fontFamily:"'IBM Plex Mono',monospace",lineHeight:1.5}}>
-        Bottom Width Y 3B/9B pair is the most reliable physical signal for A-axis/Y-axis origin mismatch — flagged when the gap exceeds 0.05mm (not independently validated; adjust based on your own data).
-      </div>
+      <DiceRunGrid label="Height (mm)" cols={DICE_COLS.height} values={entry.height} onChange={(i, v) => onChangeCell('height', i, v)}/>
+      <DiceRunGrid label="Top Width (mm)" cols={DICE_COLS.topWidth} values={entry.topWidth} onChange={(i, v) => onChangeCell('topWidth', i, v)}/>
+      <DiceRunGrid label="Bottom Width (mm)" cols={DICE_COLS.bottomWidth} values={entry.bottomWidth} onChange={(i, v) => onChangeCell('bottomWidth', i, v)}/>
     </div>
   );
 }
@@ -1638,7 +1654,7 @@ function DiagnosticReportCard({ raw, report, diagnostics, diceCheck, index, onCh
 
 function Diagnostics({ msg }) {
   const [reportTexts, setReportTexts] = useState(['']);
-  const [dice, setDice] = useState({ p3b: { topWidthY: '', bottomWidthY: '' }, p9b: { topWidthY: '', bottomWidthY: '' } });
+  const [diceEntries, setDiceEntries] = useState([emptyDiceEntry('')]);
   const [results, setResults] = useState(null);
   const [saving, setSaving] = useState(false);
   const [historySerial, setHistorySerial] = useState('');
@@ -1649,6 +1665,15 @@ function Diagnostics({ msg }) {
   const addReportBox = () => setReportTexts(t => [...t, '']);
   const removeReportBox = (i) => setReportTexts(t => t.length > 1 ? t.filter((_, idx) => idx !== i) : t);
   const updateReportBox = (i, val) => setReportTexts(t => t.map((x, idx) => idx === i ? val : x));
+
+  const addDiceEntry = () => setDiceEntries(d => [...d, emptyDiceEntry('')]);
+  const removeDiceEntry = (id) => setDiceEntries(d => d.length > 1 ? d.filter(x => x.id !== id) : d);
+  const updateDiceLabel = (id, label) => setDiceEntries(d => d.map(x => x.id === id ? { ...x, label } : x));
+  const updateDiceCell = (id, group, i, val) => setDiceEntries(d => d.map(x => {
+    if (x.id !== id) return x;
+    const arr = [...x[group]]; arr[i] = val;
+    return { ...x, [group]: arr };
+  }));
 
   const runDiagnosis = () => {
     const errors = [];
@@ -1668,6 +1693,7 @@ function Diagnostics({ msg }) {
     }
     pairs.sort((a, b) => (a.parsed.correctionCount ?? Infinity) - (b.parsed.correctionCount ?? Infinity));
     let prevGradientY = null, prevMagOffset = null, prevBaseToolLength = null;
+    const lastDiceEntry = diceEntries[diceEntries.length - 1];
     const perReport = pairs.map(({ raw, parsed: r }, i) => {
       const diag = diagnoseReport(r, { gradientY: prevGradientY, magazineOffset: prevMagOffset, baseToolLength: prevBaseToolLength });
       const grad = r.rac["SPINDLE GRADIENT"];
@@ -1676,7 +1702,7 @@ function Diagnostics({ msg }) {
       if (Array.isArray(mo)) prevMagOffset = mo;
       if (typeof r.rac["BASE TOOL LENGTH"] === "number") prevBaseToolLength = r.rac["BASE TOOL LENGTH"];
       const isLast = i === pairs.length - 1;
-      const diceCheck = isLast ? diagnoseDice3B9B(dice) : null;
+      const diceCheck = isLast ? diagnoseDice3B9B(lastDiceEntry) : null;
       return { raw, report: r, diagnostics: diag, diceCheck };
     });
     setResults({ perReport, errors });
@@ -1696,7 +1722,7 @@ function Diagnostics({ msg }) {
           raw_text: raw,
           parsed: report.sections, // full parsed tree — keys are the real ALL-CAPS report field names
           diagnostics,
-          dice: diceCheck ? dice : null,
+          dice: diceCheck ? diceEntries : null,
         }, 'serial,correction_count');
         ok++;
       } catch { fail++; }
@@ -1756,8 +1782,21 @@ function Diagnostics({ msg }) {
           </div>
 
           <div style={{borderTop:'1px solid var(--bdr)',paddingTop:16,marginBottom:16}}>
-            <div className="detail-label" style={{marginBottom:10}}>DICE Measurement (applies to most recent report by Correction Count)</div>
-            <DiceInputGrid dice={dice} setDice={setDice}/>
+            <div className="detail-label" style={{marginBottom:10}}>DICE Measurement (last run applies to the most recent report by Correction Count)</div>
+            {diceEntries.map(entry => (
+              <DiceEntryCard
+                key={entry.id}
+                entry={entry}
+                onChangeLabel={(label) => updateDiceLabel(entry.id, label)}
+                onChangeCell={(group, i, val) => updateDiceCell(entry.id, group, i, val)}
+                onRemove={() => removeDiceEntry(entry.id)}
+                removable={diceEntries.length > 1}
+              />
+            ))}
+            <button className="btn bg bs" onClick={addDiceEntry}>+ Add DICE Run</button>
+            <div style={{fontSize:10,color:'var(--txd)',marginTop:8,fontFamily:"'IBM Plex Mono',monospace",lineHeight:1.5}}>
+              Bottom Width Y 3B/9B pair is the most reliable physical signal for A-axis/Y-axis origin mismatch — flagged when the gap exceeds 0.05mm (not independently validated; adjust based on your own data).
+            </div>
           </div>
 
           <div style={{display:'flex',gap:8}}>
@@ -1800,7 +1839,7 @@ function Diagnostics({ msg }) {
           {historyLoading && <Loading/>}
           {!historyLoading && historyLoaded && history.length === 0 && <div className="empty"><div className="ei">📭</div>No saved reports for this serial yet.</div>}
           {!historyLoading && history.map(row => {
-            const flaggedCount = (row.diagnostics||[]).filter(d=>d.flagged).length + (row.dice ? (diagnoseDice3B9B(row.dice)?.flagged?1:0) : 0);
+            const flaggedCount = (row.diagnostics||[]).filter(d=>d.flagged).length + (Array.isArray(row.dice) && row.dice.length ? (diagnoseDice3B9B(row.dice[row.dice.length-1])?.flagged?1:0) : 0);
             return (
               <div key={row.id} className="diag-report-card" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10}}>
                 <div>
