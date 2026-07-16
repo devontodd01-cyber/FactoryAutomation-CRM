@@ -1353,6 +1353,11 @@ function parseReportBody(body) {
 }
 
 const DWX_THRESHOLDS = {
+  // Priority order per Devon's diagnostic framework:
+  //   1. Spindle Gradient (X and Y)
+  //   2. Magazine Offset + Base Tool Length drift (ballscrew)
+  //   3. A-axis (P1/P2 gap + ANGLE OFFSET BASE curve shape) — cross-ref DICE
+  //   4. B-axis P1/P2
   priorityOrder: [
     "spindle_gradient_x_collet_wear",
     "spindle_gradient_y_sign_flip",
@@ -1364,13 +1369,15 @@ const DWX_THRESHOLDS = {
   aAxisP1P2YGapMax: 40,
   bAxisP1P2XGapMax: 40,
   magazineBallscrewDriftMax: 40,
-  spindleGradientXColletWearMax: 0.001,
+  spindleGradientXColletWearMax: 0.001, // confirmed via ZDU0527 collet swap (corr167)
 };
 
 const MACHINE_PROFILES = {
   "DWX-52DCi": { thresholds: DWX_THRESHOLDS, thresholdsValidated: true },
   "DWX-52D":   { thresholds: DWX_THRESHOLDS, thresholdsValidated: true },
   "DWX-53DC":  { thresholds: DWX_THRESHOLDS, thresholdsValidated: false },
+  // DWX-51D report format lacks SPINDLE GRADIENT and ANGLE OFFSET (BASE)
+  // tables entirely — those checks just no-op (return null) for this model.
   "DWX-51D":   { thresholds: DWX_THRESHOLDS, thresholdsValidated: false },
 };
 const DEFAULT_PROFILE = { thresholds: DWX_THRESHOLDS, thresholdsValidated: false };
@@ -1393,11 +1400,20 @@ function parseVPanelReport(rawText) {
   };
 }
 
+// ---------- Individual diagnostic checks (real field names) ----------
+
 function yGap(pointObj) {
   const p1 = pointObj.P1, p2 = pointObj.P2;
   if (!Array.isArray(p1) || !Array.isArray(p2) || p1.length < 2 || p2.length < 2) return null;
   return Math.abs(p2[1] - p1[1]);
 }
+// B-axis's designed travel direction is Y (P1/P2 are ~100,000 units apart
+// there by design), so its off-axis deviation check is on X — mirror image
+// of A-axis, whose designed travel is X and off-axis deviation is Y.
+// Confirmed against real KFV2568/ZCF0115 reports: X-gaps came out at
+// 202/126/47 (same order of magnitude as A-axis Y-gaps), where a naive
+// mirrored Y-gap returned ~70,000-100,000 (meaningless — that's just the
+// axis span, not a fault signal).
 function xGap(pointObj) {
   const p1 = pointObj.P1, p2 = pointObj.P2;
   if (!Array.isArray(p1) || !Array.isArray(p2) || p1.length < 1 || p2.length < 1) return null;
@@ -1468,6 +1484,14 @@ function diagnoseMagazineBallscrewDrift(r, previousMagazineOffset, previousBaseT
   return result;
 }
 
+// Heuristic (not independently validated) — counts direction reversals in
+// the A-axis ANGLE OFFSET (BASE) curve as a rough proxy for "erratic,
+// non-monotonic" vs a clean plateau-and-descent shape. Devon's own notes
+// describe comparing curve SHAPE CHANGES ACROSS corrections (e.g. a V-shape
+// flipping to an inverted-V between reports) as the real signal on unsettled
+// post-repair machines — a single-curve reversal count won't catch that
+// cross-report pattern. Treat this as a hint, always cross-reference with
+// DICE 3B/9B and, where possible, the previous report's curve shape.
 function diagnoseAAxisAngleOffsetCurve(r) {
   const a = r.rac["A-AXIS"];
   const curve = a && a["ANGLE OFFSET (BASE)"];
@@ -1504,7 +1528,15 @@ function diagnoseReport(r, prev = {}) {
   return results;
 }
 
+// DICE 3B/9B Bottom Width Y-pair — Devon's most trusted physical signal for
+// A-axis / Y-axis origin mismatch (error fully expressed at full-depth
+// engagement). Threshold is NOT independently validated — examples seen:
+// 9.11 vs 8.91 (0.20mm, flagged bad) down to 9.05 vs 9.04 / 9.00 vs 9.01
+// (0.01mm, confirmed fine after repair). Default set conservatively at
+// 0.05mm; adjust in the UI if your own data suggests otherwise.
 function diagnoseDice3B9B(diceEntry) {
+  // bottomWidth columns are [1B X, 3B Y, 6B X, 9B Y] — the Y-pair (3B/9B)
+  // is Devon's most trusted physical signal, indices 1 and 3.
   const b3 = diceEntry?.bottomWidth?.[1];
   const b9 = diceEntry?.bottomWidth?.[3];
   if (b3 == null || b3 === "" || b9 == null || b9 === "") return null;
@@ -1525,6 +1557,8 @@ const CHECK_INFO = {
   dice_3b_9b_bottom_width: { label: "DICE 3B/9B Bottom Width Y-Pair", cause: "Most reliable physical signal for A-axis/Y-axis origin mismatch — the error is only fully expressed at full-depth engagement.", action: "If elevated alongside a flagged A-axis gap, proceed toward an A-axis rebuild." },
 };
 
+
+// ── Diagnostics Tab ────────────────────────────────────────────────────────────
 const DICE_COLS = {
   height: ['Pos 1  B', 'Pos 3  A', 'Pos 6  B', 'Pos 9  A'],
   topWidth: ['1T X', '3T Y', '6T X', '9T Y'],
@@ -1619,6 +1653,10 @@ function DiagnosticReportCard({ raw, report, diagnostics, diceCheck, index, onCh
   );
 }
 
+// ── Trend Charts — points of interest plotted across Correction Count ──────────
+// Pulls straight from the already-saved `diagnostics` array on each history
+// row (no re-parsing needed), so this reflects whatever was flagged at save
+// time for each report.
 function extractCheck(diagArr, checkKey) {
   return (diagArr || []).find(d => d.check === checkKey) || null;
 }
@@ -1721,7 +1759,7 @@ function Diagnostics({ msg }) {
     const pairs = [];
     reportTexts.forEach((raw, idx) => {
       if (!raw.trim()) return;
-      const chunks = splitReports(raw);
+      const chunks = splitReports(raw); // handles a single box holding several concatenated reports
       chunks.forEach((chunk, ci) => {
         try { pairs.push({ raw: chunk, parsed: parseVPanelReport(chunk) }); }
         catch (e) { errors.push({ index: idx, error: chunks.length > 1 ? `(report ${ci + 1} in box ${idx + 1}) ${e.message}` : e.message }); }
@@ -1761,7 +1799,7 @@ function Diagnostics({ msg }) {
           serial: report.serial,
           correction_count: report.correctionCount,
           raw_text: raw,
-          parsed: report.sections,
+          parsed: report.sections, // full parsed tree — keys are the real ALL-CAPS report field names
           diagnostics,
           dice: diceCheck ? diceEntries : null,
         }, 'serial,correction_count');
@@ -1912,7 +1950,7 @@ export default function App(){
   const [jobForm,setJobForm]=useState(null);
   const [showJobForm,setShowJobForm]=useState(false);
   const [showImport,setShowImport]=useState(false);
-  const [showVoiceLog,setShowVoiceLog]=useState(false);
+  const [showVoiceLog,setShowVoiceLog]=useState(false); // ← NEW
 
   const msg=useCallback((m)=>{setToast(m);setTimeout(()=>setToast(''),2500);},[]);
 
@@ -1953,6 +1991,7 @@ export default function App(){
   const openMobileJobNew=()=>{setJobForm(null);setShowJobForm(true);};
   const saveMobileJob=(f)=>{jobForm?.id?editJob({...f}):addJob({...f});setShowJobForm(false);setJobForm(null);};
 
+  // Voice log job created callback — reload jobs
   const handleVoiceJobCreated = useCallback(() => {
     setTimeout(() => load(), 1500);
     msg('🎙 Voice log processed!');
@@ -1969,6 +2008,7 @@ export default function App(){
   return(<>
     <style>{styles}</style>
     <div className="app">
+      {/* Topbar */}
       <div className="topbar">
         <div><div className="logo">⊞ AXISCRM</div><div className="logo-sub">CAD·CAM FIELD OPS</div></div>
         <div className="topbar-spacer"/>
@@ -1977,6 +2017,7 @@ export default function App(){
             ⚠ {overdueFollowupCount} overdue
           </div>
         )}
+        {/* ── Voice Log Button ── */}
         <button
           onClick={()=>setShowVoiceLog(true)}
           title="Voice Log"
@@ -1989,6 +2030,7 @@ export default function App(){
       </div>
 
       <div className="body">
+        {/* Sidebar */}
         <div className="sidebar">
           <div className="nl">Operations</div>
           <div className={"ni "+(page==='Dashboard'?'active':'')} onClick={()=>setPage('Dashboard')}>▣ Dashboard</div>
@@ -2003,10 +2045,12 @@ export default function App(){
           <div className={"ni "+(page==='Diagnostics'?'active':'')} onClick={()=>setPage('Diagnostics')} style={{color:page==='Diagnostics'?undefined:'var(--ac)'}}>🩺 Mill Diagnostics</div>
           <div className="nl">History</div>
           <div className={"ni "+(page==='Archive'?'active':'')} onClick={()=>setPage('Archive')}>◧ Archive{archiveCount>0&&<span style={{marginLeft:'auto',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,background:'var(--sur2)',border:'1px solid var(--bdr)',padding:'1px 6px',borderRadius:3,color:'var(--txd)'}}>{archiveCount}</span>}</div>
+          {/* Voice Log in sidebar */}
           <div className="ni" onClick={()=>setShowVoiceLog(true)} style={{color:'var(--ac)',borderLeft:'2px solid rgba(0,200,255,0.3)',marginTop:8}}>🎙 Voice Log</div>
           <div className="sf"><div className="up"><div className="ua">AD</div><div><div style={{fontSize:12,fontWeight:500}}>Admin</div><div style={{fontSize:10,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace"}}>DISPATCH MGR</div></div></div></div>
         </div>
 
+        {/* Main content */}
         <div className="main">
           <div className="mobile-only" style={{display:'flex',gap:8,marginBottom:12}}>
             <button className="btn bimport" style={{flex:1,height:44,fontSize:12}} onClick={()=>setShowImport(true)}>⬇ Import</button>
@@ -2025,6 +2069,7 @@ export default function App(){
         </div>
       </div>
 
+      {/* Bottom nav */}
       <nav className="bnav">
         <div className="bnav-inner">
           {bnavItems.map(item=>(
@@ -2034,6 +2079,7 @@ export default function App(){
               <div className="bnav-label">{item.label}</div>
             </div>
           ))}
+          {/* Voice Log in bottom nav */}
           <div className="bnav-item" onClick={()=>setShowVoiceLog(true)}>
             <div className="bnav-icon" style={{filter:'drop-shadow(0 0 4px rgba(0,200,255,0.5))'}}>🎙</div>
             <div className="bnav-label" style={{color:'var(--ac)'}}>Voice</div>
@@ -2044,6 +2090,7 @@ export default function App(){
       {showJobForm&&<JobFormModal job={jobForm} customers={customers} technicians={technicians} onSave={saveMobileJob} onClose={()=>{setShowJobForm(false);setJobForm(null);}}/>}
       {showImport&&<ImportModal onClose={()=>setShowImport(false)} onImport={handleImport} existingJobs={jobs}/>}
 
+      {/* Voice Log Modal */}
       {showVoiceLog&&<VoiceLog onClose={()=>setShowVoiceLog(false)} onJobCreated={handleVoiceJobCreated}/>}
 
       <Toast msg={toast}/>
