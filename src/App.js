@@ -436,6 +436,23 @@ const styles = `
   .vl-divider{display:flex;align-items:center;gap:10px;margin:12px 0;color:var(--txd);font-family:'IBM Plex Mono',monospace;font-size:9px;letter-spacing:2px;}
   .vl-divider::before,.vl-divider::after{content:'';flex:1;height:1px;background:var(--bdr);}
 
+  /* ── Diagnostics Panel ── */
+  .diag-report-card{background:var(--sur2);border:1px solid var(--bdr);border-radius:6px;padding:12px;margin-bottom:10px;}
+  .diag-report-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;}
+  .diag-ta{width:100%;background:var(--sur3);border:1px solid var(--bdr);border-radius:4px;padding:10px 12px;color:var(--tx);font-family:'IBM Plex Mono',monospace;font-size:11px;resize:vertical;min-height:120px;line-height:1.5;}
+  .diag-ta:focus{outline:none;border-color:var(--ac);}
+  .diag-meta{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px;font-family:'IBM Plex Mono',monospace;font-size:10px;color:var(--txd);}
+  .diag-flag{border-radius:6px;padding:10px 12px;margin-bottom:8px;border:1px solid;}
+  .diag-flag.bad{background:var(--rdd);border-color:rgba(255,77,106,0.35);}
+  .diag-flag.ok{background:var(--grd);border-color:rgba(34,212,122,0.3);}
+  .diag-flag.info{background:var(--sur2);border-color:var(--bdr);}
+  .diag-flag-title{font-family:'Rajdhani',sans-serif;font-weight:700;font-size:13px;letter-spacing:.5px;margin-bottom:3px;}
+  .diag-flag.bad .diag-flag-title{color:var(--rd);}
+  .diag-flag.ok .diag-flag-title{color:var(--gr);}
+  .diag-flag-desc{font-size:12px;color:var(--tx);line-height:1.5;margin-bottom:4px;}
+  .diag-flag-action{font-size:11px;color:var(--txm);font-style:italic;}
+  .diag-dice-grid{display:grid;grid-template-columns:100px repeat(2,1fr);gap:8px;align-items:center;}
+
   /* ── RESPONSIVE ── */
   @media(max-width:900px){
     .kgrid{grid-template-columns:repeat(2,1fr);}
@@ -1235,6 +1252,571 @@ function Archive({jobs,onEdit,onDelete,loading}){
   </>);
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// VPanel Report Parser — matches the REAL raw report format (confirmed
+// against actual exports from DWX-51D/52D/52DCi). This is NOT YAML:
+// section headers have no colon, leaf fields do ("KEY: value"), and values
+// are bare comma-separated numbers for coordinate triplets / offset tables.
+// ════════════════════════════════════════════════════════════════════════════
+
+function extractSystemReportBlock(rawText) {
+  const startTok = "<< SYSTEM REPORT >>";
+  const s = rawText.indexOf(startTok);
+  if (s === -1) throw new Error('No "<< SYSTEM REPORT >>" marker found in this text.');
+  const afterStart = s + startTok.length;
+  const endTok = "<< END >>";
+  const e = rawText.indexOf(endTok, afterStart);
+  return rawText.slice(afterStart, e === -1 ? undefined : e);
+}
+
+// Splits a pasted blob that may contain several concatenated reports (and/or
+// trailing "<< SERVICE TOOL INFORMATION >>" blocks) into one chunk per
+// "<< SYSTEM REPORT >> ... << END >>". Used to auto-split multi-report pastes.
+function splitReports(rawText) {
+  const startTok = "<< SYSTEM REPORT >>";
+  const indices = [];
+  let idx = rawText.indexOf(startTok);
+  while (idx !== -1) {
+    indices.push(idx);
+    idx = rawText.indexOf(startTok, idx + startTok.length);
+  }
+  if (indices.length <= 1) return [rawText];
+  const chunks = [];
+  for (let i = 0; i < indices.length; i++) {
+    const start = indices[i];
+    const stop = i + 1 < indices.length ? indices[i + 1] : rawText.length;
+    chunks.push(rawText.slice(start, stop));
+  }
+  return chunks;
+}
+
+function parseFieldValue(raw) {
+  const v = raw.trim();
+  if (v === "") return "";
+  if (v.includes(",")) {
+    const parts = v.split(",").map((p) => p.trim());
+    if (parts.every((p) => /^-?\d+(\.\d+)?$/.test(p))) return parts.map((p) => parseFloat(p));
+    return v;
+  }
+  if (/^-?\d+(\.\d+)?$/.test(v)) return parseFloat(v);
+  return v;
+}
+
+// Indentation-tree parser for a single extracted report body. Section
+// headers (no colon, or "KEY:" with nothing after it) become nested
+// objects; "KEY: value" lines become leaves. Continuation lines with an
+// empty key (FATAL ERROR LOG's "     : 102E, 0000" rows) get folded into
+// an array under the most recently-set key at that indent level.
+function parseReportBody(body) {
+  const lines = body.split("\n").map((l) => l.replace(/\r$/, "")).filter((l) => l.trim() !== "");
+  const root = {};
+  const stack = [{ indent: -1, obj: root, lastKey: null }];
+
+  for (const line of lines) {
+    const indent = line.length - line.trimStart().length;
+    const trimmed = line.trim();
+    while (stack.length > 1 && indent <= stack[stack.length - 1].indent) stack.pop();
+    const parent = stack[stack.length - 1];
+
+    const colonIdx = trimmed.indexOf(":");
+    const key = colonIdx === -1 ? trimmed : trimmed.slice(0, colonIdx).trim();
+    const valuePart = colonIdx === -1 ? "" : trimmed.slice(colonIdx + 1).trim();
+
+    if (key === "" && colonIdx !== -1) {
+      const lastKey = parent.lastKey;
+      if (lastKey != null) {
+        const existing = parent.obj[lastKey];
+        const entry = parseFieldValue(valuePart);
+        if (Array.isArray(existing) && existing._isLogList) {
+          existing.push(entry);
+        } else {
+          const list = [existing, entry];
+          list._isLogList = true;
+          parent.obj[lastKey] = list;
+        }
+      }
+      continue;
+    }
+
+    if (colonIdx === -1 || valuePart === "") {
+      const child = {};
+      parent.obj[key] = child;
+      parent.lastKey = key;
+      stack.push({ indent, obj: child, lastKey: null });
+    } else {
+      parent.obj[key] = parseFieldValue(valuePart);
+      parent.lastKey = key;
+    }
+  }
+  return root;
+}
+
+const DWX_THRESHOLDS = {
+  // Priority order per Devon's diagnostic framework:
+  //   1. Spindle Gradient (X and Y)
+  //   2. Magazine Offset + Base Tool Length drift (ballscrew)
+  //   3. A-axis (P1/P2 gap + ANGLE OFFSET BASE curve shape) — cross-ref DICE
+  //   4. B-axis P1/P2
+  priorityOrder: [
+    "spindle_gradient_x_collet_wear",
+    "spindle_gradient_y_sign_flip",
+    "magazine_offset_base_tool_length_drift",
+    "a_axis_angle_offset_curve",
+    "a_axis_p1_p2_gap",
+    "b_axis_p1_p2_gap",
+  ],
+  aAxisP1P2YGapMax: 40,
+  bAxisP1P2XGapMax: 40,
+  magazineBallscrewDriftMax: 40,
+  spindleGradientXColletWearMax: 0.001, // confirmed via ZDU0527 collet swap (corr167)
+};
+
+const MACHINE_PROFILES = {
+  "DWX-52DCi": { thresholds: DWX_THRESHOLDS, thresholdsValidated: true },
+  "DWX-52D":   { thresholds: DWX_THRESHOLDS, thresholdsValidated: true },
+  "DWX-53DC":  { thresholds: DWX_THRESHOLDS, thresholdsValidated: false },
+  // DWX-51D report format lacks SPINDLE GRADIENT and ANGLE OFFSET (BASE)
+  // tables entirely — those checks just no-op (return null) for this model.
+  "DWX-51D":   { thresholds: DWX_THRESHOLDS, thresholdsValidated: false },
+};
+const DEFAULT_PROFILE = { thresholds: DWX_THRESHOLDS, thresholdsValidated: false };
+function getProfile(model) { return MACHINE_PROFILES[model] || DEFAULT_PROFILE; }
+
+function parseVPanelReport(rawText) {
+  const text = (rawText || "").trim();
+  if (!text) throw new Error("Empty report text");
+  const block = extractSystemReportBlock(text);
+  const sections = parseReportBody(block);
+  const model = sections.MODEL || null;
+  const serial = sections["SERIAL NUMBER"] || null;
+  const profile = getProfile(model);
+  const rac = sections["ROTARY AXIS CORRECTION"] || {};
+  const atc = sections["AUTOMATIC TOOL CHANGER"] || {};
+  return {
+    model, serial, profile, sections, rac, atc,
+    correctionCount: typeof rac["CORRECTION COUNT"] === "number" ? rac["CORRECTION COUNT"] : null,
+    archiveKey: `${model || "UNKNOWN_MODEL"}_${serial || "UNKNOWN_SERIAL"}`,
+  };
+}
+
+// ---------- Individual diagnostic checks (real field names) ----------
+
+function yGap(pointObj) {
+  const p1 = pointObj.P1, p2 = pointObj.P2;
+  if (!Array.isArray(p1) || !Array.isArray(p2) || p1.length < 2 || p2.length < 2) return null;
+  return Math.abs(p2[1] - p1[1]);
+}
+// B-axis's designed travel direction is Y (P1/P2 are ~100,000 units apart
+// there by design), so its off-axis deviation check is on X — mirror image
+// of A-axis, whose designed travel is X and off-axis deviation is Y.
+// Confirmed against real KFV2568/ZCF0115 reports: X-gaps came out at
+// 202/126/47 (same order of magnitude as A-axis Y-gaps), where a naive
+// mirrored Y-gap returned ~70,000-100,000 (meaningless — that's just the
+// axis span, not a fault signal).
+function xGap(pointObj) {
+  const p1 = pointObj.P1, p2 = pointObj.P2;
+  if (!Array.isArray(p1) || !Array.isArray(p2) || p1.length < 1 || p2.length < 1) return null;
+  return Math.abs(p2[0] - p1[0]);
+}
+
+function diagnoseAAxisGap(r) {
+  const a = r.rac["A-AXIS"];
+  if (!a) return null;
+  const gap = yGap(a);
+  if (gap == null) return null;
+  const threshold = r.profile.thresholds.aAxisP1P2YGapMax;
+  return { check: "a_axis_p1_p2_gap", gap, threshold, flagged: gap > threshold, thresholdsValidatedForModel: r.profile.thresholdsValidated };
+}
+
+function diagnoseBAxisGap(r) {
+  const b = r.rac["B-AXIS"];
+  if (!b) return null;
+  const gap = xGap(b);
+  if (gap == null) return null;
+  const threshold = r.profile.thresholds.bAxisP1P2XGapMax;
+  return { check: "b_axis_p1_p2_gap", gap, threshold, flagged: gap > threshold, thresholdsValidatedForModel: r.profile.thresholdsValidated };
+}
+
+function diagnoseSpindleGradientY(r, previousGradientY) {
+  const grad = r.rac["SPINDLE GRADIENT"];
+  if (!grad || typeof grad.Y !== "number") return null;
+  const y = grad.Y;
+  const result = { check: "spindle_gradient_y_sign_flip", currentY: y, previousY: previousGradientY ?? null, flagged: false, thresholdsValidatedForModel: r.profile.thresholdsValidated };
+  if (previousGradientY != null) result.flagged = (y > 0) !== (previousGradientY > 0);
+  return result;
+}
+
+function diagnoseSpindleGradientX(r) {
+  const grad = r.rac["SPINDLE GRADIENT"];
+  if (!grad || typeof grad.X !== "number") return null;
+  const x = grad.X;
+  const threshold = r.profile.thresholds.spindleGradientXColletWearMax;
+  return { check: "spindle_gradient_x_collet_wear", currentX: x, threshold, flagged: Math.abs(x) > threshold, thresholdsValidatedForModel: r.profile.thresholdsValidated };
+}
+
+function diagnoseMagazineBallscrewDrift(r, previousMagazineOffset, previousBaseToolLength) {
+  const currentBaseToolLength = r.rac["BASE TOOL LENGTH"];
+  const currentMagazineOffset = r.atc["MAGAZINE POSITION OFFSET"];
+  if (typeof currentBaseToolLength !== "number" || !Array.isArray(currentMagazineOffset)) return null;
+  const threshold = r.profile.thresholds.magazineBallscrewDriftMax;
+  const result = {
+    check: "magazine_offset_base_tool_length_drift",
+    currentBaseToolLength, currentMagazineOffset,
+    previousBaseToolLength: previousBaseToolLength ?? null,
+    previousMagazineOffset: previousMagazineOffset ?? null,
+    threshold, flagged: false,
+    thresholdsValidatedForModel: r.profile.thresholdsValidated,
+  };
+  if (previousBaseToolLength == null || previousMagazineOffset == null) return result;
+  const baseToolLengthDelta = currentBaseToolLength - previousBaseToolLength;
+  const axisNames = ["x", "y", "z"];
+  const magazineOffsetDelta = {};
+  currentMagazineOffset.forEach((v, i) => { magazineOffsetDelta[axisNames[i] || i] = v - (previousMagazineOffset[i] ?? v); });
+  result.baseToolLengthDelta = baseToolLengthDelta;
+  result.magazineOffsetDelta = magazineOffsetDelta;
+  if (Math.abs(baseToolLengthDelta) > threshold) {
+    const btSign = baseToolLengthDelta > 0;
+    for (const [axis, delta] of Object.entries(magazineOffsetDelta)) {
+      if (Math.abs(delta) > threshold && (delta > 0) === btSign) { result.flagged = true; result.flaggedAxis = axis; break; }
+    }
+  }
+  return result;
+}
+
+// Heuristic (not independently validated) — counts direction reversals in
+// the A-axis ANGLE OFFSET (BASE) curve as a rough proxy for "erratic,
+// non-monotonic" vs a clean plateau-and-descent shape. Devon's own notes
+// describe comparing curve SHAPE CHANGES ACROSS corrections (e.g. a V-shape
+// flipping to an inverted-V between reports) as the real signal on unsettled
+// post-repair machines — a single-curve reversal count won't catch that
+// cross-report pattern. Treat this as a hint, always cross-reference with
+// DICE 3B/9B and, where possible, the previous report's curve shape.
+function diagnoseAAxisAngleOffsetCurve(r) {
+  const a = r.rac["A-AXIS"];
+  const curve = a && a["ANGLE OFFSET (BASE)"];
+  if (!Array.isArray(curve) || curve.length < 3) return null;
+  let reversals = 0, lastSign = null;
+  for (let i = 1; i < curve.length; i++) {
+    const d = curve[i] - curve[i - 1];
+    if (d === 0) continue;
+    const sign = d > 0;
+    if (lastSign !== null && sign !== lastSign) reversals++;
+    lastSign = sign;
+  }
+  return { check: "a_axis_angle_offset_curve", curve, reversals, flagged: reversals >= 2, thresholdsValidatedForModel: r.profile.thresholdsValidated };
+}
+
+const DIAGNOSTIC_CHECKS = {
+  spindle_gradient_x_collet_wear: (r) => diagnoseSpindleGradientX(r),
+  spindle_gradient_y_sign_flip: (r, prev) => diagnoseSpindleGradientY(r, prev.gradientY),
+  magazine_offset_base_tool_length_drift: (r, prev) => diagnoseMagazineBallscrewDrift(r, prev.magazineOffset, prev.baseToolLength),
+  a_axis_angle_offset_curve: (r) => diagnoseAAxisAngleOffsetCurve(r),
+  a_axis_p1_p2_gap: (r) => diagnoseAAxisGap(r),
+  b_axis_p1_p2_gap: (r) => diagnoseBAxisGap(r),
+};
+
+function diagnoseReport(r, prev = {}) {
+  const order = r.profile.thresholds.priorityOrder;
+  const results = [];
+  for (const name of order) {
+    const fn = DIAGNOSTIC_CHECKS[name];
+    if (!fn) continue;
+    const out = fn(r, prev);
+    if (out) results.push(out);
+  }
+  return results;
+}
+
+// DICE 3B/9B Bottom Width Y-pair — Devon's most trusted physical signal for
+// A-axis / Y-axis origin mismatch (error fully expressed at full-depth
+// engagement). Threshold is NOT independently validated — examples seen:
+// 9.11 vs 8.91 (0.20mm, flagged bad) down to 9.05 vs 9.04 / 9.00 vs 9.01
+// (0.01mm, confirmed fine after repair). Default set conservatively at
+// 0.05mm; adjust in the UI if your own data suggests otherwise.
+function diagnoseDice3B9B(dice) {
+  const b3 = dice?.p3b?.bottomWidthY;
+  const b9 = dice?.p9b?.bottomWidthY;
+  if (b3 == null || b3 === "" || b9 == null || b9 === "") return null;
+  const v3 = parseFloat(b3), v9 = parseFloat(b9);
+  if (Number.isNaN(v3) || Number.isNaN(v9)) return null;
+  const gap = Math.abs(v3 - v9);
+  const threshold = 0.05;
+  return { check: "dice_3b_9b_bottom_width", v3, v9, gap, threshold, flagged: gap > threshold, thresholdNotValidated: true };
+}
+
+const CHECK_INFO = {
+  spindle_gradient_x_collet_wear: { label: "Spindle Gradient X", cause: "Magnitude above 0.001 indicates collet wear.", action: "Swap the collet." },
+  spindle_gradient_y_sign_flip: { label: "Spindle Gradient Y Sign-Flip", cause: "Sign alternates vs. the previous report — inconsistent calibration-pin seating (collet wear or spindle bore issue, not progressive drift).", action: "Clean/hone the spindle bore, or swap the collet." },
+  magazine_offset_base_tool_length_drift: { label: "Magazine Offset / Base Tool Length Drift", cause: "ATC magazine offset and base tool length are moving together past threshold — possible ballscrew fault/backlash.", action: "Inspect the ballscrew for backlash or wear." },
+  a_axis_angle_offset_curve: { label: "A-Axis Angle Offset Curve", cause: "Erratic, non-monotonic offset curve — possible A-axis gear backlash/looseness (heuristic — confirm visually and with DICE).", action: "Physically inspect the A-axis gear assembly for feelable loose points." },
+  a_axis_p1_p2_gap: { label: "A-Axis P1/P2 Y-Gap", cause: "Not a reliable standalone indicator on its own — cross-reference with DICE 3B/9B Bottom Width before acting.", action: "Confirm with a DICE measurement before doing any repair." },
+  b_axis_p1_p2_gap: { label: "B-Axis P1/P2 X-Gap", cause: "Elevated off-axis deviation on the B-axis (mirrors A-axis's Y-gap check — B's designed travel is Y, so its deviation check is on X).", action: "Inspect the B-axis for backlash." },
+  dice_3b_9b_bottom_width: { label: "DICE 3B/9B Bottom Width Y-Pair", cause: "Most reliable physical signal for A-axis/Y-axis origin mismatch — the error is only fully expressed at full-depth engagement.", action: "If elevated alongside a flagged A-axis gap, proceed toward an A-axis rebuild." },
+};
+
+
+// ── Diagnostics Tab ────────────────────────────────────────────────────────────
+function DiceInputGrid({ dice, setDice }) {
+  const setVal = (point, field, val) => setDice(d => ({ ...d, [point]: { ...d[point], [field]: val } }));
+  return (
+    <div>
+      <div className="diag-dice-grid" style={{marginBottom:6}}>
+        <div/>
+        <div className="cl" style={{textAlign:'center'}}>Top Width Y (mm)</div>
+        <div className="cl" style={{textAlign:'center'}}>Bottom Width Y (mm)</div>
+      </div>
+      <div className="diag-dice-grid" style={{marginBottom:6}}>
+        <div className="cl">Point 3B</div>
+        <input className="fi" style={{marginBottom:0}} inputMode="decimal" placeholder="e.g. 9.05" value={dice.p3b.topWidthY} onChange={e=>setVal('p3b','topWidthY',e.target.value)}/>
+        <input className="fi" style={{marginBottom:0}} inputMode="decimal" placeholder="e.g. 9.05" value={dice.p3b.bottomWidthY} onChange={e=>setVal('p3b','bottomWidthY',e.target.value)}/>
+      </div>
+      <div className="diag-dice-grid">
+        <div className="cl">Point 9B</div>
+        <input className="fi" style={{marginBottom:0}} inputMode="decimal" placeholder="e.g. 9.04" value={dice.p9b.topWidthY} onChange={e=>setVal('p9b','topWidthY',e.target.value)}/>
+        <input className="fi" style={{marginBottom:0}} inputMode="decimal" placeholder="e.g. 9.04" value={dice.p9b.bottomWidthY} onChange={e=>setVal('p9b','bottomWidthY',e.target.value)}/>
+      </div>
+      <div style={{fontSize:10,color:'var(--txd)',marginTop:8,fontFamily:"'IBM Plex Mono',monospace",lineHeight:1.5}}>
+        Bottom Width Y 3B/9B pair is the most reliable physical signal for A-axis/Y-axis origin mismatch — flagged when the gap exceeds 0.05mm (not independently validated; adjust based on your own data).
+      </div>
+    </div>
+  );
+}
+
+function DiagFlagCard({ checkKey, data }) {
+  const info = CHECK_INFO[checkKey] || { label: checkKey, cause: '', action: '' };
+  const cls = data.flagged ? 'bad' : 'ok';
+  return (
+    <div className={`diag-flag ${cls}`}>
+      <div className="diag-flag-title">{data.flagged ? '⚠ ' : '✓ '}{info.label}{!data.thresholdsValidatedForModel && <span style={{color:'var(--txd)',fontWeight:400,fontSize:10,marginLeft:6}}>(unvalidated for this model)</span>}</div>
+      <div className="diag-flag-desc">{info.cause}</div>
+      {data.flagged && info.action && <div className="diag-flag-action">→ {info.action}</div>}
+      <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',marginTop:6}}>
+        {checkKey === 'spindle_gradient_x_collet_wear' && <>X: {data.currentX} (threshold ±{data.threshold})</>}
+        {checkKey === 'spindle_gradient_y_sign_flip' && <>current Y: {data.currentY}{data.previousY!=null && <>, previous Y: {data.previousY}</>}</>}
+        {checkKey === 'magazine_offset_base_tool_length_drift' && <>BaseToolLength Δ: {data.baseToolLengthDelta ?? '—'} {data.flaggedAxis && <>· offset axis "{data.flaggedAxis}" moved together</>}</>}
+        {checkKey === 'a_axis_angle_offset_curve' && <>curve: [{(data.curve||[]).join(', ')}] · {data.reversals} direction reversal{data.reversals===1?'':'s'}</>}
+        {checkKey === 'a_axis_p1_p2_gap' && <>gap: {data.gap} (threshold {data.threshold})</>}
+        {checkKey === 'b_axis_p1_p2_gap' && <>gap: {data.gap} (threshold {data.threshold})</>}
+        {checkKey === 'dice_3b_9b_bottom_width' && <>3B: {data.v3}mm · 9B: {data.v9}mm · gap: {data.gap.toFixed(3)}mm (threshold {data.threshold}mm{data.thresholdNotValidated?', not validated':''})</>}
+      </div>
+    </div>
+  );
+}
+
+function DiagnosticReportCard({ raw, report, diagnostics, diceCheck, index, onChangeRaw, onRemove }) {
+  const [showRaw, setShowRaw] = useState(false);
+  const flaggedCount = diagnostics.filter(d=>d.flagged).length + (diceCheck?.flagged ? 1 : 0);
+  return (
+    <div className="diag-report-card">
+      <div className="diag-report-head">
+        <div>
+          <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:14}}>{report.model || 'Unknown model'} · {report.serial || 'Unknown serial'}</div>
+          <div className="diag-meta">
+            <span>Correction Count: {report.correctionCount ?? '—'}</span>
+            {flaggedCount > 0 ? <span style={{color:'var(--rd)'}}>⚠ {flaggedCount} flagged</span> : <span style={{color:'var(--gr)'}}>✓ clean</span>}
+          </div>
+        </div>
+        <div style={{display:'flex',gap:6}}>
+          <button className="btn bg bs" onClick={()=>setShowRaw(s=>!s)}>{showRaw?'Hide raw':'View raw'}</button>
+          {onRemove && <button className="btn bd bs" onClick={onRemove}>🗑</button>}
+        </div>
+      </div>
+      {showRaw && (
+        index === -1
+          ? <textarea className="diag-ta" value={raw} readOnly placeholder="" style={{opacity:0.7}}/>
+          : <textarea className="diag-ta" value={raw} onChange={e=>onChangeRaw(index, e.target.value)} placeholder="Paste raw VPanel SystemReport text here..."/>
+      )}
+      {showRaw && index === -1 && <div style={{fontSize:10,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",marginTop:4}}>Read-only — this report was auto-split out of a box with multiple concatenated reports.</div>}
+      <div style={{marginTop:10}}>
+        {diagnostics.length === 0 && <div style={{fontSize:11,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace"}}>No applicable checks found for this report/model.</div>}
+        {diagnostics.map(d => <DiagFlagCard key={d.check} checkKey={d.check} data={d}/>)}
+        {diceCheck && <DiagFlagCard checkKey="dice_3b_9b_bottom_width" data={diceCheck}/>}
+      </div>
+    </div>
+  );
+}
+
+function Diagnostics({ msg }) {
+  const [reportTexts, setReportTexts] = useState(['']);
+  const [dice, setDice] = useState({ p3b: { topWidthY: '', bottomWidthY: '' }, p9b: { topWidthY: '', bottomWidthY: '' } });
+  const [results, setResults] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [historySerial, setHistorySerial] = useState('');
+  const [history, setHistory] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+
+  const addReportBox = () => setReportTexts(t => [...t, '']);
+  const removeReportBox = (i) => setReportTexts(t => t.length > 1 ? t.filter((_, idx) => idx !== i) : t);
+  const updateReportBox = (i, val) => setReportTexts(t => t.map((x, idx) => idx === i ? val : x));
+
+  const runDiagnosis = () => {
+    const errors = [];
+    const pairs = [];
+    reportTexts.forEach((raw, idx) => {
+      if (!raw.trim()) return;
+      const chunks = splitReports(raw); // handles a single box holding several concatenated reports
+      chunks.forEach((chunk, ci) => {
+        try { pairs.push({ raw: chunk, parsed: parseVPanelReport(chunk) }); }
+        catch (e) { errors.push({ index: idx, error: chunks.length > 1 ? `(report ${ci + 1} in box ${idx + 1}) ${e.message}` : e.message }); }
+      });
+    });
+    if (!pairs.length) {
+      msg && msg('⚠️ No valid reports to parse.');
+      setResults({ perReport: [], errors });
+      return;
+    }
+    pairs.sort((a, b) => (a.parsed.correctionCount ?? Infinity) - (b.parsed.correctionCount ?? Infinity));
+    let prevGradientY = null, prevMagOffset = null, prevBaseToolLength = null;
+    const perReport = pairs.map(({ raw, parsed: r }, i) => {
+      const diag = diagnoseReport(r, { gradientY: prevGradientY, magazineOffset: prevMagOffset, baseToolLength: prevBaseToolLength });
+      const grad = r.rac["SPINDLE GRADIENT"];
+      if (grad && typeof grad.Y === "number") prevGradientY = grad.Y;
+      const mo = r.atc["MAGAZINE POSITION OFFSET"];
+      if (Array.isArray(mo)) prevMagOffset = mo;
+      if (typeof r.rac["BASE TOOL LENGTH"] === "number") prevBaseToolLength = r.rac["BASE TOOL LENGTH"];
+      const isLast = i === pairs.length - 1;
+      const diceCheck = isLast ? diagnoseDice3B9B(dice) : null;
+      return { raw, report: r, diagnostics: diag, diceCheck };
+    });
+    setResults({ perReport, errors });
+    if (errors.length) msg && msg(`⚠️ ${errors.length} report(s) failed to parse — see console/edit raw.`);
+  };
+
+  const saveAll = async () => {
+    if (!results?.perReport?.length) return;
+    setSaving(true);
+    let ok = 0, fail = 0;
+    for (const { raw, report, diagnostics, diceCheck } of results.perReport) {
+      try {
+        await db.upsert('diagnostic_reports', {
+          model: report.model,
+          serial: report.serial,
+          correction_count: report.correctionCount,
+          raw_text: raw,
+          parsed: report.sections, // full parsed tree — keys are the real ALL-CAPS report field names
+          diagnostics,
+          dice: diceCheck ? dice : null,
+        }, 'serial,correction_count');
+        ok++;
+      } catch { fail++; }
+    }
+    setSaving(false);
+    msg && msg(`✅ Saved ${ok}${fail ? `, ${fail} failed` : ''}`);
+  };
+
+  const loadHistory = async () => {
+    if (!historySerial.trim()) return;
+    setHistoryLoading(true);
+    setHistoryLoaded(true);
+    try {
+      const rows = await db.getWhere('diagnostic_reports', 'serial', historySerial.trim());
+      const sorted = Array.isArray(rows) ? [...rows].sort((a, b) => (a.correction_count ?? 0) - (b.correction_count ?? 0)) : [];
+      setHistory(sorted);
+    } catch {
+      msg && msg('⚠️ History fetch failed.');
+      setHistory([]);
+    }
+    setHistoryLoading(false);
+  };
+
+  const loadFromHistory = (row) => {
+    setReportTexts(t => {
+      const emptyIdx = t.findIndex(x => !x.trim());
+      if (emptyIdx !== -1) return t.map((x, i) => i === emptyIdx ? (row.raw_text || '') : x);
+      return [...t, row.raw_text || ''];
+    });
+    msg && msg('📥 Loaded into report boxes — hit Run Diagnosis.');
+  };
+
+  return (
+    <>
+      <div className="panel">
+        <div className="ph">
+          <div className="pt">🩺 Report Diagnostics</div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)'}}>paste VPanel reports · DICE cross-check · flagged findings</div>
+        </div>
+        <div style={{padding:14}}>
+          {reportTexts.map((raw, i) => (
+            <div key={i} className="diag-report-card">
+              <div className="diag-report-head">
+                <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',letterSpacing:1,textTransform:'uppercase'}}>Report {i+1}</div>
+                {reportTexts.length > 1 && <button className="btn bd bs" onClick={()=>removeReportBox(i)}>🗑</button>}
+              </div>
+              <textarea
+                className="diag-ta"
+                placeholder="Paste one raw VPanel report here — or several concatenated (each starting with << SYSTEM REPORT >>), they'll be auto-split on Run Diagnosis."
+                value={raw}
+                onChange={e => updateReportBox(i, e.target.value)}
+              />
+            </div>
+          ))}
+          <div style={{display:'flex',gap:8,marginBottom:16}}>
+            <button className="btn bg bs" onClick={addReportBox}>+ Add Another Report</button>
+          </div>
+
+          <div style={{borderTop:'1px solid var(--bdr)',paddingTop:16,marginBottom:16}}>
+            <div className="detail-label" style={{marginBottom:10}}>DICE Measurement (applies to most recent report by Correction Count)</div>
+            <DiceInputGrid dice={dice} setDice={setDice}/>
+          </div>
+
+          <div style={{display:'flex',gap:8}}>
+            <button className="btn bp" style={{flex:1}} onClick={runDiagnosis}>▶ Run Diagnosis</button>
+            {results?.perReport?.length > 0 && <button className="btn bimport" onClick={saveAll} disabled={saving}>{saving ? '⏳ Saving...' : '☁ Save All'}</button>}
+          </div>
+        </div>
+      </div>
+
+      {results && (
+        <div className="panel">
+          <div className="ph"><div className="pt">Results</div><div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)'}}>{results.perReport.length} report{results.perReport.length!==1?'s':''} parsed{results.errors.length?`, ${results.errors.length} failed`:''}</div></div>
+          <div style={{padding:14}}>
+            {results.errors.map(e => (
+              <div key={e.index} className="diag-flag bad"><div className="diag-flag-title">⚠ Report {e.index+1} failed to parse</div><div className="diag-flag-desc">{e.error}</div></div>
+            ))}
+            {results.perReport.length === 0 && !results.errors.length && <div className="empty"><div className="ei">📋</div>Paste a report above and run diagnosis.</div>}
+            {results.perReport.map((pr, i) => (
+              <DiagnosticReportCard
+                key={i}
+                index={reportTexts.indexOf(pr.raw)}
+                raw={pr.raw}
+                report={pr.report}
+                diagnostics={pr.diagnostics}
+                diceCheck={pr.diceCheck}
+                onChangeRaw={updateReportBox}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="panel">
+        <div className="ph"><div className="pt">History</div></div>
+        <div style={{padding:14}}>
+          <div style={{display:'flex',gap:8,marginBottom:historyLoaded?14:0}}>
+            <input className="fi" style={{marginBottom:0}} placeholder="Serial number, e.g. ZDU0527" value={historySerial} onChange={e=>setHistorySerial(e.target.value)} onKeyDown={e=>e.key==='Enter'&&loadHistory()}/>
+            <button className="btn bg" onClick={loadHistory} disabled={!historySerial.trim()}>Fetch</button>
+          </div>
+          {historyLoading && <Loading/>}
+          {!historyLoading && historyLoaded && history.length === 0 && <div className="empty"><div className="ei">📭</div>No saved reports for this serial yet.</div>}
+          {!historyLoading && history.map(row => {
+            const flaggedCount = (row.diagnostics||[]).filter(d=>d.flagged).length + (row.dice ? (diagnoseDice3B9B(row.dice)?.flagged?1:0) : 0);
+            return (
+              <div key={row.id} className="diag-report-card" style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:10}}>
+                <div>
+                  <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:13}}>{row.model} · corr {row.correction_count ?? '—'}</div>
+                  <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:flaggedCount?'var(--rd)':'var(--gr)',marginTop:2}}>{flaggedCount ? `⚠ ${flaggedCount} flagged` : '✓ clean'} · saved {row.created_at ? new Date(row.created_at).toLocaleDateString('en-CA') : '—'}</div>
+                </div>
+                <button className="btn bg bs" onClick={()=>loadFromHistory(row)}>Load →</button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App(){
   const [page,setPage]=useState('Dashboard');
@@ -1301,7 +1883,7 @@ export default function App(){
     { page:'Jobs',      icon:'◈', label:'Jobs', badge: activeCount },
     { page:'Follow-ups',icon:'📞',label:'Follow', badge: followupCount, badgeColor: overdueFollowupCount?'var(--rd)':'var(--am)' },
     { page:'Schedule',  icon:'◎', label:'Schedule' },
-    { page:'Customers', icon:'◻', label:'Clients' },
+    { page:'Diagnostics', icon:'🩺', label:'Diag' },
   ];
 
   return(<>
@@ -1340,6 +1922,8 @@ export default function App(){
           <div className={"ni "+(page==='Customers'?'active':'')} onClick={()=>setPage('Customers')}>◻ Customers</div>
           <div className={"ni "+(page==='Technicians'?'active':'')} onClick={()=>setPage('Technicians')}>◑ Technicians</div>
           <div className={"ni "+(page==='Files'?'active':'')} onClick={()=>setPage('Files')}>◫ Files</div>
+          <div className="nl">Diagnostics</div>
+          <div className={"ni "+(page==='Diagnostics'?'active':'')} onClick={()=>setPage('Diagnostics')} style={{color:page==='Diagnostics'?undefined:'var(--ac)'}}>🩺 Mill Diagnostics</div>
           <div className="nl">History</div>
           <div className={"ni "+(page==='Archive'?'active':'')} onClick={()=>setPage('Archive')}>◧ Archive{archiveCount>0&&<span style={{marginLeft:'auto',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,background:'var(--sur2)',border:'1px solid var(--bdr)',padding:'1px 6px',borderRadius:3,color:'var(--txd)'}}>{archiveCount}</span>}</div>
           {/* Voice Log in sidebar */}
@@ -1361,6 +1945,7 @@ export default function App(){
           {page==='Customers'&&<Customers customers={customers} jobs={jobs} loading={loading.customers} onAdd={addCust} onEdit={editCust} onDelete={delCust}/>}
           {page==='Technicians'&&<Technicians technicians={technicians} loading={loading.technicians} onAdd={addTech} onEdit={editTech} onDelete={delTech}/>}
           {page==='Files'&&<Files files={files} onUpload={uploadFiles} onDelete={deleteFile} uploading={fileUploading}/>}
+          {page==='Diagnostics'&&<Diagnostics msg={msg}/>}
           {page==='Archive'&&<Archive jobs={jobs} onEdit={editJob} onDelete={delJob} loading={loading.jobs}/>}
         </div>
       </div>
