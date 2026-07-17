@@ -1282,10 +1282,13 @@ function extractSystemReportBlock(rawText) {
 }
 
 // Splits a pasted blob that may contain several concatenated reports (and/or
-// trailing "<< SERVICE TOOL INFORMATION >>" blocks) into one chunk per
-// "<< SYSTEM REPORT >> ... << END >>". Used to auto-split multi-report pastes.
+// trailing "<< SERVICE TOOL INFORMATION >>" blocks) into one chunk per report.
+// Handles both the legacy "<< SYSTEM REPORT >>" marker and the newer DMS
+// "# << SystemReport >>" marker (a blob won't mix the two in practice).
 function splitReports(rawText) {
-  const startTok = "<< SYSTEM REPORT >>";
+  const legacyTok = "<< SYSTEM REPORT >>";
+  const newTok = "# << SystemReport >>";
+  const startTok = rawText.indexOf(legacyTok) !== -1 ? legacyTok : newTok;
   const indices = [];
   let idx = rawText.indexOf(startTok);
   while (idx !== -1) {
@@ -1387,9 +1390,124 @@ const MACHINE_PROFILES = {
 const DEFAULT_PROFILE = { thresholds: DWX_THRESHOLDS, thresholdsValidated: false };
 function getProfile(model) { return MACHINE_PROFILES[model] || DEFAULT_PROFILE; }
 
+// ════════════════════════════════════════════════════════════════════════════
+// NEWER REPORT FORMAT — "# << SystemReport >>" (DMS export, e.g. DWX-53DC).
+// This is a YAML-ish format: mixed-case keys, inline "{x: .., y: .., z: ..}"
+// objects, and "[..]" arrays. It's structurally different from the all-caps
+// "<< SYSTEM REPORT >>" format, so it gets its own parser, then a normalizer
+// that maps it into the SAME section tree the existing diagnostics consume —
+// so every downstream check, trend extractor, and chart works unchanged.
+// ════════════════════════════════════════════════════════════════════════════
+
+const NEW_FMT_MARKER = "# << SystemReport >>";
+
+function isNewFormat(text) { return text.indexOf(NEW_FMT_MARKER) !== -1; }
+
+function parseInlineObjNF(s) {
+  const out = {};
+  const inner = s.trim().replace(/^\{/, "").replace(/\}$/, "");
+  for (const part of inner.split(",")) {
+    const [k, v] = part.split(":").map((x) => (x == null ? x : x.trim()));
+    if (!k) continue;
+    const n = parseFloat(v);
+    out[k] = Number.isNaN(n) ? v : n;
+  }
+  return out;
+}
+function parseInlineArrNF(s) {
+  const inner = s.trim().replace(/^\[/, "").replace(/\]$/, "");
+  if (!inner.trim()) return [];
+  return inner.split(",").map((x) => { const n = parseFloat(x.trim()); return Number.isNaN(n) ? x.trim() : n; });
+}
+
+function parseNewFormatTree(rawText) {
+  const mi = rawText.indexOf(NEW_FMT_MARKER);
+  const body = mi === -1 ? rawText : rawText.slice(mi + NEW_FMT_MARKER.length);
+  const lines = body.split("\n").map((l) => l.replace(/\r$/, "")).filter((l) => l.trim() !== "");
+  const root = {};
+  const stack = [{ indent: -1, obj: root }];
+  for (const line of lines) {
+    const indent = line.length - line.trimStart().length;
+    const trimmed = line.trim();
+    const ci = trimmed.indexOf(":");
+    if (ci === -1) continue;
+    const key = trimmed.slice(0, ci).trim();
+    const val = trimmed.slice(ci + 1).trim();
+    while (stack.length > 1 && indent <= stack[stack.length - 1].indent) stack.pop();
+    const parent = stack[stack.length - 1].obj;
+    if (val === "") {
+      const child = {};
+      parent[key] = child;
+      stack.push({ indent, obj: child });
+    } else if (val.startsWith("{")) {
+      parent[key] = parseInlineObjNF(val);
+    } else if (val.startsWith("[")) {
+      parent[key] = parseInlineArrNF(val);
+    } else {
+      const n = parseFloat(val);
+      const looksNumeric = !Number.isNaN(n) && /^-?[\d.]+$/.test(val);
+      parent[key] = looksNumeric ? n : val;
+    }
+  }
+  return root;
+}
+
+// Map the new-format tree into the legacy section tree the diagnostics expect.
+function normalizeNewToLegacy(tree) {
+  const rac = tree.RotaryAxisCorrection || {};
+  const sections = {};
+  sections.MODEL = tree.Model || null;
+  sections["SERIAL NUMBER"] = tree.SerialNumber || null;
+
+  const legacyRac = {};
+  legacyRac["CORRECTION COUNT"] = typeof rac.CorrectionCount === "number" ? rac.CorrectionCount : null;
+  legacyRac["BASE TOOL LENGTH"] = typeof rac.BaseToolLength === "number" ? rac.BaseToolLength : null;
+  if (rac.SpindleGradient) legacyRac["SPINDLE GRADIENT"] = { X: rac.SpindleGradient.x, Y: rac.SpindleGradient.y };
+
+  const conv = (ax) => {
+    if (!ax) return null;
+    const out = {};
+    if (ax.P1) out.P1 = [ax.P1.x, ax.P1.y, ax.P1.z];
+    if (ax.P2) out.P2 = [ax.P2.x, ax.P2.y, ax.P2.z];
+    if (ax["AngleOffset(Base)"]) out["ANGLE OFFSET (BASE)"] = ax["AngleOffset(Base)"];
+    return out;
+  };
+  if (rac["A-AXIS"]) legacyRac["A-AXIS"] = conv(rac["A-AXIS"]);
+  if (rac["B-AXIS"]) legacyRac["B-AXIS"] = conv(rac["B-AXIS"]);
+  if (rac.CorrectionBasePoint) {
+    legacyRac["CORRECTION BASE POINT"] = [rac.CorrectionBasePoint.x, rac.CorrectionBasePoint.y, rac.CorrectionBasePoint.z];
+  }
+  sections["ROTARY AXIS CORRECTION"] = legacyRac;
+  // The new format doesn't expose MAGAZINE POSITION OFFSET in the same place;
+  // leave ATC empty so that check simply no-ops rather than misreading.
+  sections["AUTOMATIC TOOL CHANGER"] = {};
+  return sections;
+}
+
+function parseVPanelReportNew(rawText) {
+  const text = (rawText || "").trim();
+  if (!text) throw new Error("Empty report text");
+  const tree = parseNewFormatTree(text);
+  const sections = normalizeNewToLegacy(tree);
+  const model = sections.MODEL || null;
+  const serial = sections["SERIAL NUMBER"] || null;
+  const profile = getProfile(model);
+  const rac = sections["ROTARY AXIS CORRECTION"] || {};
+  const atc = sections["AUTOMATIC TOOL CHANGER"] || {};
+  return {
+    model, serial, profile, sections, rac, atc,
+    correctionCount: typeof rac["CORRECTION COUNT"] === "number" ? rac["CORRECTION COUNT"] : null,
+    archiveKey: `${model || "UNKNOWN_MODEL"}_${serial || "UNKNOWN_SERIAL"}`,
+  };
+}
+
 function parseVPanelReport(rawText) {
   const text = (rawText || "").trim();
   if (!text) throw new Error("Empty report text");
+  // Route by format: newer DMS "# << SystemReport >>" vs legacy all-caps.
+  if (isNewFormat(text) && text.indexOf("<< SYSTEM REPORT >>") === -1) {
+    return parseVPanelReportNew(text);
+  }
   const block = extractSystemReportBlock(text);
   const sections = parseReportBody(block);
   const model = sections.MODEL || null;
