@@ -46,6 +46,17 @@ const db = {
       body: JSON.stringify(data)
     });
     return r.json();
+  },
+  // Fetch a single column across a table, deduped and sorted. Selecting only
+  // the one column keeps the payload small even with many saved reports.
+  async distinctColumn(table, col) {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?select=${col}`, {
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+    });
+    const rows = await r.json();
+    if (!Array.isArray(rows)) return [];
+    const vals = rows.map(x => x && x[col]).filter(v => v != null && String(v).trim() !== '');
+    return [...new Set(vals)].sort((a, b) => String(a).localeCompare(String(b)));
   }
 };
 
@@ -1833,6 +1844,16 @@ function Diagnostics({ msg }) {
   const [history, setHistory] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [serialList, setSerialList] = useState([]);
+
+  const loadSerialList = useCallback(async () => {
+    try {
+      const serials = await db.distinctColumn('diagnostic_reports', 'serial');
+      setSerialList(serials);
+    } catch { /* non-fatal — dropdown just stays empty */ }
+  }, []);
+
+  useEffect(() => { loadSerialList(); }, [loadSerialList]);
 
   const addReportBox = () => setReportTexts(t => [...t, '']);
   const removeReportBox = (i) => setReportTexts(t => t.length > 1 ? t.filter((_, idx) => idx !== i) : t);
@@ -1902,14 +1923,16 @@ function Diagnostics({ msg }) {
     }
     setSaving(false);
     msg && msg(`✅ Saved ${ok}${fail ? `, ${fail} failed` : ''}`);
+    if (ok) loadSerialList();
   };
 
-  const loadHistory = async () => {
-    if (!historySerial.trim()) return;
+  const loadHistory = async (serialArg) => {
+    const serial = (typeof serialArg === 'string' ? serialArg : historySerial).trim();
+    if (!serial) return;
     setHistoryLoading(true);
     setHistoryLoaded(true);
     try {
-      const rows = await db.getWhere('diagnostic_reports', 'serial', historySerial.trim());
+      const rows = await db.getWhere('diagnostic_reports', 'serial', serial);
       const sorted = Array.isArray(rows) ? [...rows].sort((a, b) => (a.correction_count ?? 0) - (b.correction_count ?? 0)) : [];
       setHistory(sorted);
     } catch {
@@ -2005,9 +2028,20 @@ function Diagnostics({ msg }) {
       <div className="panel">
         <div className="ph"><div className="pt">History</div></div>
         <div style={{padding:14}}>
-          <div style={{display:'flex',gap:8,marginBottom:historyLoaded?14:0}}>
-            <input className="fi" style={{marginBottom:0}} placeholder="Serial number, e.g. ZDU0527" value={historySerial} onChange={e=>setHistorySerial(e.target.value)} onKeyDown={e=>e.key==='Enter'&&loadHistory()}/>
-            <button className="btn bg" onClick={loadHistory} disabled={!historySerial.trim()}>Fetch</button>
+          <div style={{display:'flex',gap:8,marginBottom:historyLoaded?14:0,flexWrap:'wrap'}}>
+            <input className="fi" style={{marginBottom:0,flex:1,minWidth:140}} placeholder="Serial number, e.g. ZDU0527" value={historySerial} onChange={e=>setHistorySerial(e.target.value)} onKeyDown={e=>e.key==='Enter'&&loadHistory()}/>
+            {serialList.length > 0 && (
+              <select
+                className="fsl"
+                style={{marginBottom:0,flex:'0 1 170px',minWidth:130}}
+                value={serialList.includes(historySerial) ? historySerial : ''}
+                onChange={e => { const s = e.target.value; if (s) { setHistorySerial(s); loadHistory(s); } }}
+              >
+                <option value="">Saved serials ({serialList.length})…</option>
+                {serialList.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            )}
+            <button className="btn bg" onClick={()=>loadHistory()} disabled={!historySerial.trim()}>Fetch</button>
           </div>
           {historyLoading && <Loading/>}
           {!historyLoading && historyLoaded && history.length === 0 && <div className="empty"><div className="ei">📭</div>No saved reports for this serial yet.</div>}
