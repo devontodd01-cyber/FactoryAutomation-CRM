@@ -1799,6 +1799,40 @@ function axisOffsetRange(rac, axisKey) {
 function angleOffsetRange(rac) { return axisOffsetRange(rac, "A-AXIS"); }
 function bAxisOffsetRange(rac) { return axisOffsetRange(rac, "B-AXIS"); }
 
+// ── Mean-centering for drift charts ───────────────────────────────────────────
+// Absolute origin coordinates (e.g. 89818) say nothing useful at a glance; what
+// matters is whether the value is wandering. Re-express each axis as its
+// deviation from that axis's own mean across the loaded history, so 0 = "at its
+// average" and the line shows movement above/below center.
+function centerOnMean(points, keys, suffix = 'Dev') {
+  const means = {};
+  for (const k of keys) {
+    const vals = points.map(p => p[k]).filter(v => typeof v === 'number' && !Number.isNaN(v));
+    means[k] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+  }
+  return points.map(p => {
+    const out = { ...p };
+    for (const k of keys) {
+      out[k + suffix] = (typeof p[k] === 'number' && means[k] != null) ? p[k] - means[k] : null;
+    }
+    return out;
+  });
+}
+
+// Symmetric Y domain around 0 that fits the data, with a little headroom.
+function symmetricDomain(points, keys) {
+  let max = 0;
+  for (const p of points) {
+    for (const k of keys) {
+      const v = p[k];
+      if (typeof v === 'number' && !Number.isNaN(v)) max = Math.max(max, Math.abs(v));
+    }
+  }
+  if (max === 0) return [-1, 1];
+  const padded = max * 1.15;
+  return [-padded, padded];
+}
+
 function trendPointsFromHistory(history) {
   return history
     .filter(row => row.correction_count != null)
@@ -1879,18 +1913,26 @@ function buildRawMetrics(report) {
   };
 }
 
-function TrendChart({ title, data, lines, refLines, yFormat }) {
+function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks, zeroLine, subtitle }) {
   return (
     <div style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:6,padding:'12px 14px',marginBottom:14}}>
-      <div className="cl" style={{marginBottom:8}}>{title}</div>
+      <div className="cl" style={{marginBottom:subtitle?2:8}}>{title}</div>
+      {subtitle && <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',marginBottom:8}}>{subtitle}</div>}
       <div style={{width:'100%',height:190}}>
         <ResponsiveContainer>
-          <LineChart data={data} margin={{top:5,right:14,left:0,bottom:5}}>
+          <LineChart data={data} margin={{top:5,right:14,left:hideYTicks?-24:0,bottom:5}}>
             <CartesianGrid strokeDasharray="3 3" stroke="#1e2a3a"/>
             <XAxis dataKey="corr" stroke="#5a6a80" tick={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}} label={{value:'Correction Count',position:'insideBottom',offset:-3,fontSize:9,fill:'#5a6a80'}}/>
-            <YAxis stroke="#5a6a80" tick={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}} tickFormatter={yFormat}/>
-            <Tooltip contentStyle={{background:'#161b24',border:'1px solid #243040',fontSize:11,fontFamily:"IBM Plex Mono, monospace"}} labelFormatter={v=>`Corr ${v}`}/>
+            <YAxis
+              stroke="#5a6a80"
+              tick={hideYTicks ? false : {fontSize:10,fontFamily:"IBM Plex Mono, monospace"}}
+              tickFormatter={yFormat}
+              domain={yDomain || ['auto','auto']}
+              axisLine={!hideYTicks}
+            />
+            <Tooltip contentStyle={{background:'#161b24',border:'1px solid #243040',fontSize:11,fontFamily:"IBM Plex Mono, monospace"}} labelFormatter={v=>`Corr ${v}`} formatter={(v)=>typeof v==='number'?v.toFixed(1):v}/>
             <Legend wrapperStyle={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}}/>
+            {zeroLine && <ReferenceLine y={0} stroke="#8a9ab0" strokeWidth={1.5}/>}
             {(refLines||[]).map((rl,i) => <ReferenceLine key={i} y={rl.y} stroke="#ff4d6a" strokeDasharray="4 4" label={{value:rl.label,fontSize:9,fill:'#ff4d6a',position:'right'}}/>)}
             {lines.map(l => <Line key={l.key} type="monotone" dataKey={l.key} name={l.name} stroke={l.color} dot={{r:3}} connectNulls/>)}
           </LineChart>
@@ -1931,28 +1973,44 @@ function TrendCharts({ history }) {
         lines={[{key:'bGap',color:'#ff4d6a',name:'B-axis X-gap'}]}
         refLines={[{y:40,label:'threshold 40'}]}
       />
-      {has(['originX','originY','originZ']) && (
-        <TrendChart
-          title="XYZ Origin / Base Point Drift"
-          data={points}
-          lines={[
-            {key:'originX',color:'#00c8ff',name:'Origin X'},
-            {key:'originY',color:'#22d47a',name:'Origin Y'},
-            {key:'originZ',color:'#ffb020',name:'Origin Z'},
-          ]}
-        />
-      )}
-      {has(['magX','magY','magZ']) && (
-        <TrendChart
-          title="Magazine Position Offset (X / Y / Z)"
-          data={points}
-          lines={[
-            {key:'magX',color:'#00c8ff',name:'Mag X'},
-            {key:'magY',color:'#22d47a',name:'Mag Y'},
-            {key:'magZ',color:'#ffb020',name:'Mag Z'},
-          ]}
-        />
-      )}
+      {has(['originX','originY','originZ']) && (() => {
+        const centered = centerOnMean(points, ['originX','originY','originZ']);
+        const devKeys = ['originXDev','originYDev','originZDev'];
+        return (
+          <TrendChart
+            title="XYZ Origin Drift (centered on 0)"
+            subtitle="each axis shown as deviation from its own average — 0 = at average"
+            data={centered}
+            lines={[
+              {key:'originXDev',color:'#00c8ff',name:'X drift'},
+              {key:'originYDev',color:'#22d47a',name:'Y drift'},
+              {key:'originZDev',color:'#ffb020',name:'Z drift'},
+            ]}
+            yDomain={symmetricDomain(centered, devKeys)}
+            hideYTicks
+            zeroLine
+          />
+        );
+      })()}
+      {has(['magX','magY','magZ']) && (() => {
+        const centered = centerOnMean(points, ['magX','magY','magZ']);
+        const devKeys = ['magXDev','magYDev','magZDev'];
+        return (
+          <TrendChart
+            title="Magazine Position Offset Drift (centered on 0)"
+            subtitle="each axis shown as deviation from its own average — 0 = at average"
+            data={centered}
+            lines={[
+              {key:'magXDev',color:'#00c8ff',name:'Mag X drift'},
+              {key:'magYDev',color:'#22d47a',name:'Mag Y drift'},
+              {key:'magZDev',color:'#ffb020',name:'Mag Z drift'},
+            ]}
+            yDomain={symmetricDomain(centered, devKeys)}
+            hideYTicks
+            zeroLine
+          />
+        );
+      })()}
       {has(['baseToolLength']) && (
         <TrendChart
           title="Base Tool Length"
