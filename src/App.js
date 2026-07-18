@@ -1803,19 +1803,45 @@ function trendPointsFromHistory(history) {
   return history
     .filter(row => row.correction_count != null)
     .map(row => {
+      // ── Three-tier resolution, best source first ──────────────────────────
+      // 1. raw_metrics / diagnostics  — written by Save All (richest, cheapest)
+      // 2. parsed                     — older saves that stored the tree only
+      // 3. raw_text (live parse)      — CSV-imported rows that have nothing but
+      //                                 the original report text. Parsing here
+      //                                 means imported data trends immediately
+      //                                 with no backfill step.
+      let sections = row.parsed && Object.keys(row.parsed).length ? row.parsed : null;
+      let liveReport = null;
+
+      const needsLiveParse =
+        (!row.raw_metrics || Object.keys(row.raw_metrics || {}).length === 0) &&
+        !sections &&
+        typeof row.raw_text === 'string' && row.raw_text.trim() !== '';
+
+      if (needsLiveParse) {
+        try {
+          liveReport = parseVPanelReport(row.raw_text);
+          sections = liveReport.sections;
+        } catch { /* unparseable (e.g. a correction event log) — leave nulls */ }
+      }
+      sections = sections || {};
+      const rac = sections["ROTARY AXIS CORRECTION"] || {};
+      const atc = sections["AUTOMATIC TOOL CHANGER"] || {};
+      const rm = row.raw_metrics && Object.keys(row.raw_metrics).length ? row.raw_metrics : null;
+
+      // Gradients / gaps: prefer the saved diagnostics array, else derive from
+      // whatever section tree we ended up with (stored or live-parsed).
       const diag = row.diagnostics || [];
       const gx = extractCheck(diag, 'spindle_gradient_x_collet_wear');
       const gy = extractCheck(diag, 'spindle_gradient_y_sign_flip');
       const ag = extractCheck(diag, 'a_axis_p1_p2_gap');
       const bg = extractCheck(diag, 'b_axis_p1_p2_gap');
 
-      // Raw sections: prefer explicitly-saved raw_metrics (new saves), fall
-      // back to reconstructing from the stored `parsed` section tree (older
-      // saves that stored `parsed` but not `raw_metrics`).
-      const sections = row.parsed || {};
-      const rac = sections["ROTARY AXIS CORRECTION"] || {};
-      const atc = sections["AUTOMATIC TOOL CHANGER"] || {};
-      const rm = row.raw_metrics || null;
+      const grad = rac["SPINDLE GRADIENT"] || {};
+      const gradientX = gx ? gx.currentX : num(grad.X);
+      const gradientY = gy ? gy.currentY : num(grad.Y);
+      const aGap = ag ? ag.gap : (rac["A-AXIS"] ? yGap(rac["A-AXIS"]) : null);
+      const bGap = bg ? bg.gap : (rac["B-AXIS"] ? xGap(rac["B-AXIS"]) : null);
 
       const origin = rm && rm.origin ? rm.origin : extractOrigin(sections, rac);
       const mag = rm && rm.magOffset ? rm.magOffset : triplet(atc["MAGAZINE POSITION OFFSET"]);
@@ -1825,10 +1851,10 @@ function trendPointsFromHistory(history) {
 
       return {
         corr: row.correction_count,
-        gradientX: gx ? gx.currentX : null,
-        gradientY: gy ? gy.currentY : null,
-        aGap: ag ? ag.gap : null,
-        bGap: bg ? bg.gap : null,
+        gradientX,
+        gradientY,
+        aGap,
+        bGap,
         originX: origin[0], originY: origin[1], originZ: origin[2],
         magX: mag[0], magY: mag[1], magZ: mag[2],
         baseToolLength: baseTL,
