@@ -1986,6 +1986,21 @@ function Diagnostics({ msg }) {
     return { ...x, [group]: arr };
   }));
 
+  // Reset every piece of per-machine state so the next machine starts clean.
+  // Important for correctness, not just tidiness: cross-report checks
+  // (Gradient Y sign-flip, magazine/base-tool drift) compare each report
+  // against the PREVIOUS one in the batch. Leaving another machine's reports
+  // in the boxes would compare across machines and raise false flags.
+  const clearAll = () => {
+    setReportTexts(['']);
+    setDiceEntries([emptyDiceEntry('')]);
+    setResults(null);
+    setHistory([]);
+    setHistorySerial('');
+    setHistoryLoaded(false);
+    msg && msg('🧹 Cleared — ready for next machine.');
+  };
+
   const runDiagnosis = () => {
     const errors = [];
     const pairs = [];
@@ -2002,20 +2017,42 @@ function Diagnostics({ msg }) {
       setResults({ perReport: [], errors });
       return;
     }
-    pairs.sort((a, b) => (a.parsed.correctionCount ?? Infinity) - (b.parsed.correctionCount ?? Infinity));
-    let prevGradientY = null, prevMagOffset = null, prevBaseToolLength = null;
+    // Group by serial FIRST, then sort each machine's reports by correction
+    // count. Cross-report checks (Gradient Y sign-flip, magazine/base-tool
+    // drift) compare each report to the previous one, so the "previous" must
+    // always be the SAME machine — otherwise pasting two machines produces
+    // false flags from comparing one machine's values against another's.
+    const bySerial = new Map();
+    for (const p of pairs) {
+      const key = p.parsed.serial || '__UNKNOWN__';
+      if (!bySerial.has(key)) bySerial.set(key, []);
+      bySerial.get(key).push(p);
+    }
     const lastDiceEntry = diceEntries[diceEntries.length - 1];
-    const perReport = pairs.map(({ raw, parsed: r }, i) => {
-      const diag = diagnoseReport(r, { gradientY: prevGradientY, magazineOffset: prevMagOffset, baseToolLength: prevBaseToolLength });
-      const grad = r.rac["SPINDLE GRADIENT"];
-      if (grad && typeof grad.Y === "number") prevGradientY = grad.Y;
-      const mo = r.atc["MAGAZINE POSITION OFFSET"];
-      if (Array.isArray(mo)) prevMagOffset = mo;
-      if (typeof r.rac["BASE TOOL LENGTH"] === "number") prevBaseToolLength = r.rac["BASE TOOL LENGTH"];
-      const isLast = i === pairs.length - 1;
-      const diceCheck = isLast ? diagnoseDice3B9B(lastDiceEntry) : null;
-      return { raw, report: r, diagnostics: diag, diceCheck };
-    });
+    // DICE applies to the most recent report overall (highest correction count)
+    const allSorted = [...pairs].sort((a, b) => (a.parsed.correctionCount ?? -Infinity) - (b.parsed.correctionCount ?? -Infinity));
+    const diceTargetRaw = allSorted.length ? allSorted[allSorted.length - 1].raw : null;
+
+    const perReport = [];
+    for (const [, group] of bySerial) {
+      group.sort((a, b) => (a.parsed.correctionCount ?? Infinity) - (b.parsed.correctionCount ?? Infinity));
+      let prevGradientY = null, prevMagOffset = null, prevBaseToolLength = null;
+      for (const { raw, parsed: r } of group) {
+        const diag = diagnoseReport(r, { gradientY: prevGradientY, magazineOffset: prevMagOffset, baseToolLength: prevBaseToolLength });
+        const grad = r.rac["SPINDLE GRADIENT"];
+        if (grad && typeof grad.Y === "number") prevGradientY = grad.Y;
+        const mo = r.atc["MAGAZINE POSITION OFFSET"];
+        if (Array.isArray(mo)) prevMagOffset = mo;
+        if (typeof r.rac["BASE TOOL LENGTH"] === "number") prevBaseToolLength = r.rac["BASE TOOL LENGTH"];
+        const diceCheck = raw === diceTargetRaw ? diagnoseDice3B9B(lastDiceEntry) : null;
+        perReport.push({ raw, report: r, diagnostics: diag, diceCheck });
+      }
+    }
+    // Warn if the batch spans multiple machines — usually unintended.
+    const distinctSerials = [...bySerial.keys()].filter(k => k !== '__UNKNOWN__');
+    if (distinctSerials.length > 1) {
+      msg && msg(`⚠️ ${distinctSerials.length} different machines in this batch — compared separately.`);
+    }
     setResults({ perReport, errors });
     if (errors.length) msg && msg(`⚠️ ${errors.length} report(s) failed to parse — see console/edit raw.`);
   };
@@ -2074,7 +2111,18 @@ function Diagnostics({ msg }) {
       <div className="panel">
         <div className="ph">
           <div className="pt">🩺 Report Diagnostics</div>
-          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)'}}>paste VPanel reports · DICE cross-check · flagged findings</div>
+          <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)'}}>paste VPanel reports · DICE cross-check · flagged findings</div>
+            <button
+              className="btn bd bs"
+              title="Clear all reports, DICE entries and results — start a new machine"
+              onClick={() => {
+                const hasWork = reportTexts.some(t => t.trim()) || results || history.length > 0;
+                if (hasWork && !window.confirm('Clear all reports, DICE entries, results and history for this machine?')) return;
+                clearAll();
+              }}
+            >🧹 Clear / New Machine</button>
+          </div>
         </div>
         <div style={{padding:14}}>
           {reportTexts.map((raw, i) => (
@@ -2122,7 +2170,7 @@ function Diagnostics({ msg }) {
 
       {results && (
         <div className="panel">
-          <div className="ph"><div className="pt">Results</div><div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)'}}>{results.perReport.length} report{results.perReport.length!==1?'s':''} parsed{results.errors.length?`, ${results.errors.length} failed`:''}</div></div>
+          <div className="ph"><div className="pt">Results</div><div style={{display:'flex',alignItems:'center',gap:10}}><div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)'}}>{results.perReport.length} report{results.perReport.length!==1?'s':''} parsed{results.errors.length?`, ${results.errors.length} failed`:''}</div><button className="btn bd bs" onClick={()=>{ if(window.confirm('Clear all reports, DICE entries, results and history for this machine?')) clearAll(); }}>🧹 Clear</button></div></div>
           <div style={{padding:14}}>
             {results.errors.map(e => (
               <div key={e.index} className="diag-flag bad"><div className="diag-flag-title">⚠ Report {e.index+1} failed to parse</div><div className="diag-flag-desc">{e.error}</div></div>
