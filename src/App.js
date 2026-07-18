@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from "recharts";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, ReferenceArea } from "recharts";
 
 const SUPABASE_URL = "https://untsjmmqtfasejkwjnlf.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVudHNqbW1xdGZhc2Vqa3dqbmxmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM3OTc3NDksImV4cCI6MjA4OTM3Mzc0OX0.dqBbwFHC1tsPEtl9KD_qNUvhGW0H33NFj19h6MFeqAo";
@@ -1838,6 +1838,22 @@ function centerAndNormalize(points, keys, scale = 10, suffix = 'Norm') {
   return { data: out, maxDev };
 }
 
+// Symmetric domain around 0 for charts that keep REAL units (e.g. gradients,
+// where 0.001 is a meaningful diagnostic threshold, not an arbitrary scale).
+// Ensures 0 sits dead center and that the tolerance band is always visible even
+// when the data hugs one side.
+function symmetricRealDomain(points, keys, minHalfSpan = 0) {
+  let max = 0;
+  for (const p of points) {
+    for (const k of keys) {
+      const v = p[k];
+      if (typeof v === 'number' && !Number.isNaN(v)) max = Math.max(max, Math.abs(v));
+    }
+  }
+  const half = Math.max(max * 1.25, minHalfSpan);
+  return half === 0 ? [-1, 1] : [-half, half];
+}
+
 function trendPointsFromHistory(history) {
   return history
     .filter(row => row.correction_count != null)
@@ -1918,7 +1934,7 @@ function buildRawMetrics(report) {
   };
 }
 
-function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks, zeroLine, subtitle, yTicks, tooltipFormatter }) {
+function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks, zeroLine, subtitle, yTicks, tooltipFormatter, toleranceBand }) {
   return (
     <div style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:6,padding:'12px 14px',marginBottom:14}}>
       <div className="cl" style={{marginBottom:subtitle?2:8}}>{title}</div>
@@ -1927,6 +1943,11 @@ function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks
         <ResponsiveContainer>
           <LineChart data={data} margin={{top:5,right:14,left:hideYTicks?-24:0,bottom:5}}>
             <CartesianGrid strokeDasharray="3 3" stroke="#1e2a3a"/>
+            {/* Tolerance band sits behind everything so in-spec vs out-of-spec
+                reads at a glance instead of squinting at two dashed lines. */}
+            {toleranceBand && (
+              <ReferenceArea y1={toleranceBand[0]} y2={toleranceBand[1]} fill="#22d47a" fillOpacity={0.07} stroke="none"/>
+            )}
             <XAxis dataKey="corr" stroke="#5a6a80" tick={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}} label={{value:'Correction Count',position:'insideBottom',offset:-3,fontSize:9,fill:'#5a6a80'}}/>
             <YAxis
               stroke="#5a6a80"
@@ -1964,24 +1985,41 @@ function TrendCharts({ history }) {
 
   return (
     <div style={{marginBottom:4}}>
-      <TrendChart
-        title="Spindle Gradient X / Y"
-        data={points}
-        lines={[{key:'gradientX',color:'#00c8ff',name:'Gradient X'},{key:'gradientY',color:'#ffb020',name:'Gradient Y'}]}
-        refLines={[{y:0.001,label:'X threshold ±0.001'},{y:-0.001}]}
-        yFormat={v=>v.toFixed(4)}
-      />
+      {(() => {
+        const TOL = 0.001;
+        // Force 0 to the centre and guarantee the ±0.001 band is always on-screen
+        // with room to breathe, even when the data hugs one side.
+        const dom = symmetricRealDomain(points, ['gradientX','gradientY'], TOL * 1.6);
+        return (
+          <TrendChart
+            title="Spindle Gradient X / Y"
+            subtitle="0 centred · green band = within ±0.001 tolerance"
+            data={points}
+            lines={[{key:'gradientX',color:'#00c8ff',name:'Gradient X'},{key:'gradientY',color:'#ffb020',name:'Gradient Y'}]}
+            refLines={[{y:TOL,label:'+0.001'},{y:-TOL,label:'−0.001'}]}
+            toleranceBand={[-TOL, TOL]}
+            yDomain={dom}
+            zeroLine
+            yFormat={v=>v.toFixed(4)}
+            tooltipFormatter={(v)=>typeof v==='number'?v.toFixed(6):v}
+          />
+        );
+      })()}
       <TrendChart
         title="A-Axis P1/P2 Y-Gap"
+        subtitle="green band = within threshold (40)"
         data={points}
         lines={[{key:'aGap',color:'#22d47a',name:'A-axis Y-gap'}]}
         refLines={[{y:40,label:'threshold 40'}]}
+        toleranceBand={[0, 40]}
       />
       <TrendChart
         title="B-Axis P1/P2 X-Gap"
+        subtitle="green band = within threshold (40)"
         data={points}
         lines={[{key:'bGap',color:'#ff4d6a',name:'B-axis X-gap'}]}
         refLines={[{y:40,label:'threshold 40'}]}
+        toleranceBand={[0, 40]}
       />
       {has(['originX','originY','originZ']) && (() => {
         const { data: nd, maxDev } = centerAndNormalize(points, ['originX','originY','originZ'], 10);
