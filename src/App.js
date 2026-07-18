@@ -1799,38 +1799,43 @@ function axisOffsetRange(rac, axisKey) {
 function angleOffsetRange(rac) { return axisOffsetRange(rac, "A-AXIS"); }
 function bAxisOffsetRange(rac) { return axisOffsetRange(rac, "B-AXIS"); }
 
-// ── Mean-centering for drift charts ───────────────────────────────────────────
-// Absolute origin coordinates (e.g. 89818) say nothing useful at a glance; what
-// matters is whether the value is wandering. Re-express each axis as its
-// deviation from that axis's own mean across the loaded history, so 0 = "at its
-// average" and the line shows movement above/below center.
-function centerOnMean(points, keys, suffix = 'Dev') {
+// ── Mean-centering + normalisation for drift charts ──────────────────────────
+// Absolute origin coordinates (e.g. 89818) say nothing at a glance; what matters
+// is whether the value wanders. Two steps:
+//   1. Re-express each axis as deviation from that axis's own mean (0 = average)
+//   2. Normalise ALL axes by ONE shared divisor onto a fixed ±scale window
+// Sharing the divisor is deliberate: per-axis scaling would make every line fill
+// the chart equally and hide the fact that (say) Z drifts 5x more than X.
+function centerAndNormalize(points, keys, scale = 10, suffix = 'Norm') {
   const means = {};
   for (const k of keys) {
     const vals = points.map(p => p[k]).filter(v => typeof v === 'number' && !Number.isNaN(v));
     means[k] = vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
   }
-  return points.map(p => {
-    const out = { ...p };
-    for (const k of keys) {
-      out[k + suffix] = (typeof p[k] === 'number' && means[k] != null) ? p[k] - means[k] : null;
-    }
-    return out;
-  });
-}
-
-// Symmetric Y domain around 0 that fits the data, with a little headroom.
-function symmetricDomain(points, keys) {
-  let max = 0;
+  // Largest absolute deviation across every axis = the shared divisor.
+  let maxDev = 0;
   for (const p of points) {
     for (const k of keys) {
-      const v = p[k];
-      if (typeof v === 'number' && !Number.isNaN(v)) max = Math.max(max, Math.abs(v));
+      if (typeof p[k] === 'number' && means[k] != null) {
+        maxDev = Math.max(maxDev, Math.abs(p[k] - means[k]));
+      }
     }
   }
-  if (max === 0) return [-1, 1];
-  const padded = max * 1.15;
-  return [-padded, padded];
+  const out = points.map(p => {
+    const o = { ...p };
+    for (const k of keys) {
+      if (typeof p[k] === 'number' && means[k] != null) {
+        const dev = p[k] - means[k];
+        o[k + suffix] = maxDev === 0 ? 0 : (dev / maxDev) * scale;
+        o[k + 'RawDev'] = dev; // keep the true deviation for the tooltip
+      } else {
+        o[k + suffix] = null;
+        o[k + 'RawDev'] = null;
+      }
+    }
+    return o;
+  });
+  return { data: out, maxDev };
 }
 
 function trendPointsFromHistory(history) {
@@ -1913,7 +1918,7 @@ function buildRawMetrics(report) {
   };
 }
 
-function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks, zeroLine, subtitle }) {
+function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks, zeroLine, subtitle, yTicks, tooltipFormatter }) {
   return (
     <div style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:6,padding:'12px 14px',marginBottom:14}}>
       <div className="cl" style={{marginBottom:subtitle?2:8}}>{title}</div>
@@ -1928,9 +1933,14 @@ function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks
               tick={hideYTicks ? false : {fontSize:10,fontFamily:"IBM Plex Mono, monospace"}}
               tickFormatter={yFormat}
               domain={yDomain || ['auto','auto']}
+              ticks={yTicks}
               axisLine={!hideYTicks}
             />
-            <Tooltip contentStyle={{background:'#161b24',border:'1px solid #243040',fontSize:11,fontFamily:"IBM Plex Mono, monospace"}} labelFormatter={v=>`Corr ${v}`} formatter={(v)=>typeof v==='number'?v.toFixed(1):v}/>
+            <Tooltip
+              contentStyle={{background:'#161b24',border:'1px solid #243040',fontSize:11,fontFamily:"IBM Plex Mono, monospace"}}
+              labelFormatter={v=>`Corr ${v}`}
+              formatter={tooltipFormatter || ((v)=>typeof v==='number'?v.toFixed(1):v)}
+            />
             <Legend wrapperStyle={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}}/>
             {zeroLine && <ReferenceLine y={0} stroke="#8a9ab0" strokeWidth={1.5}/>}
             {(refLines||[]).map((rl,i) => <ReferenceLine key={i} y={rl.y} stroke="#ff4d6a" strokeDasharray="4 4" label={{value:rl.label,fontSize:9,fill:'#ff4d6a',position:'right'}}/>)}
@@ -1974,40 +1984,48 @@ function TrendCharts({ history }) {
         refLines={[{y:40,label:'threshold 40'}]}
       />
       {has(['originX','originY','originZ']) && (() => {
-        const centered = centerOnMean(points, ['originX','originY','originZ']);
-        const devKeys = ['originXDev','originYDev','originZDev'];
+        const { data: nd, maxDev } = centerAndNormalize(points, ['originX','originY','originZ'], 10);
         return (
           <TrendChart
-            title="XYZ Origin Drift (centered on 0)"
-            subtitle="each axis shown as deviation from its own average — 0 = at average"
-            data={centered}
+            title="XYZ Origin Drift"
+            subtitle={`normalised ±10 scale · 0 = axis average · full scale = ${Math.round(maxDev)} units`}
+            data={nd}
             lines={[
-              {key:'originXDev',color:'#00c8ff',name:'X drift'},
-              {key:'originYDev',color:'#22d47a',name:'Y drift'},
-              {key:'originZDev',color:'#ffb020',name:'Z drift'},
+              {key:'originXNorm',color:'#00c8ff',name:'X'},
+              {key:'originYNorm',color:'#22d47a',name:'Y'},
+              {key:'originZNorm',color:'#ffb020',name:'Z'},
             ]}
-            yDomain={symmetricDomain(centered, devKeys)}
-            hideYTicks
+            yDomain={[-10, 10]}
+            yTicks={[-10,-5,0,5,10]}
             zeroLine
+            tooltipFormatter={(v, name, props) => {
+              const key = props && props.dataKey ? props.dataKey.replace('Norm','RawDev') : null;
+              const realDev = key && props.payload ? props.payload[key] : null;
+              return realDev != null ? `${realDev > 0 ? '+' : ''}${Math.round(realDev)} units` : (typeof v === 'number' ? v.toFixed(1) : v);
+            }}
           />
         );
       })()}
       {has(['magX','magY','magZ']) && (() => {
-        const centered = centerOnMean(points, ['magX','magY','magZ']);
-        const devKeys = ['magXDev','magYDev','magZDev'];
+        const { data: nd, maxDev } = centerAndNormalize(points, ['magX','magY','magZ'], 10);
         return (
           <TrendChart
-            title="Magazine Position Offset Drift (centered on 0)"
-            subtitle="each axis shown as deviation from its own average — 0 = at average"
-            data={centered}
+            title="Magazine Position Offset Drift"
+            subtitle={`normalised ±10 scale · 0 = axis average · full scale = ${Math.round(maxDev)} units`}
+            data={nd}
             lines={[
-              {key:'magXDev',color:'#00c8ff',name:'Mag X drift'},
-              {key:'magYDev',color:'#22d47a',name:'Mag Y drift'},
-              {key:'magZDev',color:'#ffb020',name:'Mag Z drift'},
+              {key:'magXNorm',color:'#00c8ff',name:'X'},
+              {key:'magYNorm',color:'#22d47a',name:'Y'},
+              {key:'magZNorm',color:'#ffb020',name:'Z'},
             ]}
-            yDomain={symmetricDomain(centered, devKeys)}
-            hideYTicks
+            yDomain={[-10, 10]}
+            yTicks={[-10,-5,0,5,10]}
             zeroLine
+            tooltipFormatter={(v, name, props) => {
+              const key = props && props.dataKey ? props.dataKey.replace('Norm','RawDev') : null;
+              const realDev = key && props.payload ? props.payload[key] : null;
+              return realDev != null ? `${realDev > 0 ? '+' : ''}${Math.round(realDev)} units` : (typeof v === 'number' ? v.toFixed(1) : v);
+            }}
           />
         );
       })()}
