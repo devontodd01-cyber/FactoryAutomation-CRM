@@ -2370,6 +2370,170 @@ function Diagnostics({ msg }) {
   );
 }
 
+// ── Pritidenta Disc Inventory ─────────────────────────────────────────────────
+// Editable grid of Priti multidisc stock: shade (columns) × thickness (rows),
+// plus loose "extras" rows (Shade guide, ptc RINGS). Each cell upserts to
+// Supabase keyed on (shade, thickness). Zero cells flag red, ≤ lowThreshold amber.
+const PRITI_SHADES = ['A1','A2','A3','A3.5','B1','B2','B3','C1','C2','OM1','OM2'];
+const PRITI_THICKNESSES = ['14mm','16mm','18mm','20mm','25mm','30mm'];
+const PRITI_EXTRAS = [
+  { shade: 'Shade guide', label: 'Shade guide' },
+  { shade: 'ptc RINGS',   label: 'ptc RINGS' },
+];
+// Seed values transcribed from the 2026-06-29 stock photo. Blank cells = 0.
+const PRITI_SEED = {
+  '14mm': { A1:5, A2:5, A3:3, 'A3.5':2, B1:5, B2:3, B3:2, C1:2, C2:2, OM1:2, OM2:2 },
+  '16mm': { A1:6, A2:6, A3:3, 'A3.5':2, B1:5, B2:3, B3:2, C1:2, C2:2, OM1:2, OM2:2 },
+  '18mm': { A1:3, A2:3, A3:2, 'A3.5':1, B1:2, B2:2, B3:1, C1:2, C2:2, OM1:2, OM2:2 },
+  '20mm': { A1:3, A2:3, A3:2, 'A3.5':1, B1:2, B2:2, B3:1, C1:2, C2:1, OM1:1, OM2:1 },
+  '25mm': { A1:1, A2:1, A3:1, 'A3.5':1, B1:1, B2:1, B3:1, C1:1, C2:0, OM1:0, OM2:0 },
+  '30mm': {},
+};
+const PRITI_EXTRAS_SEED = { 'Shade guide': 10, 'ptc RINGS': 3 };
+function cellKey(shade, thickness) { return `${shade}__${thickness}`; }
+
+function Pritidenta({ msg }) {
+  const [qty, setQty] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(new Set());
+  const [lowThreshold, setLowThreshold] = useState(1);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rows = await db.get('priti_inventory');
+      const map = {};
+      if (Array.isArray(rows)) rows.forEach(r => { map[cellKey(r.shade, r.thickness)] = r.qty; });
+      setQty(map);
+    } catch { msg && msg('⚠️ Could not load inventory.'); }
+    setLoading(false);
+  }, [msg]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const getQ = (shade, thickness) => {
+    const k = cellKey(shade, thickness);
+    if (k in qty) return qty[k];
+    if (thickness === '-') return PRITI_EXTRAS_SEED[shade] ?? 0;
+    return PRITI_SEED[thickness]?.[shade] ?? 0;
+  };
+
+  const setCell = (shade, thickness, val) => {
+    const k = cellKey(shade, thickness);
+    const n = val === '' ? 0 : Math.max(0, parseInt(val, 10) || 0);
+    setQty(prev => ({ ...prev, [k]: n }));
+    setDirty(prev => new Set(prev).add(k));
+  };
+
+  const bump = (shade, thickness, delta) => {
+    setCell(shade, thickness, Math.max(0, getQ(shade, thickness) + delta));
+  };
+
+  const saveAll = async () => {
+    setSaving(true);
+    let ok = 0, fail = 0;
+    const payload = [];
+    PRITI_THICKNESSES.forEach(t => PRITI_SHADES.forEach(s => {
+      payload.push({ shade: s, thickness: t, qty: getQ(s, t) });
+    }));
+    PRITI_EXTRAS.forEach(e => payload.push({ shade: e.shade, thickness: '-', qty: getQ(e.shade, '-') }));
+    try {
+      await db.upsert('priti_inventory', payload, 'shade,thickness');
+      ok = payload.length;
+      setDirty(new Set());
+    } catch { fail = payload.length; }
+    setSaving(false);
+    msg && msg(fail ? '⚠️ Save failed.' : `✅ Saved ${ok} cells.`);
+  };
+
+  const cellStyle = (q) => {
+    if (q === 0) return { background: 'var(--rdd)', color: 'var(--rd)', borderColor: 'rgba(255,77,106,0.3)' };
+    if (q <= lowThreshold) return { background: 'var(--amd)', color: 'var(--am)', borderColor: 'rgba(255,176,32,0.3)' };
+    return { background: 'var(--sur2)', color: 'var(--tx)', borderColor: 'var(--bdr)' };
+  };
+
+  const totalDiscs = PRITI_THICKNESSES.reduce((sum, t) => sum + PRITI_SHADES.reduce((s2, sh) => s2 + getQ(sh, t), 0), 0);
+  const emptyCount = PRITI_THICKNESSES.reduce((c, t) => c + PRITI_SHADES.filter(sh => getQ(sh, t) === 0).length, 0);
+  const lowCount = PRITI_THICKNESSES.reduce((c, t) => c + PRITI_SHADES.filter(sh => { const q = getQ(sh, t); return q > 0 && q <= lowThreshold; }).length, 0);
+
+  return (
+    <>
+      <div className="kgrid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
+        <div className="kc bl"><div className="kl">Total Discs</div><div className="kv">{totalDiscs}</div></div>
+        <div className="kc am"><div className="kl">Low (≤{lowThreshold})</div><div className="kv">{lowCount}</div></div>
+        <div className="kc rd"><div className="kl">Out of Stock</div><div className="kv">{emptyCount}</div></div>
+      </div>
+
+      <div className="panel">
+        <div className="ph">
+          <div className="pt">🦷 Pritidenta Disc Inventory</div>
+          <div style={{display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+            <label style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',display:'flex',alignItems:'center',gap:6}}>
+              Low ≤
+              <input className="fi" style={{marginBottom:0,width:56,padding:'4px 8px',textAlign:'center'}} type="number" min="0" value={lowThreshold} onChange={e=>setLowThreshold(Math.max(0, parseInt(e.target.value,10)||0))}/>
+            </label>
+            <button className="btn bimport" onClick={saveAll} disabled={saving}>{saving ? '⏳ Saving...' : `☁ Save${dirty.size?` (${dirty.size})`:''}`}</button>
+          </div>
+        </div>
+        {loading ? <Loading/> : (
+          <div style={{overflowX:'auto',padding:'4px 0'}}>
+            <table style={{borderCollapse:'separate',borderSpacing:4,minWidth:'100%',padding:'8px 12px'}}>
+              <thead>
+                <tr>
+                  <th style={{position:'sticky',left:0,background:'var(--sur)',zIndex:1,textAlign:'left',padding:'6px 10px',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',letterSpacing:1}}>MM \ SHADE</th>
+                  {PRITI_SHADES.map(s => (
+                    <th key={s} style={{padding:'6px 4px',fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--ac)',minWidth:52,textAlign:'center'}}>{s}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {PRITI_THICKNESSES.map(t => (
+                  <tr key={t}>
+                    <td style={{position:'sticky',left:0,background:'var(--sur)',zIndex:1,padding:'4px 10px',fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:13,color:'var(--txm)'}}>{t}</td>
+                    {PRITI_SHADES.map(s => {
+                      const q = getQ(s, t);
+                      return (
+                        <td key={s} style={{padding:0}}>
+                          <input
+                            className="fi"
+                            style={{marginBottom:0,width:52,textAlign:'center',padding:'8px 2px',fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:15,...cellStyle(q)}}
+                            inputMode="numeric"
+                            value={q}
+                            onChange={e => setCell(s, t, e.target.value.replace(/[^0-9]/g,''))}
+                            onFocus={e => e.target.select()}
+                          />
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      <div className="panel">
+        <div className="ph"><div className="pt">Extras</div></div>
+        <div style={{padding:14,display:'flex',gap:14,flexWrap:'wrap'}}>
+          {PRITI_EXTRAS.map(e => {
+            const q = getQ(e.shade, '-');
+            return (
+              <div key={e.shade} style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:6,padding:'12px 14px',display:'flex',alignItems:'center',gap:12,minWidth:200}}>
+                <div style={{flex:1}}><div style={{fontSize:13,fontWeight:600}}>{e.label}</div><div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',marginTop:2}}>{e.shade==='ptc RINGS'?'packs':'units'}</div></div>
+                <button className="btn bg bs" style={{width:36,height:36}} onClick={()=>bump(e.shade,'-',-1)}>−</button>
+                <input className="fi" style={{marginBottom:0,width:60,textAlign:'center',padding:'8px 2px',fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:16,...cellStyle(q)}} inputMode="numeric" value={q} onChange={ev=>setCell(e.shade,'-',ev.target.value.replace(/[^0-9]/g,''))} onFocus={ev=>ev.target.select()}/>
+                <button className="btn bg bs" style={{width:36,height:36}} onClick={()=>bump(e.shade,'-',1)}>+</button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App(){
   const [page,setPage]=useState('Dashboard');
@@ -2473,6 +2637,8 @@ export default function App(){
           <div className={"ni "+(page==='Files'?'active':'')} onClick={()=>setPage('Files')}>◫ Files</div>
           <div className="nl">Diagnostics</div>
           <div className={"ni "+(page==='Diagnostics'?'active':'')} onClick={()=>setPage('Diagnostics')} style={{color:page==='Diagnostics'?undefined:'var(--ac)'}}>🩺 Mill Diagnostics</div>
+          <div className="nl">Inventory</div>
+          <div className={"ni "+(page==='Pritidenta'?'active':'')} onClick={()=>setPage('Pritidenta')}>🦷 Pritidenta</div>
           <div className="nl">History</div>
           <div className={"ni "+(page==='Archive'?'active':'')} onClick={()=>setPage('Archive')}>◧ Archive{archiveCount>0&&<span style={{marginLeft:'auto',fontFamily:"'IBM Plex Mono',monospace",fontSize:9,background:'var(--sur2)',border:'1px solid var(--bdr)',padding:'1px 6px',borderRadius:3,color:'var(--txd)'}}>{archiveCount}</span>}</div>
           <div className="ni" onClick={()=>setShowVoiceLog(true)} style={{color:'var(--ac)',borderLeft:'2px solid rgba(0,200,255,0.3)',marginTop:8}}>🎙 Voice Log</div>
@@ -2493,6 +2659,7 @@ export default function App(){
           {page==='Technicians'&&<Technicians technicians={technicians} loading={loading.technicians} onAdd={addTech} onEdit={editTech} onDelete={delTech}/>}
           {page==='Files'&&<Files files={files} onUpload={uploadFiles} onDelete={deleteFile} uploading={fileUploading}/>}
           {page==='Diagnostics'&&<Diagnostics msg={msg}/>}
+          {page==='Pritidenta'&&<Pritidenta msg={msg}/>}
           {page==='Archive'&&<Archive jobs={jobs} onEdit={editJob} onDelete={delJob} loading={loading.jobs}/>}
         </div>
       </div>
