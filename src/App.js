@@ -45,6 +45,14 @@ const db = {
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, "Content-Type": "application/json", Prefer: "return=representation,resolution=merge-duplicates" },
       body: JSON.stringify(data)
     });
+    // PostgREST returns 4xx with a JSON error body on failure (e.g. a missing
+    // column → PGRST204). fetch() does NOT throw on those, so surface it here,
+    // otherwise callers silently treat a failed write as success.
+    if (!r.ok) {
+      let detail = '';
+      try { const e = await r.json(); detail = e.message || e.details || JSON.stringify(e); } catch { detail = `HTTP ${r.status}`; }
+      throw new Error(detail);
+    }
     return r.json();
   },
   // Fetch a single column across a table, deduped and sorted. Selecting only
@@ -2200,7 +2208,7 @@ function Diagnostics({ msg }) {
   const saveAll = async () => {
     if (!results?.perReport?.length) return;
     setSaving(true);
-    let ok = 0, fail = 0;
+    let ok = 0, fail = 0, lastErr = '';
     for (const { raw, report, diagnostics, diceCheck } of results.perReport) {
       try {
         await db.upsert('diagnostic_reports', {
@@ -2214,10 +2222,16 @@ function Diagnostics({ msg }) {
           dice: diceCheck ? diceEntries : null,
         }, 'serial,correction_count');
         ok++;
-      } catch { fail++; }
+      } catch (e) { fail++; lastErr = e.message || String(e); }
     }
     setSaving(false);
-    msg && msg(`✅ Saved ${ok}${fail ? `, ${fail} failed` : ''}`);
+    if (fail) {
+      // Show the actual reason (e.g. a missing column) instead of a false success.
+      msg && msg(`⚠️ Saved ${ok}, ${fail} failed — ${lastErr}`);
+      console.error('Diagnostic save error:', lastErr);
+    } else {
+      msg && msg(`✅ Saved ${ok}`);
+    }
     if (ok) loadSerialList();
   };
 
@@ -2438,13 +2452,14 @@ function Pritidenta({ msg }) {
       payload.push({ shade: s, thickness: t, qty: getQ(s, t) });
     }));
     PRITI_EXTRAS.forEach(e => payload.push({ shade: e.shade, thickness: '-', qty: getQ(e.shade, '-') }));
+    let err = '';
     try {
       await db.upsert('priti_inventory', payload, 'shade,thickness');
       ok = payload.length;
       setDirty(new Set());
-    } catch { fail = payload.length; }
+    } catch (e) { fail = payload.length; err = e.message || String(e); }
     setSaving(false);
-    msg && msg(fail ? '⚠️ Save failed.' : `✅ Saved ${ok} cells.`);
+    msg && msg(fail ? `⚠️ Save failed — ${err}` : `✅ Saved ${ok} cells.`);
   };
 
   const cellStyle = (q) => {
