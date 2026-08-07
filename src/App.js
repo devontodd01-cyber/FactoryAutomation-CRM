@@ -2014,18 +2014,13 @@ function TrendCharts({ history }) {
         );
       })()}
       <TrendChart
-        title="A-Axis P1/P2 Y-Gap"
-        subtitle="green band = within threshold (40)"
+        title="A/B-Axis P1/P2 Gap"
+        subtitle="A = Y-gap · B = X-gap · green band = within threshold (40)"
         data={points}
-        lines={[{key:'aGap',color:'#22d47a',name:'A-axis Y-gap'}]}
-        refLines={[{y:40,label:'threshold 40'}]}
-        toleranceBand={[0, 40]}
-      />
-      <TrendChart
-        title="B-Axis P1/P2 X-Gap"
-        subtitle="green band = within threshold (40)"
-        data={points}
-        lines={[{key:'bGap',color:'#ff4d6a',name:'B-axis X-gap'}]}
+        lines={[
+          {key:'aGap',color:'#22d47a',name:'A-axis Y-gap'},
+          {key:'bGap',color:'#ff4d6a',name:'B-axis X-gap'},
+        ]}
         refLines={[{y:40,label:'threshold 40'}]}
         toleranceBand={[0, 40]}
       />
@@ -2661,11 +2656,6 @@ export default function App(){
         </div>
 
         <div className="main">
-          <div className="mobile-only" style={{display:'flex',gap:8,marginBottom:12}}>
-            <button className="btn bimport" style={{flex:1,height:44,fontSize:12}} onClick={()=>setShowImport(true)}>⬇ Import</button>
-            <button className="btn bp" style={{flex:1,height:44,fontSize:12}} onClick={openMobileJobNew}>+ New Job</button>
-          </div>
-
           {page==='Dashboard'&&<><Dashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} calNotes={calNotes} onSaveNote={saveCalNote}/><MobileDashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/></>}
           {page==='Jobs'&&<Jobs jobs={jobs.filter(j=>!isArchived(j))} customers={customers} technicians={technicians} loading={loading.jobs} onAdd={addJob} onEdit={editJob} onDelete={delJob}/>}
           {page==='Follow-ups'&&<Followups jobs={jobs} onEdit={editJob} loading={loading.jobs}/>}
