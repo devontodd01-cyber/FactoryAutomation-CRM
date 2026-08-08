@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, ReferenceArea } from "recharts";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, ReferenceArea, ComposedChart, Scatter } from "recharts";
 
 const SUPABASE_URL = "https://untsjmmqtfasejkwjnlf.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVudHNqbW1xdGZhc2Vqa3dqbmxmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM3OTc3NDksImV4cCI6MjA4OTM3Mzc0OX0.dqBbwFHC1tsPEtl9KD_qNUvhGW0H33NFj19h6MFeqAo";
@@ -1862,6 +1862,158 @@ function symmetricRealDomain(points, keys, minHalfSpan = 0) {
   return half === 0 ? [-1, 1] : [-half, half];
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// ERROR OVERLAY: applog/errorlog → dots on the correction-count trend line
+// ────────────────────────────────────────────────────────────────────────────
+// Decoded from the DWX-53DC / DWX-52D service notes (Error Codes, pp.35-42).
+// severity: 'stop' = emergency stop (red), 'error' = error occurred (amber),
+// 'info' = benign/self-clearing (grey). subsystem drives the plain-English note.
+const ERROR_CODE_TABLE = {
+  "1000": { sev: "stop",  sub: "Limit switch not found",       hint: "Axis limit switch, wiring, or motor. Suffix = axis (01=X,02=Y,04=Z,08=A,10=B)." },
+  "1001": { sev: "stop",  sub: "NVRAM cannot be accessed",     hint: "Main board fault." },
+  "1006": { sev: "error", sub: "Axis position shifted",        hint: "Ball screw dirty/worn, hard milling, or rotary unit. Suffix = axis (0201=X,0202=Y,0204=Z,0208=A,0210=B)." },
+  "1017": { sev: "error", sub: "Cover opened",                 hint: "Milling/tool/adapter cover switch opened or misadjusted." },
+  "1018": { sev: "stop",  sub: "Chucking sensor not found",    hint: "ATC limit switch, wiring, or ATC unit." },
+  "101C": { sev: "stop",  sub: "Milling bur sensor not found", hint: "Bur sensor pressed, wiring, or sensor fault." },
+  "101D": { sev: "error", sub: "Milling bur cannot be released", hint: "Bur/collet fixed together, worn collet, dirty stocker, or ATC unit. Suffix = tool #." },
+  "101E": { sev: "error", sub: "Milling bur might be broken",  hint: "Broken or worn bur, or inadequate milling conditions. Suffix = tool #." },
+  "101F": { sev: "error", sub: "Bur chucking slipped out",     hint: "Bur rubbing wall, worn bur, welded bur, or loose collet." },
+  "1020": { sev: "error", sub: "Milling bur too long",         hint: "Wrong bur or holder not seated." },
+  "1021": { sev: "error", sub: "Milling bur too short",        hint: "Wrong bur or holder not seated." },
+  "1022": { sev: "error", sub: "Milling bur not found",        hint: "No bur in stocker, wrong stocker setting, or magazine miscorrection (run auto-correction). Suffix = stocker #." },
+  "1023": { sev: "error", sub: "Milling data error (count)",   hint: "RML-1 parameter count out of range or transfer overload." },
+  "1024": { sev: "error", sub: "Milling data error (range)",   hint: "RML-1 parameter out of range or transfer overload." },
+  "1025": { sev: "error", sub: "Milling data error (command)", hint: "Unsupported RML-1 command or transfer overload." },
+  "1029": { sev: "stop",  sub: "Spindle overload",             hint: "10× normal overload. Bur rubbing/worn/welded, bad conditions, or spindle fault." },
+  "102A": { sev: "stop",  sub: "Spindle overcurrent",          hint: "Load >5A. Bur rubbing wall, worn/welded bur, COLD GREASE (warm up), or spindle fault." },
+  "102B": { sev: "stop",  sub: "Spindle motor too hot",        hint: "Motor reached 85°C. Conditions, material, spindle, or thermistor board." },
+  "102C": { sev: "stop",  sub: "Spindle comms error",          hint: "Spindle motor wiring / spindle / main board." },
+  "102D": { sev: "stop",  sub: "Spindle cannot turn",          hint: "Cold grease, motor wiring, or spindle/motor fault." },
+  "102E": { sev: "error", sub: "Mechanical part collided",     hint: "Bur hit ATC magazine or rotary unit, OR metal contact during auto-correction (loose screw)." },
+  "102F": { sev: "stop",  sub: "Ionizer not working",          hint: "Replace the ionizer." },
+  "1030": { sev: "error", sub: "Dust collector issue",         hint: "Collector off/underpowered, or dust filter needs replacing." },
+  "1031": { sev: "stop",  sub: "Control board comms error",    hint: "Changer / temp-humidity / acceleration sensor board comms." },
+  "1038": { sev: "error", sub: "No milling bur selected",      hint: "Spindle rotation attempted without tool, or milling-data problem." },
+  "103B": { sev: "error", sub: "Auto-correction not finished", hint: "Milling started before correction completed." },
+  "103D": { sev: "error", sub: "Bur cannot reach position",    hint: "Bur holder position, or milling-data Z out of range." },
+  "1049": { sev: "stop",  sub: "Adapter cannot be released",   hint: "Adapter return failed, adapter sensor, or clamp leaf spring." },
+  "104A": { sev: "stop",  sub: "Adapter cannot be grasped",    hint: "Adapter acquisition failed, adapter sensor, or clamp leaf spring." },
+  "104B": { sev: "error", sub: "Adapter not found",            hint: "No adapter, missing/dirty barcode label, or dirty/broken barcode sensor." },
+  "104C": { sev: "error", sub: "All stockers full",            hint: "Adapter in use could not be returned." },
+  "104D": { sev: "error", sub: "Duplicate adapter ID",         hint: "Two adapters share an ID, or dirty barcode label/sensor." },
+  "104E": { sev: "stop",  sub: "L-limit switch not found",     hint: "L-axis obstruction, assembly, limit switch, or motor." },
+  "104F": { sev: "stop",  sub: "L-axis position shifted",      hint: "L-axis out of sync, assembly, limit switch, or ball screw." },
+  "1050": { sev: "error", sub: "Barcode read failed",          hint: "Missing/dirty label, dirty sensor, or adapter not seated." },
+  "105F": { sev: "error", sub: "Air pressure fault",           hint: "Insufficient (or excessive, -0001) air pressure: regulator, air bulb, sensor, path, or leak." },
+};
+
+function decodeErrorCode(raw) {
+  // raw like "102A-0000" or "1006-0210"
+  const [main, param] = String(raw).split("-");
+  const entry = ERROR_CODE_TABLE[main] || { sev: "error", sub: "Unknown code", hint: "Not in service-note table." };
+  return { code: raw, main, param: param || "0000", ...entry };
+}
+
+// Parse an applog (tab-separated VPanel activity log). Returns error events,
+// each tagged with the correction count that was active when it occurred — so
+// it can be plotted as a dot on the existing correction-count X-axis.
+//
+// The machine's correction counter advances on each successful AutomaticCorrection.
+// We walk the log in order, count those, and stamp every ERROR with the running
+// count. `finalCorr` (from the system report's CorrectionCount) anchors the tail
+// so the last window lines up with the plotted trend points.
+function parseApplogErrors(applogText, finalCorr) {
+  if (!applogText || typeof applogText !== "string") return [];
+  const lines = applogText.split(/\r?\n/);
+
+  // First pass: count successful corrections so we can back-calculate the
+  // starting corr number (finalCorr − totalSuccessfulCorrectionsInLog).
+  let totalCorr = 0;
+  for (const ln of lines) {
+    if (/END AutomaticCorrection\t\(1=SEQ_RESULT_SUCCESS\)/.test(ln)) totalCorr++;
+  }
+  let running = (typeof finalCorr === "number" ? finalCorr - totalCorr : 0);
+
+  const events = [];
+  for (const ln of lines) {
+    const parts = ln.split("\t");
+    if (parts.length < 3) continue;
+    const [date, time] = parts;
+
+    // An error line: col 3 == "ERROR" with a code in col 4, OR an EVENTLOG
+    // error that carries position coords. Grab code + coords if present.
+    const errIdx = parts.indexOf("ERROR");
+    if (errIdx !== -1 && parts[errIdx + 1] && /^[0-9A-F]{4}-[0-9A-F]{4}$/.test(parts[errIdx + 1])) {
+      const code = parts[errIdx + 1];
+      const coordMatch = ln.match(/\(X=([^)]+)\)/);
+      events.push({
+        ts: `${date} ${time}`,
+        corr: running,
+        ...decodeErrorCode(code),
+        coords: coordMatch ? coordMatch[1] : null,
+      });
+    }
+
+    if (/END AutomaticCorrection\t\(1=SEQ_RESULT_SUCCESS\)/.test(ln)) running++;
+  }
+
+  // Collapse echo rows: the plain ERROR line and its EVENTLOG twin log the same
+  // fault within a second or two. Treat same-code events ≤3s apart as one.
+  const toSec = (ts) => {
+    const m = ts.match(/(\d+):(\d+):(\d+)/);
+    return m ? (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) : 0;
+  };
+  const deduped = [];
+  for (const e of events) {
+    const last = deduped[deduped.length - 1];
+    if (last && last.code === e.code && last.ts.slice(0,10) === e.ts.slice(0,10) &&
+        Math.abs(toSec(e.ts) - toSec(last.ts)) <= 3) {
+      continue; // echo of the event we just recorded
+    }
+    deduped.push(e);
+  }
+  // Recurrence: same code ≥3× inside one corr window is worth calling out.
+  const windowCounts = {};
+  for (const e of deduped) {
+    const wk = e.corr + "|" + e.main;
+    windowCounts[wk] = (windowCounts[wk] || 0) + 1;
+  }
+  for (const e of deduped) {
+    e.recurCount = windowCounts[e.corr + "|" + e.main];
+    e.recurring = e.recurCount >= 3;
+  }
+  return deduped;
+}
+
+// Turn parsed error events into Recharts scatter points aligned to the trend's
+// correction-count axis. Jitters the Y so stacked errors at one corr are visible;
+// the real payload keeps the true data for the tooltip.
+function errorMarkersForChart(errorEvents, yValue) {
+  return (errorEvents || []).map((e, i) => ({
+    corr: e.corr,
+    // park dots along a fixed rail near the bottom of each chart's range
+    _errY: yValue,
+    _err: e,
+  }));
+}
+
+const SEV_COLOR = { stop: "#ff4d6a", error: "#ffb020", info: "#5a6a80" };
+
+// Custom hover card for an error dot — explains WHY it was flagged.
+function ErrorDotTooltip({ e }) {
+  if (!e) return null;
+  return (
+    <div style={{background:'#161b24',border:`1px solid ${SEV_COLOR[e.sev]}`,borderRadius:6,padding:'9px 11px',fontFamily:"'IBM Plex Mono',monospace",fontSize:11,maxWidth:260,lineHeight:1.5}}>
+      <div style={{color:SEV_COLOR[e.sev],fontWeight:700,marginBottom:3}}>{e.code} · {e.sub}</div>
+      <div style={{color:'#8a9ab0',marginBottom:5}}>{e.ts} · at corr {e.corr}</div>
+      <div style={{color:'#d0dae8'}}>{e.hint}</div>
+      {e.coords && <div style={{color:'#5a6a80',marginTop:5}}>pos: X={e.coords}</div>}
+      {e.recurring && <div style={{color:'#ff4d6a',marginTop:5}}>⚠ Recurred {e.recurCount}× in this correction window — area of concern.</div>}
+      {!e.recurring && e.sev==='info' && <div style={{color:'#5a6a80',marginTop:5}}>Self-clearing; flagged for context only.</div>}
+    </div>
+  );
+}
+
 function trendPointsFromHistory(history) {
   return history
     .filter(row => row.correction_count != null)
@@ -1942,21 +2094,71 @@ function buildRawMetrics(report) {
   };
 }
 
-function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks, zeroLine, subtitle, yTicks, tooltipFormatter, toleranceBand }) {
+// Renders each error as a coloured dot on the correction-count axis. Custom
+// shape so severity drives colour; hover surfaces WHY it was flagged.
+function ErrorDot(props) {
+  const { cx, cy, payload } = props;
+  if (cx == null || cy == null || !payload || !payload._err) return null;
+  const e = payload._err;
+  const r = e.recurring ? 6 : 4;
+  return (
+    <g>
+      {e.recurring && <circle cx={cx} cy={cy} r={r+3} fill={SEV_COLOR[e.sev]} fillOpacity={0.18}/>}
+      <circle cx={cx} cy={cy} r={r} fill={SEV_COLOR[e.sev]} stroke="#0a0c10" strokeWidth={1.5}/>
+    </g>
+  );
+}
+
+function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks, zeroLine, subtitle, yTicks, tooltipFormatter, toleranceBand, errorMarkers }) {
+  // Place error dots on a rail near the bottom of this chart's visible range so
+  // they never collide with the trend lines but still read against the same X.
+  const hasErrors = errorMarkers && errorMarkers.length > 0;
+  let markerData = [];
+  if (hasErrors) {
+    // derive a rail Y: just below the data's min (or the domain floor)
+    const floor = Array.isArray(yDomain) && typeof yDomain[0] === 'number' ? yDomain[0] : null;
+    let lo = floor;
+    if (lo == null) {
+      const vals = data.flatMap(d => lines.map(l => d[l.key])).filter(v => typeof v === 'number');
+      lo = vals.length ? Math.min(...vals) : 0;
+    }
+    // Fan dots that share a corr number so overlapping events stay hoverable:
+    // nudge each a fraction of a correction-step along X around its true corr.
+    const byCorr = {};
+    errorMarkers.forEach(m => { (byCorr[m.corr] = byCorr[m.corr] || []).push(m); });
+    markerData = [];
+    Object.values(byCorr).forEach(group => {
+      const n = group.length;
+      group.forEach((m, i) => {
+        const spread = n > 1 ? (i - (n - 1) / 2) * 0.14 : 0;
+        markerData.push({ ...m, corr: m.corr + spread, _trueCorr: m.corr, _errY: lo });
+      });
+    });
+  }
+
+  const combinedTooltip = (props) => {
+    const p = props && props.payload && props.payload[0] && props.payload[0].payload;
+    if (p && p._err) return <ErrorDotTooltip e={p._err}/>;
+    // fall through to default line tooltip content
+    return null;
+  };
+
+  const Chart = hasErrors ? ComposedChart : LineChart;
+
   return (
     <div style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:6,padding:'12px 14px',marginBottom:14}}>
       <div className="cl" style={{marginBottom:subtitle?2:8}}>{title}</div>
       {subtitle && <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',marginBottom:8}}>{subtitle}</div>}
       <div style={{width:'100%',height:190}}>
         <ResponsiveContainer>
-          <LineChart data={data} margin={{top:5,right:14,left:hideYTicks?-24:0,bottom:5}}>
+          <Chart data={data} margin={{top:5,right:14,left:hideYTicks?-24:0,bottom:5}}>
             <CartesianGrid strokeDasharray="3 3" stroke="#1e2a3a"/>
             {/* Tolerance band sits behind everything so in-spec vs out-of-spec
                 reads at a glance instead of squinting at two dashed lines. */}
             {toleranceBand && (
               <ReferenceArea y1={toleranceBand[0]} y2={toleranceBand[1]} fill="#22d47a" fillOpacity={0.07} stroke="none"/>
             )}
-            <XAxis dataKey="corr" stroke="#5a6a80" tick={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}} label={{value:'Correction Count',position:'insideBottom',offset:-3,fontSize:9,fill:'#5a6a80'}}/>
+            <XAxis dataKey="corr" type="number" domain={['dataMin','dataMax']} stroke="#5a6a80" tick={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}} label={{value:'Correction Count',position:'insideBottom',offset:-3,fontSize:9,fill:'#5a6a80'}} allowDuplicatedCategory={false}/>
             <YAxis
               stroke="#5a6a80"
               tick={hideYTicks ? false : {fontSize:10,fontFamily:"IBM Plex Mono, monospace"}}
@@ -1969,23 +2171,50 @@ function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks
               contentStyle={{background:'#161b24',border:'1px solid #243040',fontSize:11,fontFamily:"IBM Plex Mono, monospace"}}
               labelFormatter={v=>`Corr ${v}`}
               formatter={tooltipFormatter || ((v)=>typeof v==='number'?v.toFixed(1):v)}
+              content={hasErrors ? (p)=>{
+                const row = p && p.payload && p.payload.find(x=>x.payload && x.payload._err);
+                if (row) return <ErrorDotTooltip e={row.payload._err}/>;
+                // default rendering for line points
+                if (!p || !p.active || !p.payload || !p.payload.length) return null;
+                return (
+                  <div style={{background:'#161b24',border:'1px solid #243040',padding:'6px 9px',fontSize:11,fontFamily:"IBM Plex Mono, monospace"}}>
+                    <div style={{color:'#8a9ab0',marginBottom:3}}>Corr {p.label}</div>
+                    {p.payload.filter(x=>!x.payload._err).map((x,i)=>(
+                      <div key={i} style={{color:x.color}}>{x.name}: {(tooltipFormatter?tooltipFormatter(x.value,x.name,x):(typeof x.value==='number'?x.value.toFixed(1):x.value))}</div>
+                    ))}
+                  </div>
+                );
+              } : undefined}
             />
             <Legend wrapperStyle={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}}/>
             {zeroLine && <ReferenceLine y={0} stroke="#8a9ab0" strokeWidth={1.5}/>}
             {(refLines||[]).map((rl,i) => <ReferenceLine key={i} y={rl.y} stroke="#ff4d6a" strokeDasharray="4 4" label={{value:rl.label,fontSize:9,fill:'#ff4d6a',position:'right'}}/>)}
             {lines.map(l => <Line key={l.key} type="monotone" dataKey={l.key} name={l.name} stroke={l.color} dot={{r:3}} connectNulls/>)}
-          </LineChart>
+            {hasErrors && (
+              <Scatter data={markerData} dataKey="_errY" name="Errors" shape={<ErrorDot/>} isAnimationActive={false} legendType="none"/>
+            )}
+          </Chart>
         </ResponsiveContainer>
       </div>
     </div>
   );
 }
 
-function TrendCharts({ history }) {
+function TrendCharts({ history, applogText }) {
   const points = trendPointsFromHistory(history);
   if (points.length < 2) {
     return <div style={{fontSize:11,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",padding:'6px 2px 14px'}}>Need at least 2 saved reports for this serial to plot a trend.</div>;
   }
+  // Parse applog errors and align them to the correction-count axis. finalCorr
+  // = the highest corr we have a report for, which anchors the log's tail.
+  const finalCorr = points.length ? points[points.length - 1].corr : null;
+  const errorEvents = parseApplogErrors(applogText, finalCorr);
+  // Only keep events that land within the plotted corr range, so a dot always
+  // sits under a real stretch of line rather than floating off the axis.
+  const minCorr = points[0].corr, maxCorr = points[points.length-1].corr;
+  const errorMarkers = errorEvents.filter(e => e.corr >= minCorr && e.corr <= maxCorr);
+  const stopCount = errorMarkers.filter(e=>e.sev==='stop').length;
+  const recurCount = errorMarkers.filter(e=>e.recurring).length;
   // Which optional metrics actually have data across the loaded history?
   // Hide a chart entirely if every point is null (e.g. a metric the model's
   // report format doesn't include) rather than showing an empty axis.
@@ -1993,6 +2222,16 @@ function TrendCharts({ history }) {
 
   return (
     <div style={{marginBottom:4}}>
+      {errorMarkers.length > 0 && (
+        <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:6,padding:'9px 12px',marginBottom:14,fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5}}>
+          <span style={{color:'var(--txm)'}}>Error overlay:</span>
+          <span style={{display:'flex',alignItems:'center',gap:5,color:'#ff4d6a'}}><span style={{width:8,height:8,borderRadius:'50%',background:'#ff4d6a'}}/>{stopCount} emergency stop</span>
+          <span style={{display:'flex',alignItems:'center',gap:5,color:'#ffb020'}}><span style={{width:8,height:8,borderRadius:'50%',background:'#ffb020'}}/>{errorMarkers.filter(e=>e.sev==='error').length} error</span>
+          <span style={{display:'flex',alignItems:'center',gap:5,color:'#5a6a80'}}><span style={{width:8,height:8,borderRadius:'50%',background:'#5a6a80'}}/>{errorMarkers.filter(e=>e.sev==='info').length} info</span>
+          {recurCount > 0 && <span style={{color:'#ff4d6a'}}>⚠ {recurCount} recurring — hover the ringed dots</span>}
+          <span style={{color:'var(--txd)',marginLeft:'auto'}}>hover any dot for the why</span>
+        </div>
+      )}
       {(() => {
         const TOL = 0.001;
         // Force 0 to the centre and guarantee the ±0.001 band is always on-screen
@@ -2001,7 +2240,7 @@ function TrendCharts({ history }) {
         return (
           <TrendChart
             title="Spindle Gradient X / Y"
-            subtitle="0 centred · green band = within ±0.001 tolerance"
+            subtitle="0 centred · green band = within ±0.001 tolerance · dots = errors in that correction window"
             data={points}
             lines={[{key:'gradientX',color:'#00c8ff',name:'Gradient X'},{key:'gradientY',color:'#ffb020',name:'Gradient Y'}]}
             refLines={[{y:TOL,label:'+0.001'},{y:-TOL,label:'−0.001'}]}
@@ -2010,12 +2249,13 @@ function TrendCharts({ history }) {
             zeroLine
             yFormat={v=>v.toFixed(4)}
             tooltipFormatter={(v)=>typeof v==='number'?v.toFixed(6):v}
+            errorMarkers={errorMarkers}
           />
         );
       })()}
       <TrendChart
         title="A/B-Axis P1/P2 Gap"
-        subtitle="A = Y-gap · B = X-gap · green band = within threshold (40)"
+        subtitle="A = Y-gap · B = X-gap · green band = within threshold (40) · dots = errors in that correction window"
         data={points}
         lines={[
           {key:'aGap',color:'#22d47a',name:'A-axis Y-gap'},
@@ -2023,6 +2263,7 @@ function TrendCharts({ history }) {
         ]}
         refLines={[{y:40,label:'threshold 40'}]}
         toleranceBand={[0, 40]}
+        errorMarkers={errorMarkers}
       />
       {has(['originX','originY','originZ']) && (() => {
         const { data: nd, maxDev } = centerAndNormalize(points, ['originX','originY','originZ'], 10);
@@ -2102,6 +2343,8 @@ function Diagnostics({ msg }) {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [serialList, setSerialList] = useState([]);
+  const [applogText, setApplogText] = useState(null);
+  const applogRef = useRef(null);
 
   const loadSerialList = useCallback(async () => {
     try {
@@ -2354,9 +2597,17 @@ function Diagnostics({ msg }) {
             )}
             <button className="btn bg" onClick={()=>loadHistory()} disabled={!historySerial.trim()}>Fetch</button>
           </div>
+          {!historyLoading && history.length > 0 && (
+            <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,flexWrap:'wrap'}}>
+              <button className="btn bp bs" onClick={()=>applogRef.current?.click()}>{applogText?'✓ Applog loaded — replace':'⬆ Add applog (overlay errors)'}</button>
+              {applogText && <button className="btn bs" onClick={()=>setApplogText(null)}>Clear</button>}
+              <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)'}}>plots each error as a dot on the correction axis</span>
+              <input ref={applogRef} type="file" accept=".txt,text/plain" style={{display:'none'}} onChange={e=>{const f=e.target.files?.[0]; if(!f)return; const rd=new FileReader(); rd.onload=()=>setApplogText(String(rd.result)); rd.readAsText(f); e.target.value='';}}/>
+            </div>
+          )}
           {historyLoading && <Loading/>}
           {!historyLoading && historyLoaded && history.length === 0 && <div className="empty"><div className="ei">📭</div>No saved reports for this serial yet.</div>}
-          {!historyLoading && history.length > 0 && <TrendCharts history={history}/>}
+          {!historyLoading && history.length > 0 && <TrendCharts history={history} applogText={applogText}/>}
           {!historyLoading && history.map(row => {
             const flaggedCount = (row.diagnostics||[]).filter(d=>d.flagged).length + (Array.isArray(row.dice) && row.dice.length ? (diagnoseDice3B9B(row.dice[row.dice.length-1])?.flagged?1:0) : 0);
             return (
