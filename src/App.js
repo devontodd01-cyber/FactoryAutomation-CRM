@@ -2115,33 +2115,37 @@ function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks
   const hasErrors = errorMarkers && errorMarkers.length > 0;
   let markerData = [];
   if (hasErrors) {
-    // derive a rail Y: just below the data's min (or the domain floor)
-    const floor = Array.isArray(yDomain) && typeof yDomain[0] === 'number' ? yDomain[0] : null;
-    let lo = floor;
-    if (lo == null) {
+    // Work out the actual visible Y span, then park the rail a little ABOVE the
+    // floor (10% up) so dots sit clearly inside the plot instead of being
+    // clipped against the axis line.
+    let yLo, yHi;
+    if (Array.isArray(yDomain) && typeof yDomain[0] === 'number' && typeof yDomain[1] === 'number') {
+      yLo = yDomain[0]; yHi = yDomain[1];
+    } else {
       const vals = data.flatMap(d => lines.map(l => d[l.key])).filter(v => typeof v === 'number');
-      lo = vals.length ? Math.min(...vals) : 0;
+      yLo = vals.length ? Math.min(...vals) : 0;
+      yHi = vals.length ? Math.max(...vals) : 1;
     }
+    const rail = yLo + (yHi - yLo) * 0.08; // 8% up from the floor
     // Fan dots that share a corr number so overlapping events stay hoverable:
     // nudge each a fraction of a correction-step along X around its true corr.
     const byCorr = {};
     errorMarkers.forEach(m => { (byCorr[m.corr] = byCorr[m.corr] || []).push(m); });
-    markerData = [];
     Object.values(byCorr).forEach(group => {
       const n = group.length;
       group.forEach((m, i) => {
         const spread = n > 1 ? (i - (n - 1) / 2) * 0.14 : 0;
-        markerData.push({ ...m, corr: m.corr + spread, _trueCorr: m.corr, _errY: lo });
+        markerData.push({ ...m, corr: m.corr + spread, _trueCorr: m.corr, _errY: rail });
       });
     });
   }
 
-  const combinedTooltip = (props) => {
-    const p = props && props.payload && props.payload[0] && props.payload[0].payload;
-    if (p && p._err) return <ErrorDotTooltip e={p._err}/>;
-    // fall through to default line tooltip content
-    return null;
-  };
+  // Merge markers INTO the chart data (rather than a separate Scatter dataset,
+  // which ComposedChart often fails to plot). Each marker row carries _errY +
+  // _err; line keys stay null on those rows so they don't distort the lines.
+  const chartData = hasErrors
+    ? [...data.map(d => ({ ...d })), ...markerData].sort((a, b) => a.corr - b.corr)
+    : data;
 
   const Chart = hasErrors ? ComposedChart : LineChart;
 
@@ -2151,7 +2155,7 @@ function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks
       {subtitle && <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',marginBottom:8}}>{subtitle}</div>}
       <div style={{width:'100%',height:190}}>
         <ResponsiveContainer>
-          <Chart data={data} margin={{top:5,right:14,left:hideYTicks?-24:0,bottom:5}}>
+          <Chart data={chartData} margin={{top:5,right:14,left:hideYTicks?-24:0,bottom:5}}>
             <CartesianGrid strokeDasharray="3 3" stroke="#1e2a3a"/>
             {/* Tolerance band sits behind everything so in-spec vs out-of-spec
                 reads at a glance instead of squinting at two dashed lines. */}
@@ -2191,7 +2195,7 @@ function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks
             {(refLines||[]).map((rl,i) => <ReferenceLine key={i} y={rl.y} stroke="#ff4d6a" strokeDasharray="4 4" label={{value:rl.label,fontSize:9,fill:'#ff4d6a',position:'right'}}/>)}
             {lines.map(l => <Line key={l.key} type="monotone" dataKey={l.key} name={l.name} stroke={l.color} dot={{r:3}} connectNulls/>)}
             {hasErrors && (
-              <Scatter data={markerData} dataKey="_errY" name="Errors" shape={<ErrorDot/>} isAnimationActive={false} legendType="none"/>
+              <Scatter dataKey="_errY" name="Errors" shape={<ErrorDot/>} isAnimationActive={false} legendType="none"/>
             )}
           </Chart>
         </ResponsiveContainer>
