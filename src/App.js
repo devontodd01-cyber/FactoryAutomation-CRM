@@ -2078,18 +2078,14 @@ function TrendCharts({ history }) {
           yFormat={v=>v.toFixed(3)}
         />
       )}
-      {has(['angleOffsetRange']) && (
+      {has(['angleOffsetRange','bAxisOffsetRange']) && (
         <TrendChart
-          title="A-Axis Angle Offset Range (max − min of BASE curve)"
+          title="A/B-Axis Angle Offset Range (max − min of BASE curve)"
           data={points}
-          lines={[{key:'angleOffsetRange',color:'#ff4d6a',name:'A-axis offset range'}]}
-        />
-      )}
-      {has(['bAxisOffsetRange']) && (
-        <TrendChart
-          title="B-Axis Angle Offset Range (max − min of BASE curve)"
-          data={points}
-          lines={[{key:'bAxisOffsetRange',color:'#f472b6',name:'B-axis offset range'}]}
+          lines={[
+            {key:'angleOffsetRange',color:'#ff4d6a',name:'A-axis offset range'},
+            {key:'bAxisOffsetRange',color:'#f472b6',name:'B-axis offset range'},
+          ]}
         />
       )}
     </div>
