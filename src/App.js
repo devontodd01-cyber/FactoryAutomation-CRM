@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, ReferenceArea, ComposedChart, Scatter } from "recharts";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, ReferenceArea, ComposedChart, Scatter, Customized } from "recharts";
 
 const SUPABASE_URL = "https://untsjmmqtfasejkwjnlf.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVudHNqbW1xdGZhc2Vqa3dqbmxmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM3OTc3NDksImV4cCI6MjA4OTM3Mzc0OX0.dqBbwFHC1tsPEtl9KD_qNUvhGW0H33NFj19h6MFeqAo";
@@ -2094,30 +2094,57 @@ function buildRawMetrics(report) {
   };
 }
 
-// Renders each error as a coloured dot on the correction-count axis. Custom
-// shape so severity drives colour; hover surfaces WHY it was flagged.
-function ErrorDot(props) {
-  const { cx, cy, payload } = props;
-  if (cx == null || cy == null || !payload || !payload._err) return null;
-  const e = payload._err;
-  const r = e.recurring ? 6 : 4;
+// Draws error dots directly onto the plot using Recharts' internal axis maps,
+// bypassing <Scatter> (which some Recharts versions won't render with a custom
+// shape). Recharts passes xAxisMap/yAxisMap to any <Customized> child; each
+// map's `scale` converts a data value to a pixel coordinate. We register hover
+// hit-areas and drive a local tooltip so hovering a dot explains the "why".
+function ErrorDotsLayer(props) {
+  const { xAxisMap, yAxisMap, markers, onHover, onLeave } = props;
+  if (!markers || !markers.length || !xAxisMap || !yAxisMap) return null;
+  const xAxis = xAxisMap[Object.keys(xAxisMap)[0]];
+  const yAxis = yAxisMap[Object.keys(yAxisMap)[0]];
+  // scale can live directly on the axis or (rarely) be rebuilt from domain+range;
+  // bail gracefully rather than throwing if neither is present.
+  const xScale = xAxis && (xAxis.scale || (xAxis.axis && xAxis.axis.scale));
+  const yScale = yAxis && (yAxis.scale || (yAxis.axis && yAxis.axis.scale));
+  if (typeof xScale !== 'function' || typeof yScale !== 'function') return null;
+
   return (
     <g>
-      {e.recurring && <circle cx={cx} cy={cy} r={r+3} fill={SEV_COLOR[e.sev]} fillOpacity={0.18}/>}
-      <circle cx={cx} cy={cy} r={r} fill={SEV_COLOR[e.sev]} stroke="#0a0c10" strokeWidth={1.5}/>
+      {markers.map((m, i) => {
+        const cx = xScale(m.corr);
+        const cy = yScale(m._errY);
+        if (cx == null || cy == null || isNaN(cx) || isNaN(cy)) return null;
+        const e = m._err;
+        const r = e.recurring ? 6 : 4.5;
+        const col = SEV_COLOR[e.sev];
+        return (
+          <g key={i}
+             onMouseEnter={(ev) => onHover && onHover(e, ev)}
+             onMouseMove={(ev) => onHover && onHover(e, ev)}
+             onMouseLeave={() => onLeave && onLeave()}
+             style={{ cursor: 'pointer' }}>
+            <circle cx={cx} cy={cy} r={r + 6} fill="transparent" />
+            {e.recurring && <circle cx={cx} cy={cy} r={r + 3} fill={col} fillOpacity={0.2} />}
+            <circle cx={cx} cy={cy} r={r} fill={col} stroke="#0a0c10" strokeWidth={1.5} />
+          </g>
+        );
+      })}
     </g>
   );
 }
 
 function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks, zeroLine, subtitle, yTicks, tooltipFormatter, toleranceBand, errorMarkers }) {
-  // Place error dots on a rail near the bottom of this chart's visible range so
-  // they never collide with the trend lines but still read against the same X.
+  const [hovered, setHovered] = useState(null); // {e, x, y} for the error tooltip
+  const wrapRef = useRef(null);
+
   const hasErrors = errorMarkers && errorMarkers.length > 0;
-  let markerData = [];
+
+  // Build the plotted markers: give each a rail Y (inside the visible domain,
+  // near the bottom) and fan same-corr events apart so each is hoverable.
+  let markers = [];
   if (hasErrors) {
-    // Work out the actual visible Y span, then park the rail a little ABOVE the
-    // floor (10% up) so dots sit clearly inside the plot instead of being
-    // clipped against the axis line.
     let yLo, yHi;
     if (Array.isArray(yDomain) && typeof yDomain[0] === 'number' && typeof yDomain[1] === 'number') {
       yLo = yDomain[0]; yHi = yDomain[1];
@@ -2126,39 +2153,31 @@ function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks
       yLo = vals.length ? Math.min(...vals) : 0;
       yHi = vals.length ? Math.max(...vals) : 1;
     }
-    const rail = yLo + (yHi - yLo) * 0.08; // 8% up from the floor
-    // Fan dots that share a corr number so overlapping events stay hoverable:
-    // nudge each a fraction of a correction-step along X around its true corr.
+    const rail = yLo + (yHi - yLo) * 0.06; // just above the floor
     const byCorr = {};
     errorMarkers.forEach(m => { (byCorr[m.corr] = byCorr[m.corr] || []).push(m); });
     Object.values(byCorr).forEach(group => {
       const n = group.length;
       group.forEach((m, i) => {
-        const spread = n > 1 ? (i - (n - 1) / 2) * 0.14 : 0;
-        markerData.push({ ...m, corr: m.corr + spread, _trueCorr: m.corr, _errY: rail });
+        const spread = n > 1 ? (i - (n - 1) / 2) * 0.16 : 0;
+        markers.push({ corr: m.corr + spread, _errY: rail, _err: m });
       });
     });
   }
 
-  // Merge markers INTO the chart data (rather than a separate Scatter dataset,
-  // which ComposedChart often fails to plot). Each marker row carries _errY +
-  // _err; line keys stay null on those rows so they don't distort the lines.
-  const chartData = hasErrors
-    ? [...data.map(d => ({ ...d })), ...markerData].sort((a, b) => a.corr - b.corr)
-    : data;
-
-  const Chart = hasErrors ? ComposedChart : LineChart;
+  const handleHover = (e, ev) => {
+    const rect = wrapRef.current ? wrapRef.current.getBoundingClientRect() : null;
+    setHovered({ e, x: rect ? ev.clientX - rect.left : 0, y: rect ? ev.clientY - rect.top : 0 });
+  };
 
   return (
-    <div style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:6,padding:'12px 14px',marginBottom:14}}>
+    <div ref={wrapRef} style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:6,padding:'12px 14px',marginBottom:14,position:'relative'}}>
       <div className="cl" style={{marginBottom:subtitle?2:8}}>{title}</div>
       {subtitle && <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:9,color:'var(--txd)',marginBottom:8}}>{subtitle}</div>}
       <div style={{width:'100%',height:190}}>
         <ResponsiveContainer>
-          <Chart data={chartData} margin={{top:5,right:14,left:hideYTicks?-24:0,bottom:5}}>
+          <LineChart data={data} margin={{top:5,right:14,left:hideYTicks?-24:0,bottom:5}}>
             <CartesianGrid strokeDasharray="3 3" stroke="#1e2a3a"/>
-            {/* Tolerance band sits behind everything so in-spec vs out-of-spec
-                reads at a glance instead of squinting at two dashed lines. */}
             {toleranceBand && (
               <ReferenceArea y1={toleranceBand[0]} y2={toleranceBand[1]} fill="#22d47a" fillOpacity={0.07} stroke="none"/>
             )}
@@ -2175,31 +2194,24 @@ function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks
               contentStyle={{background:'#161b24',border:'1px solid #243040',fontSize:11,fontFamily:"IBM Plex Mono, monospace"}}
               labelFormatter={v=>`Corr ${v}`}
               formatter={tooltipFormatter || ((v)=>typeof v==='number'?v.toFixed(1):v)}
-              content={hasErrors ? (p)=>{
-                const row = p && p.payload && p.payload.find(x=>x.payload && x.payload._err);
-                if (row) return <ErrorDotTooltip e={row.payload._err}/>;
-                // default rendering for line points
-                if (!p || !p.active || !p.payload || !p.payload.length) return null;
-                return (
-                  <div style={{background:'#161b24',border:'1px solid #243040',padding:'6px 9px',fontSize:11,fontFamily:"IBM Plex Mono, monospace"}}>
-                    <div style={{color:'#8a9ab0',marginBottom:3}}>Corr {p.label}</div>
-                    {p.payload.filter(x=>!x.payload._err).map((x,i)=>(
-                      <div key={i} style={{color:x.color}}>{x.name}: {(tooltipFormatter?tooltipFormatter(x.value,x.name,x):(typeof x.value==='number'?x.value.toFixed(1):x.value))}</div>
-                    ))}
-                  </div>
-                );
-              } : undefined}
             />
             <Legend wrapperStyle={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}}/>
             {zeroLine && <ReferenceLine y={0} stroke="#8a9ab0" strokeWidth={1.5}/>}
             {(refLines||[]).map((rl,i) => <ReferenceLine key={i} y={rl.y} stroke="#ff4d6a" strokeDasharray="4 4" label={{value:rl.label,fontSize:9,fill:'#ff4d6a',position:'right'}}/>)}
             {lines.map(l => <Line key={l.key} type="monotone" dataKey={l.key} name={l.name} stroke={l.color} dot={{r:3}} connectNulls/>)}
             {hasErrors && (
-              <Scatter dataKey="_errY" name="Errors" shape={<ErrorDot/>} isAnimationActive={false} legendType="none"/>
+              <Customized component={(cp) => (
+                <ErrorDotsLayer {...cp} markers={markers} onHover={handleHover} onLeave={() => setHovered(null)} />
+              )}/>
             )}
-          </Chart>
+          </LineChart>
         </ResponsiveContainer>
       </div>
+      {hovered && (
+        <div style={{position:'absolute',left:Math.min(hovered.x+12, (wrapRef.current?.offsetWidth||400)-270),top:Math.max(hovered.y-10,4),pointerEvents:'none',zIndex:20}}>
+          <ErrorDotTooltip e={hovered.e}/>
+        </div>
+      )}
     </div>
   );
 }
@@ -2289,6 +2301,7 @@ function TrendCharts({ history, applogText }) {
               const realDev = key && props.payload ? props.payload[key] : null;
               return realDev != null ? `${realDev > 0 ? '+' : ''}${Math.round(realDev)} units` : (typeof v === 'number' ? v.toFixed(1) : v);
             }}
+            errorMarkers={errorMarkers}
           />
         );
       })()}
@@ -2312,6 +2325,7 @@ function TrendCharts({ history, applogText }) {
               const realDev = key && props.payload ? props.payload[key] : null;
               return realDev != null ? `${realDev > 0 ? '+' : ''}${Math.round(realDev)} units` : (typeof v === 'number' ? v.toFixed(1) : v);
             }}
+            errorMarkers={errorMarkers}
           />
         );
       })()}
@@ -2321,6 +2335,7 @@ function TrendCharts({ history, applogText }) {
           data={points}
           lines={[{key:'baseToolLength',color:'#a78bfa',name:'Base Tool Length'}]}
           yFormat={v=>v.toFixed(3)}
+          errorMarkers={errorMarkers}
         />
       )}
       {has(['angleOffsetRange','bAxisOffsetRange']) && (
@@ -2331,6 +2346,7 @@ function TrendCharts({ history, applogText }) {
             {key:'angleOffsetRange',color:'#ff4d6a',name:'A-axis offset range'},
             {key:'bAxisOffsetRange',color:'#f472b6',name:'B-axis offset range'},
           ]}
+          errorMarkers={errorMarkers}
         />
       )}
     </div>
