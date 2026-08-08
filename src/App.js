@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, ReferenceArea, ComposedChart, Scatter, Customized } from "recharts";
+import { unzipSync, strFromU8 } from "fflate";
 
 const SUPABASE_URL = "https://untsjmmqtfasejkwjnlf.supabase.co";
 const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVudHNqbW1xdGZhc2Vqa3dqbmxmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM3OTc3NDksImV4cCI6MjA4OTM3Mzc0OX0.dqBbwFHC1tsPEtl9KD_qNUvhGW0H33NFj19h6MFeqAo";
@@ -2365,6 +2366,13 @@ function Diagnostics({ msg }) {
   const [serialList, setSerialList] = useState([]);
   const [applogText, setApplogText] = useState(null);
   const applogRef = useRef(null);
+  const folderRef = useRef(null);
+  const zipRef = useRef(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [autoSave, setAutoSave] = useState(() => {
+    try { const v = localStorage.getItem('axis_autosave'); return v === null ? true : v === '1'; } catch { return true; }
+  });
+  const toggleAutoSave = () => setAutoSave(v => { const nv = !v; try { localStorage.setItem('axis_autosave', nv ? '1' : '0'); } catch {} return nv; });
 
   const loadSerialList = useCallback(async () => {
     try {
@@ -2378,6 +2386,107 @@ function Diagnostics({ msg }) {
   const addReportBox = () => setReportTexts(t => [...t, '']);
   const removeReportBox = (i) => setReportTexts(t => t.length > 1 ? t.filter((_, idx) => idx !== i) : t);
   const updateReportBox = (i, val) => setReportTexts(t => t.map((x, idx) => idx === i ? val : x));
+
+  // Classify a dropped file by its CONTENT, not its name — filenames vary but
+  // the format is unmistakable. Order matters: test the report marker FIRST,
+  // because report bodies contain words like BEGIN/END that would otherwise
+  // trip the applog test. Handles both the DWX-53DC format (<< SystemReport >>,
+  // camelCase) and the older DWX-52D format (<< SYSTEM REPORT >>, UPPERCASE).
+  const classifyFile = (name, text) => {
+    if (/<<\s*SYSTEM\s*REPORT\s*>>/i.test(text) || /^\s*(MODEL|Model):\s/m.test(text) || /^\s*SERIAL\s*NUMBER:\s/mi.test(text)) return 'report';
+    // errorlog: date time code rows, separator can be TAB (53DC) or SPACE (52D)
+    const lines = text.split(/\r?\n/).filter(l => l.trim());
+    const codeRows = lines.filter(l => /^\d{4}\/\d{2}\/\d{2}[\t ]+\d{2}:\d{2}:\d{2}[\t ]+[0-9A-F]{4}-[0-9A-F]{4}/.test(l));
+    if (lines.length && codeRows.length / lines.length > 0.6) return 'errorlog';
+    // applog: tab-separated VPanel activity with these hallmark tokens
+    if (/AutomaticCorrection|EVENTLOG|SEQ_RESULT|\tBEGIN\t|\tEND\t/.test(text)) return 'applog';
+    // fall back to filename hints if content was ambiguous
+    const n = name.toLowerCase();
+    if (n.includes('applog')) return 'applog';
+    if (n.includes('error')) return 'errorlog';
+    if (n.includes('systemreport') || n.includes('system report') || n.includes('report')) return 'report';
+    return 'unknown';
+  };
+
+  // Take a .zip, a folder, or loose files. Everything is normalized to a list
+  // of {name, text} entries: zips are expanded in-browser (so nested paths like
+  // autosave/ don't matter), loose files are read directly. Then each entry is
+  // classified and routed — reports → diagnosis boxes, applog/errorlog → dots.
+  const ingestFolder = async (fileList) => {
+    const dropped = Array.from(fileList);
+    if (!dropped.length) { msg && msg('⚠️ Nothing to load.'); return; }
+    const readText = (f) => new Promise((res) => { const rd = new FileReader(); rd.onload = () => res(String(rd.result)); rd.onerror = () => res(''); rd.readAsText(f); });
+    const readBytes = (f) => new Promise((res) => { const rd = new FileReader(); rd.onload = () => res(new Uint8Array(rd.result)); rd.onerror = () => res(null); rd.readAsArrayBuffer(f); });
+
+    // Build a flat list of {name, text} from whatever was dropped.
+    const entries = [];
+    for (const f of dropped) {
+      const isZip = /\.zip$/i.test(f.name) || f.type === 'application/zip' || f.type === 'application/x-zip-compressed';
+      if (isZip) {
+        try {
+          const bytes = await readBytes(f);
+          const unzipped = unzipSync(bytes);
+          for (const [path, data] of Object.entries(unzipped)) {
+            if (path.endsWith('/')) continue;                 // directory entry
+            if (path.startsWith('__MACOSX/') || path.split('/').pop().startsWith('._')) continue; // macOS resource forks
+            if (/\.(dat|bin|png|jpg|jpeg|pdf|ini)$/i.test(path)) continue; // skip binaries
+            if (path.split('/').pop().startsWith('.')) continue; // skip dotfiles
+            entries.push({ name: path, text: strFromU8(data) });
+          }
+        } catch (e) {
+          msg && msg(`⚠️ Couldn't read ${f.name} — ${e.message || 'bad zip'}`);
+        }
+      } else if (/\.(dat|bin|png|jpg|jpeg|pdf|ini)$/i.test(f.name)) {
+        continue; // skip obvious binaries in a folder drop
+      } else {
+        entries.push({ name: f.name, text: await readText(f) });
+      }
+    }
+    if (!entries.length) { msg && msg('⚠️ No readable text files found.'); return; }
+
+    const reportChunks = [];
+    let appLog = null, errLog = null;
+    const counts = { report: 0, applog: 0, errorlog: 0, unknown: 0 };
+
+    for (const { name, text } of entries) {
+      if (!text.trim()) continue;
+      const kind = classifyFile(name, text);
+      counts[kind] = (counts[kind] || 0) + 1;
+      if (kind === 'report') {
+        splitReports(text).forEach(c => c.trim() && reportChunks.push(c));
+      } else if (kind === 'applog') {
+        appLog = appLog ? appLog + '\n' + text : text;
+      } else if (kind === 'errorlog') {
+        errLog = errLog ? errLog + '\n' + text : text;
+      }
+    }
+
+    // Serial sanity check across all reports so a mixed-machine folder is caught.
+    const serials = new Set();
+    reportChunks.forEach(c => { try { const p = parseVPanelReport(c); if (p.serial) serials.add(p.serial); } catch {} });
+    if (serials.size > 1) {
+      msg && msg(`⚠️ Folder has ${serials.size} different serials (${[...serials].join(', ')}) — expected one machine. Loaded anyway; check before saving.`);
+    }
+
+    if (reportChunks.length) setReportTexts(reportChunks);
+    if (appLog) setApplogText(appLog);
+    // If only an errorlog came (no applog), fall back to it for the overlay —
+    // it has codes+timestamps but no position coords, still enough for dots.
+    else if (errLog) setApplogText(errLog);
+
+    const serialLabel = serials.size === 1 ? ` · serial ${[...serials][0]}` : serials.size > 1 ? ` · ${serials.size} serials` : '';
+    const overlayLabel = appLog ? ' + applog' : errLog ? ' + errorlog' : '';
+
+    if (autoSave && reportChunks.length) {
+      // Hands-off path: diagnose straight off the parsed chunks (no wait on
+      // state) — runDiagnosis then auto-saves, and each row files under its own
+      // serial. The graph shows whichever serial you then Fetch in History.
+      msg && msg(`📂 Loaded ${counts.report} report${counts.report !== 1 ? 's' : ''}${overlayLabel}${serialLabel} — diagnosing & saving…`);
+      runDiagnosis(reportChunks);
+    } else {
+      msg && msg(`📂 Loaded ${counts.report} report${counts.report !== 1 ? 's' : ''}${overlayLabel}${serialLabel}. Hit Run Diagnosis.`);
+    }
+  };
 
   const addDiceEntry = () => setDiceEntries(d => [...d, emptyDiceEntry('')]);
   const removeDiceEntry = (id) => setDiceEntries(d => d.length > 1 ? d.filter(x => x.id !== id) : d);
@@ -2403,10 +2512,11 @@ function Diagnostics({ msg }) {
     msg && msg('🧹 Cleared — ready for next machine.');
   };
 
-  const runDiagnosis = () => {
+  const runDiagnosis = (explicitTexts) => {
+    const source = Array.isArray(explicitTexts) ? explicitTexts : reportTexts;
     const errors = [];
     const pairs = [];
-    reportTexts.forEach((raw, idx) => {
+    source.forEach((raw, idx) => {
       if (!raw.trim()) return;
       const chunks = splitReports(raw);
       chunks.forEach((chunk, ci) => {
@@ -2457,13 +2567,22 @@ function Diagnostics({ msg }) {
     }
     setResults({ perReport, errors });
     if (errors.length) msg && msg(`⚠️ ${errors.length} report(s) failed to parse — see console/edit raw.`);
+    // Auto-save: the serial travels with each report, so saveAll files every
+    // row under its own machine regardless of how many serials are in the batch.
+    // We pass perReport explicitly because React state won't have updated yet.
+    if (autoSave && perReport.length) {
+      saveAll(perReport, distinctSerials.length);
+    }
+    return perReport;
   };
 
-  const saveAll = async () => {
-    if (!results?.perReport?.length) return;
+  const saveAll = async (explicitList, serialCount) => {
+    const list = Array.isArray(explicitList) ? explicitList : results?.perReport;
+    if (!list?.length) return;
     setSaving(true);
     let ok = 0, fail = 0, lastErr = '';
-    for (const { raw, report, diagnostics, diceCheck } of results.perReport) {
+    const savedSerials = new Set();
+    for (const { raw, report, diagnostics, diceCheck } of list) {
       try {
         await db.upsert('diagnostic_reports', {
           model: report.model,
@@ -2475,16 +2594,16 @@ function Diagnostics({ msg }) {
           raw_metrics: buildRawMetrics(report),
           dice: diceCheck ? diceEntries : null,
         }, 'serial,correction_count');
-        ok++;
+        ok++; if (report.serial) savedSerials.add(report.serial);
       } catch (e) { fail++; lastErr = e.message || String(e); }
     }
     setSaving(false);
     if (fail) {
-      // Show the actual reason (e.g. a missing column) instead of a false success.
       msg && msg(`⚠️ Saved ${ok}, ${fail} failed — ${lastErr}`);
       console.error('Diagnostic save error:', lastErr);
     } else {
-      msg && msg(`✅ Saved ${ok}`);
+      const nS = savedSerials.size;
+      msg && msg(`✅ Saved ${ok} report${ok !== 1 ? 's' : ''}${nS > 1 ? ` across ${nS} serials` : ''}`);
     }
     if (ok) loadSerialList();
   };
@@ -2533,6 +2652,39 @@ function Diagnostics({ msg }) {
           </div>
         </div>
         <div style={{padding:14}}>
+          {/* One-drop intake: a whole machine folder (up to 5 reports + applog
+              + errorlog). Files are classified by content and routed — reports
+              to the boxes below, applog to the error-dot overlay. */}
+          <div
+            onDragOver={e=>{e.preventDefault();setDragOver(true);}}
+            onDragLeave={e=>{e.preventDefault();setDragOver(false);}}
+            onDrop={e=>{e.preventDefault();setDragOver(false); const items=e.dataTransfer?.files; if(items&&items.length) ingestFolder(items);}}
+            onClick={()=>zipRef.current?.click()}
+            style={{
+              border:`1.5px dashed ${dragOver?'#00c8ff':'var(--bdr)'}`,
+              background:dragOver?'rgba(0,200,255,0.06)':'var(--sur2)',
+              borderRadius:8, padding:'18px 16px', marginBottom:16, cursor:'pointer',
+              textAlign:'center', transition:'all .15s',
+            }}
+          >
+            <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:15,color:dragOver?'#00c8ff':'var(--txm)',marginBottom:3}}>
+              📂 Drop the machine .zip or folder here
+            </div>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5,color:'var(--txd)',lineHeight:1.5}}>
+              zip / folder with any number of reports (incl. autosave/) + applog + errorlog · auto-sorted · <span onClick={e=>{e.stopPropagation();zipRef.current?.click();}} style={{color:'#00c8ff',textDecoration:'underline',cursor:'pointer'}}>pick a .zip</span> or <span onClick={e=>{e.stopPropagation();folderRef.current?.click();}} style={{color:'#00c8ff',textDecoration:'underline',cursor:'pointer'}}>a folder</span>
+            </div>
+            <input
+              ref={folderRef} type="file" multiple
+              webkitdirectory="" directory=""
+              style={{display:'none'}}
+              onChange={e=>{ if(e.target.files?.length) ingestFolder(e.target.files); e.target.value=''; }}
+            />
+            <input
+              ref={zipRef} type="file" accept=".zip,application/zip"
+              style={{display:'none'}}
+              onChange={e=>{ if(e.target.files?.length) ingestFolder(e.target.files); e.target.value=''; }}
+            />
+          </div>
           {reportTexts.map((raw, i) => (
             <div key={i} className="diag-report-card">
               <div className="diag-report-head">
@@ -2569,9 +2721,24 @@ function Diagnostics({ msg }) {
             </div>
           </div>
 
-          <div style={{display:'flex',gap:8}}>
-            <button className="btn bp" style={{flex:1}} onClick={runDiagnosis}>▶ Run Diagnosis</button>
-            {results?.perReport?.length > 0 && <button className="btn bimport" onClick={saveAll} disabled={saving}>{saving ? '⏳ Saving...' : '☁ Save All'}</button>}
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <button className="btn bp" style={{flex:1}} onClick={runDiagnosis}>▶ Run Diagnosis{autoSave ? ' + Save' : ''}</button>
+            {/* Manual Save appears only when auto-save is off, or as a re-save
+                fallback if an auto-save failed and results are still in memory. */}
+            {!autoSave && results?.perReport?.length > 0 && <button className="btn bimport" onClick={()=>saveAll()} disabled={saving}>{saving ? '⏳ Saving...' : '☁ Save All'}</button>}
+            <button
+              onClick={toggleAutoSave}
+              title={autoSave ? 'Auto-save is ON — each diagnosis saves automatically. Click to switch to manual.' : 'Auto-save is OFF — you save manually. Click to enable auto-save.'}
+              style={{
+                display:'flex',alignItems:'center',gap:6,padding:'0 12px',height:38,
+                background:autoSave?'rgba(34,212,122,0.12)':'var(--sur2)',
+                border:`1px solid ${autoSave?'#22d47a':'var(--bdr)'}`,borderRadius:6,cursor:'pointer',
+                fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5,color:autoSave?'#22d47a':'var(--txd)',whiteSpace:'nowrap',
+              }}
+            >
+              <span style={{width:8,height:8,borderRadius:'50%',background:autoSave?'#22d47a':'#5a6a80'}}/>
+              auto-save {autoSave?'ON':'OFF'}
+            </button>
           </div>
         </div>
       </div>
