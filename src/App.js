@@ -1915,6 +1915,121 @@ function decodeErrorCode(raw) {
   return { code: raw, main, param: param || "0000", ...entry };
 }
 
+// ── Severity label for the lookup panel (SEV_COLOR is defined below, reused) ──
+const SEV_LABEL = { stop: 'STOP', error: 'ERROR', info: 'INFO' };
+
+// Quick error-code reference. Read-only, driven off ERROR_CODE_TABLE. Type a
+// code (e.g. "102A", "102a", or full "102A-0000" — suffix ignored) to filter;
+// matches on code OR words in the subsystem/hint so "spindle" also works.
+// Built to be used one-handed on a phone while a customer is on the line.
+function ErrorCodeLookup() {
+  const [q, setQ] = useState('');
+  const [open, setOpen] = useState(true);
+
+  const codes = Object.entries(ERROR_CODE_TABLE); // [ [main, entry], ... ]
+  const query = q.trim().toLowerCase();
+  const mainQuery = query.split('-')[0]; // ignore any -0000 suffix the caller typed
+
+  const results = !query
+    ? codes
+    : codes.filter(([main, e]) =>
+        main.toLowerCase().includes(mainQuery) ||
+        e.sub.toLowerCase().includes(query) ||
+        e.hint.toLowerCase().includes(query)
+      );
+
+  // If the typed code is an exact 4-char match, float it to the very top.
+  results.sort((a, b) => {
+    const ax = a[0].toLowerCase() === mainQuery ? 0 : 1;
+    const bx = b[0].toLowerCase() === mainQuery ? 0 : 1;
+    return ax - bx;
+  });
+
+  return (
+    <div style={{
+      border:'1px solid var(--bdr)', borderRadius:8, background:'var(--sur2)',
+      marginBottom:16, overflow:'hidden',
+    }}>
+      <div
+        onClick={()=>setOpen(o=>!o)}
+        style={{
+          display:'flex', alignItems:'center', justifyContent:'space-between',
+          padding:'11px 14px', cursor:'pointer', userSelect:'none',
+          background:'var(--sur)', borderBottom: open ? '1px solid var(--bdr)' : 'none',
+        }}
+      >
+        <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:15,color:'var(--txm)'}}>
+          🔎 Error-Code Lookup
+        </div>
+        <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:11,color:'var(--txd)'}}>
+          {open ? '▲' : '▼'} {ERROR_CODE_TABLE ? Object.keys(ERROR_CODE_TABLE).length : 0} codes
+        </div>
+      </div>
+
+      {open && (
+        <div style={{padding:14}}>
+          <input
+            value={q}
+            onChange={e=>setQ(e.target.value)}
+            placeholder="Type a code (102A) or a word (spindle, ballscrew, adapter)…"
+            autoComplete="off" autoCorrect="off" autoCapitalize="characters" spellCheck={false}
+            style={{
+              width:'100%', boxSizing:'border-box', height:46,
+              fontFamily:"'IBM Plex Mono',monospace", fontSize:16,
+              padding:'0 14px', borderRadius:8, border:'1.5px solid var(--bdr)',
+              background:'var(--bg)', color:'var(--txl)', outline:'none', marginBottom:12,
+            }}
+          />
+          {q.trim() && (
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5,color:'var(--txd)',marginBottom:10}}>
+              {results.length} match{results.length===1?'':'es'}
+            </div>
+          )}
+          <div style={{display:'flex',flexDirection:'column',gap:8,maxHeight:460,overflowY:'auto'}}>
+            {results.length === 0 && (
+              <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:12,color:'var(--txd)',padding:'8px 2px'}}>
+                No match. Codes not in the service-note table show as “Unknown code” when parsed from a report.
+              </div>
+            )}
+            {results.map(([main, e]) => {
+              const c = SEV_COLOR[e.sev] || SEV_COLOR.error;
+              return (
+                <div key={main} style={{
+                  display:'flex', gap:12, alignItems:'flex-start',
+                  padding:'11px 12px', borderRadius:8,
+                  background:'var(--bg)', border:`1px solid var(--bdr)`,
+                  borderLeft:`4px solid ${c}`,
+                }}>
+                  <div style={{minWidth:58}}>
+                    <div style={{fontFamily:"'IBM Plex Mono',monospace",fontWeight:700,fontSize:16,color:'var(--txl)',letterSpacing:0.5}}>
+                      {main}
+                    </div>
+                    <div style={{
+                      display:'inline-block', marginTop:4, padding:'1px 6px', borderRadius:4,
+                      fontFamily:"'IBM Plex Mono',monospace", fontSize:9, fontWeight:600,
+                      color:c, background:`${c}22`, letterSpacing:1,
+                    }}>
+                      {SEV_LABEL[e.sev] || 'ERROR'}
+                    </div>
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:15,color:'var(--txm)',marginBottom:3}}>
+                      {e.sub}
+                    </div>
+                    <div style={{fontFamily:"'IBM Plex Sans',sans-serif",fontSize:12.5,color:'var(--txd)',lineHeight:1.5}}>
+                      {e.hint}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Parse an applog (tab-separated VPanel activity log). Returns error events,
 // each tagged with the correction count that was active when it occurred — so
 // it can be plotted as a dot on the existing correction-count X-axis.
@@ -2652,6 +2767,9 @@ function Diagnostics({ msg }) {
           </div>
         </div>
         <div style={{padding:14}}>
+          {/* Quick error-code reference — for looking up a code a customer reports
+              on the phone. Read-only, sits above the report intake. */}
+          <ErrorCodeLookup />
           {/* One-drop intake: a whole machine folder (up to 5 reports + applog
               + errorlog). Files are classified by content and routed — reports
               to the boxes below, applog to the error-dot overlay. */}
