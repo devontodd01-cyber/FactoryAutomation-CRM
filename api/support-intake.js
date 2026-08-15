@@ -148,7 +148,14 @@ export default async function handler(req, res) {
         `Auto-reply sent to customer: yes`,
     });
 
-    return res.status(200).json({ ok: true, matched: fix ? fix.error_code : null, tier });
+    return res.status(200).json({
+      ok: true,
+      matched: fix ? fix.error_code : null,
+      tier,
+      tier_label: fix ? fix.tier_label : null,
+      short_message: fix ? fix.short_message : null,
+      reply: customerBody,
+    });
   } catch (err) {
     console.error(err);
     try {
