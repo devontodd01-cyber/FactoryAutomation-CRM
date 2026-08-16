@@ -2174,6 +2174,16 @@ function trendPointsFromHistory(history) {
       const aGap = ag ? ag.gap : (rac["A-AXIS"] ? yGap(rac["A-AXIS"]) : null);
       const bGap = bg ? bg.gap : (rac["B-AXIS"] ? xGap(rac["B-AXIS"]) : null);
 
+      // Raw P1/P2 points behind the gap checks — same component the gap uses
+      // (A-axis travels Y, B-axis travels X), so a chart of these two lines
+      // shows WHICH point is moving when the gap trend line above changes.
+      const aAxisPts = rac["A-AXIS"] || {};
+      const bAxisPts = rac["B-AXIS"] || {};
+      const aP1Y = Array.isArray(aAxisPts.P1) ? num(aAxisPts.P1[1]) : null;
+      const aP2Y = Array.isArray(aAxisPts.P2) ? num(aAxisPts.P2[1]) : null;
+      const bP1X = Array.isArray(bAxisPts.P1) ? num(bAxisPts.P1[0]) : null;
+      const bP2X = Array.isArray(bAxisPts.P2) ? num(bAxisPts.P2[0]) : null;
+
       const origin = rm && rm.origin ? rm.origin : extractOrigin(sections, rac);
       const mag = rm && rm.magOffset ? rm.magOffset : triplet(atc["MAGAZINE POSITION OFFSET"]);
       const baseTL = rm && rm.baseToolLength != null ? rm.baseToolLength : num(rac["BASE TOOL LENGTH"]);
@@ -2186,6 +2196,7 @@ function trendPointsFromHistory(history) {
         gradientY,
         aGap,
         bGap,
+        aP1Y, aP2Y, bP1X, bP2X,
         originX: origin[0], originY: origin[1], originZ: origin[2],
         magX: mag[0], magY: mag[1], magZ: mag[2],
         baseToolLength: baseTL,
@@ -2397,6 +2408,20 @@ function TrendCharts({ history, applogText }) {
         toleranceBand={[0, 40]}
         errorMarkers={errorMarkers}
       />
+      {has(['aP1Y','aP2Y','bP1X','bP2X']) && (
+        <TrendChart
+          title="A/B-Axis P1 / P2 Raw Values"
+          subtitle="the two correction points behind the gap above · A-axis Y-component · B-axis X-component · dots = errors in that correction window"
+          data={points}
+          lines={[
+            {key:'aP1Y',color:'#00c8ff',name:'A-axis P1 (Y)'},
+            {key:'aP2Y',color:'#7dd3fc',name:'A-axis P2 (Y)'},
+            {key:'bP1X',color:'#ff4d6a',name:'B-axis P1 (X)'},
+            {key:'bP2X',color:'#f472b6',name:'B-axis P2 (X)'},
+          ]}
+          errorMarkers={errorMarkers}
+        />
+      )}
       {has(['originX','originY','originZ']) && (() => {
         const { data: nd, maxDev } = centerAndNormalize(points, ['originX','originY','originZ'], 10);
         return (
