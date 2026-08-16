@@ -2473,13 +2473,18 @@ function TrendCharts({ history, applogText }) {
 // Drop this component into App.jsx and wire it with the 3 edits in FLEET_WIRING.md.
 // It reuses the existing `db` helper, `msg` toast, and diag-* / card styles.
 // ============================================================================
+// ============================================================================
+// Fleet view - live fleet monitoring from the mill_reports table (MillPulse).
+// Drop this component into App.jsx and wire it with the 3 edits in FLEET_WIRING.md.
+// It reuses the existing `db` helper, `msg` toast, and diag-* / card styles.
+// ============================================================================
 
 function Fleet({ msg }) {
-  const [rows, setRows] = React.useState([]);
-  const [loading, setLoading] = React.useState(true);
-  const [openSerial, setOpenSerial] = React.useState(null);
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [openSerial, setOpenSerial] = useState(null);
 
-  const load = React.useCallback(async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     try {
       // pull every report, newest first; we group by serial client-side
@@ -2497,20 +2502,18 @@ function Fleet({ msg }) {
     }
   }, [msg]);
 
-  React.useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load]);
 
-  // group rows by serial -> { latest, history[] }
-  const machines = React.useMemo(() => {
-    const bySerial = {};
-    for (const row of rows) {
-      (bySerial[row.serial] = bySerial[row.serial] || []).push(row);
-    }
-    return Object.entries(bySerial).map(([serial, list]) => {
-      const sorted = [...list].sort((a, b) => (a.correction_count || 0) - (b.correction_count || 0));
-      const latest = sorted.find(x => x.is_latest) || sorted[sorted.length - 1];
-      return { serial, latest, history: sorted };
-    }).sort((a, b) => a.serial.localeCompare(b.serial));
-  }, [rows]);
+  // group rows by serial -> { latest, history[] } (computed each render)
+  const bySerial = {};
+  for (const row of rows) {
+    (bySerial[row.serial] = bySerial[row.serial] || []).push(row);
+  }
+  const machines = Object.entries(bySerial).map(([serial, list]) => {
+    const sorted = [...list].sort((a, b) => (a.correction_count || 0) - (b.correction_count || 0));
+    const latest = sorted.find(x => x.is_latest) || sorted[sorted.length - 1];
+    return { serial, latest, history: sorted };
+  }).sort((a, b) => a.serial.localeCompare(b.serial));
 
   // thresholds mirror the diagnostics engine
   const flags = (r) => {
@@ -2653,6 +2656,13 @@ function Fleet({ msg }) {
       })}
     </div>
   );
+}
+
+// small helper - format the tiny gradient numbers readably
+function fmtNum(v) {
+  if (v == null) return '—';
+  if (typeof v !== 'number') return String(v);
+  return v.toFixed(6).replace(/0+$/, '').replace(/\.$/, '') || '0';
 }
 
 // small helper - format the tiny gradient numbers readably
