@@ -2609,7 +2609,24 @@ function FleetSerialTrendGraphs({ serial, fleetHistory }) {
     setLoadError(false);
     (async () => {
       try {
-        const rows = await db.getWhere('diagnostic_reports', 'serial', serial);
+        // Exact match first — the common case, and cheapest (one request).
+        let rows = await db.getWhere('diagnostic_reports', 'serial', serial);
+        // Fleet's serial comes from mill_reports (auto-synced from the machine)
+        // while diagnostic_reports rows come from whatever got typed/saved on
+        // the Mill Diagnostics page — two different entry paths into two
+        // different tables, so a case difference or stray space between them
+        // is enough to make the exact match above come up empty even when the
+        // machine genuinely has saved history. If that happened, re-check
+        // case-insensitively / trimmed against every serial Mill Diagnostics
+        // has on file, and re-query using whichever one actually matches.
+        if (!Array.isArray(rows) || rows.length === 0) {
+          const allSerials = await db.distinctColumn('diagnostic_reports', 'serial');
+          const norm = (s) => String(s || '').trim().toLowerCase();
+          const match = allSerials.find(s => norm(s) === norm(serial));
+          if (match && match !== serial) {
+            rows = await db.getWhere('diagnostic_reports', 'serial', match);
+          }
+        }
         if (cancelled) return;
         const sorted = Array.isArray(rows)
           ? [...rows].sort((a, b) => (a.correction_count ?? 0) - (b.correction_count ?? 0))
@@ -2650,7 +2667,7 @@ function FleetSerialTrendGraphs({ serial, fleetHistory }) {
 
   return (
     <div>
-      {fallbackNote(`No Mill Diagnostics history saved for ${serial} yet — run its reports through 🩺 Mill Diagnostics to unlock the full chart set (origin drift, magazine offset, raw P1/P2, angle-offset range). Showing what Fleet's live sync has in the meantime:`)}
+      {fallbackNote(`No Mill Diagnostics history found for serial "${serial}" (checked for case/spacing differences too) — run its reports through 🩺 Mill Diagnostics to unlock the full chart set (origin drift, magazine offset, raw P1/P2, angle-offset range). Showing what Fleet's live sync has in the meantime:`)}
       <FleetTrendCharts history={fleetHistory} />
     </div>
   );
