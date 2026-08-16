@@ -2665,13 +2665,6 @@ function fmtNum(v) {
   return v.toFixed(6).replace(/0+$/, '').replace(/\.$/, '') || '0';
 }
 
-// small helper - format the tiny gradient numbers readably
-function fmtNum(v) {
-  if (v == null) return '—';
-  if (typeof v !== 'number') return String(v);
-  return v.toFixed(6).replace(/0+$/, '').replace(/\.$/, '') || '0';
-}
-
 function Diagnostics({ msg }) {
   const [reportTexts, setReportTexts] = useState(['']);
   const [diceEntries, setDiceEntries] = useState([emptyDiceEntry('')]);
