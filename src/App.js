@@ -2468,6 +2468,199 @@ function TrendCharts({ history, applogText }) {
     </div>
   );
 }
+// ============================================================================
+// Fleet view - live fleet monitoring from the mill_reports table (MillPulse).
+// Drop this component into App.jsx and wire it with the 3 edits in FLEET_WIRING.md.
+// It reuses the existing `db` helper, `msg` toast, and diag-* / card styles.
+// ============================================================================
+
+function Fleet({ msg }) {
+  const [rows, setRows] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [openSerial, setOpenSerial] = React.useState(null);
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    try {
+      // pull every report, newest first; we group by serial client-side
+      const r = await fetch(
+        `${SUPABASE_URL}/rest/v1/mill_reports?select=serial,model,correction_count,firmware_main,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length,spindle_hours,total_work_time,report_date,recent_errors,is_latest,created_at&order=serial.asc,correction_count.asc`,
+        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+      );
+      const data = await r.json();
+      setRows(Array.isArray(data) ? data : []);
+    } catch (e) {
+      msg && msg('Failed to load fleet: ' + e.message, 'bad');
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [msg]);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  // group rows by serial -> { latest, history[] }
+  const machines = React.useMemo(() => {
+    const bySerial = {};
+    for (const row of rows) {
+      (bySerial[row.serial] = bySerial[row.serial] || []).push(row);
+    }
+    return Object.entries(bySerial).map(([serial, list]) => {
+      const sorted = [...list].sort((a, b) => (a.correction_count || 0) - (b.correction_count || 0));
+      const latest = sorted.find(x => x.is_latest) || sorted[sorted.length - 1];
+      return { serial, latest, history: sorted };
+    }).sort((a, b) => a.serial.localeCompare(b.serial));
+  }, [rows]);
+
+  // thresholds mirror the diagnostics engine
+  const flags = (r) => {
+    if (!r) return [];
+    const out = [];
+    if (r.spindle_gradient_x != null && Math.abs(r.spindle_gradient_x) > 0.001)
+      out.push('Spindle X');
+    if (r.a_y_gap != null && r.a_y_gap > 40) out.push('A-gap');
+    if (r.b_x_gap != null && r.b_x_gap > 40) out.push('B-gap');
+    return out;
+  };
+
+  const fleetFlagged = machines.filter(m => flags(m.latest).length > 0).length;
+
+  return (
+    <div>
+      <div className="pt">🛠 Fleet Monitoring</div>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', margin: '4px 0 16px' }}>
+        <div className="diag-meta" style={{ margin: 0 }}>
+          {loading ? 'loading…' : `${machines.length} machine(s) · ${fleetFlagged} flagged`}
+        </div>
+        <button className="btn" onClick={load} style={{ marginLeft: 'auto' }}>↻ Refresh</button>
+      </div>
+
+      {!loading && machines.length === 0 && (
+        <div className="diag-flag info">
+          <div className="diag-flag-title">No reports yet</div>
+          <div className="diag-flag-desc">
+            Install MillPulse on a machine PC and run a sync. Reports will appear here.
+          </div>
+        </div>
+      )}
+
+      {machines.map(({ serial, latest, history }) => {
+        const f = flags(latest);
+        const isBad = f.length > 0;
+        const open = openSerial === serial;
+        return (
+          <div key={serial} className="diag-report-card">
+            <div
+              className="diag-report-head"
+              style={{ cursor: 'pointer' }}
+              onClick={() => setOpenSerial(open ? null : serial)}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 15 }}>
+                  {serial}
+                </span>
+                <span className="diag-meta" style={{ margin: 0 }}>
+                  {latest?.model || '—'} · cc {latest?.correction_count ?? '—'} · fw {latest?.firmware_main || '—'}
+                </span>
+              </div>
+              <span
+                className={`diag-flag-title`}
+                style={{ margin: 0, fontSize: 12, color: isBad ? 'var(--rd)' : 'var(--gr)' }}
+              >
+                {isBad ? `⚠ ${f.join(', ')}` : '✓ clean'}
+              </span>
+            </div>
+
+            {/* latest key metrics */}
+            <div className="diag-meta">
+              <span>Spindle X: {fmtNum(latest?.spindle_gradient_x)}</span>
+              <span>Spindle Y: {fmtNum(latest?.spindle_gradient_y)}</span>
+              <span>A-gap: {latest?.a_y_gap ?? '—'}</span>
+              <span>B-gap: {latest?.b_x_gap ?? '—'}</span>
+              <span>Base tool: {latest?.base_tool_length ?? '—'}</span>
+              <span>Spindle hrs: {latest?.spindle_hours || '—'}</span>
+            </div>
+
+            {open && (
+              <div style={{ marginTop: 12 }}>
+                {/* trend table across correction counts */}
+                <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 12, letterSpacing: '.5px', marginBottom: 6, color: 'var(--txm)' }}>
+                  TREND · {history.length} report(s)
+                </div>
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: "'IBM Plex Mono',monospace", fontSize: 11 }}>
+                    <thead>
+                      <tr style={{ color: 'var(--txd)', textAlign: 'left' }}>
+                        <th style={{ padding: '4px 8px' }}>cc</th>
+                        <th style={{ padding: '4px 8px' }}>Spindle X</th>
+                        <th style={{ padding: '4px 8px' }}>Spindle Y</th>
+                        <th style={{ padding: '4px 8px' }}>A-gap</th>
+                        <th style={{ padding: '4px 8px' }}>B-gap</th>
+                        <th style={{ padding: '4px 8px' }}>Base tool</th>
+                        <th style={{ padding: '4px 8px' }}>Date</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {history.map((h, i) => {
+                        const prev = history[i - 1];
+                        const yflip = prev && h.spindle_gradient_y != null && prev.spindle_gradient_y != null
+                          && (h.spindle_gradient_y > 0) !== (prev.spindle_gradient_y > 0);
+                        return (
+                          <tr key={h.correction_count} style={{ borderTop: '1px solid var(--bdr)' }}>
+                            <td style={{ padding: '4px 8px', color: h.is_latest ? 'var(--ac)' : 'var(--tx)' }}>
+                              {h.correction_count}{h.is_latest ? ' •' : ''}
+                            </td>
+                            <td style={{ padding: '4px 8px', color: (h.spindle_gradient_x != null && Math.abs(h.spindle_gradient_x) > 0.001) ? 'var(--rd)' : 'var(--tx)' }}>
+                              {fmtNum(h.spindle_gradient_x)}
+                            </td>
+                            <td style={{ padding: '4px 8px', color: yflip ? 'var(--rd)' : 'var(--tx)' }}>
+                              {fmtNum(h.spindle_gradient_y)}{yflip ? ' ⇄' : ''}
+                            </td>
+                            <td style={{ padding: '4px 8px', color: (h.a_y_gap != null && h.a_y_gap > 40) ? 'var(--rd)' : 'var(--tx)' }}>
+                              {h.a_y_gap ?? '—'}
+                            </td>
+                            <td style={{ padding: '4px 8px', color: (h.b_x_gap != null && h.b_x_gap > 40) ? 'var(--rd)' : 'var(--tx)' }}>
+                              {h.b_x_gap ?? '—'}
+                            </td>
+                            <td style={{ padding: '4px 8px' }}>{h.base_tool_length ?? '—'}</td>
+                            <td style={{ padding: '4px 8px', color: 'var(--txd)' }}>
+                              {(h.report_date || '').slice(0, 10) || '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* recent error codes from the latest report */}
+                {Array.isArray(latest?.recent_errors) && latest.recent_errors.length > 0 && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 12, letterSpacing: '.5px', marginBottom: 6, color: 'var(--txm)' }}>
+                      RECENT ERRORS
+                    </div>
+                    <div className="diag-meta" style={{ flexDirection: 'column', gap: 3 }}>
+                      {latest.recent_errors.slice(0, 8).map((e, i) => (
+                        <span key={i}>{e.date} {e.time} — {e.code}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// small helper - format the tiny gradient numbers readably
+function fmtNum(v) {
+  if (v == null) return '—';
+  if (typeof v !== 'number') return String(v);
+  return v.toFixed(6).replace(/0+$/, '').replace(/\.$/, '') || '0';
+}
 
 function Diagnostics({ msg }) {
   const [reportTexts, setReportTexts] = useState(['']);
