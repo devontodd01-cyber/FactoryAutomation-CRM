@@ -2262,6 +2262,14 @@ function ErrorDotsLayer(props) {
   );
 }
 
+// One color per axis, held constant across every trend chart (Mill Diagnostics
+// AND Fleet) so X/Y/Z/A/B always mean the same thing at a glance no matter
+// which chart you're looking at. AXIS_COLOR_LIGHT is a second, lighter shade
+// used only when a single chart needs two lines for the same axis (e.g. the
+// P1 vs P2 raw-value chart) — still instantly recognizable as "that axis".
+const AXIS_COLOR = { X: '#f472b6', Y: '#ffb020', Z: '#3b82f6', A: '#a78bfa', B: '#22d47a' };
+const AXIS_COLOR_LIGHT = { A: '#c4b5fd', B: '#86efac' };
+
 function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks, zeroLine, subtitle, yTicks, tooltipFormatter, toleranceBand, errorMarkers }) {
   const [hovered, setHovered] = useState(null); // {e, x, y} for the error tooltip
   const wrapRef = useRef(null);
@@ -2385,7 +2393,7 @@ function TrendCharts({ history, applogText }) {
             title="Spindle Gradient X / Y"
             subtitle="0 centred · green band = within ±0.001 tolerance · dots = errors in that correction window"
             data={points}
-            lines={[{key:'gradientX',color:'#00c8ff',name:'Gradient X'},{key:'gradientY',color:'#ffb020',name:'Gradient Y'}]}
+            lines={[{key:'gradientX',color:AXIS_COLOR.X,name:'Gradient X'},{key:'gradientY',color:AXIS_COLOR.Y,name:'Gradient Y'}]}
             refLines={[{y:TOL,label:'+0.001'},{y:-TOL,label:'−0.001'}]}
             toleranceBand={[-TOL, TOL]}
             yDomain={dom}
@@ -2401,8 +2409,8 @@ function TrendCharts({ history, applogText }) {
         subtitle="A = Y-gap · B = X-gap · green band = within threshold (40) · dots = errors in that correction window"
         data={points}
         lines={[
-          {key:'aGap',color:'#22d47a',name:'A-axis Y-gap'},
-          {key:'bGap',color:'#ff4d6a',name:'B-axis X-gap'},
+          {key:'aGap',color:AXIS_COLOR.A,name:'A-axis Y-gap'},
+          {key:'bGap',color:AXIS_COLOR.B,name:'B-axis X-gap'},
         ]}
         refLines={[{y:40,label:'threshold 40'}]}
         toleranceBand={[0, 40]}
@@ -2414,10 +2422,10 @@ function TrendCharts({ history, applogText }) {
           subtitle="the two correction points behind the gap above · A-axis Y-component · B-axis X-component · dots = errors in that correction window"
           data={points}
           lines={[
-            {key:'aP1Y',color:'#00c8ff',name:'A-axis P1 (Y)'},
-            {key:'aP2Y',color:'#7dd3fc',name:'A-axis P2 (Y)'},
-            {key:'bP1X',color:'#ff4d6a',name:'B-axis P1 (X)'},
-            {key:'bP2X',color:'#f472b6',name:'B-axis P2 (X)'},
+            {key:'aP1Y',color:AXIS_COLOR.A,name:'A-axis P1 (Y)'},
+            {key:'aP2Y',color:AXIS_COLOR_LIGHT.A,name:'A-axis P2 (Y)'},
+            {key:'bP1X',color:AXIS_COLOR.B,name:'B-axis P1 (X)'},
+            {key:'bP2X',color:AXIS_COLOR_LIGHT.B,name:'B-axis P2 (X)'},
           ]}
           errorMarkers={errorMarkers}
         />
@@ -2430,9 +2438,9 @@ function TrendCharts({ history, applogText }) {
             subtitle={`normalised ±10 scale · 0 = axis average · full scale = ${Math.round(maxDev)} units`}
             data={nd}
             lines={[
-              {key:'originXNorm',color:'#00c8ff',name:'X'},
-              {key:'originYNorm',color:'#22d47a',name:'Y'},
-              {key:'originZNorm',color:'#ffb020',name:'Z'},
+              {key:'originXNorm',color:AXIS_COLOR.X,name:'X'},
+              {key:'originYNorm',color:AXIS_COLOR.Y,name:'Y'},
+              {key:'originZNorm',color:AXIS_COLOR.Z,name:'Z'},
             ]}
             yDomain={[-10, 10]}
             yTicks={[-10,-5,0,5,10]}
@@ -2454,9 +2462,9 @@ function TrendCharts({ history, applogText }) {
             subtitle={`normalised ±10 scale · 0 = axis average · full scale = ${Math.round(maxDev)} units`}
             data={nd}
             lines={[
-              {key:'magXNorm',color:'#00c8ff',name:'X'},
-              {key:'magYNorm',color:'#22d47a',name:'Y'},
-              {key:'magZNorm',color:'#ffb020',name:'Z'},
+              {key:'magXNorm',color:AXIS_COLOR.X,name:'X'},
+              {key:'magYNorm',color:AXIS_COLOR.Y,name:'Y'},
+              {key:'magZNorm',color:AXIS_COLOR.Z,name:'Z'},
             ]}
             yDomain={[-10, 10]}
             yTicks={[-10,-5,0,5,10]}
@@ -2474,7 +2482,7 @@ function TrendCharts({ history, applogText }) {
         <TrendChart
           title="Base Tool Length"
           data={points}
-          lines={[{key:'baseToolLength',color:'#a78bfa',name:'Base Tool Length'}]}
+          lines={[{key:'baseToolLength',color:'#00c8ff',name:'Base Tool Length'}]}
           yFormat={v=>v.toFixed(3)}
           errorMarkers={errorMarkers}
         />
@@ -2484,8 +2492,8 @@ function TrendCharts({ history, applogText }) {
           title="A/B-Axis Angle Offset Range (max − min of BASE curve)"
           data={points}
           lines={[
-            {key:'angleOffsetRange',color:'#ff4d6a',name:'A-axis offset range'},
-            {key:'bAxisOffsetRange',color:'#f472b6',name:'B-axis offset range'},
+            {key:'angleOffsetRange',color:AXIS_COLOR.A,name:'A-axis offset range'},
+            {key:'bAxisOffsetRange',color:AXIS_COLOR.B,name:'B-axis offset range'},
           ]}
           errorMarkers={errorMarkers}
         />
@@ -2547,7 +2555,7 @@ function FleetTrendCharts({ history }) {
             title="Spindle Gradient X / Y"
             subtitle="0 centred · green band = within ±0.001 tolerance"
             data={points}
-            lines={[{key:'gradientX',color:'#00c8ff',name:'Gradient X'},{key:'gradientY',color:'#ffb020',name:'Gradient Y'}]}
+            lines={[{key:'gradientX',color:AXIS_COLOR.X,name:'Gradient X'},{key:'gradientY',color:AXIS_COLOR.Y,name:'Gradient Y'}]}
             refLines={[{y:TOL,label:'+0.001'},{y:-TOL,label:'−0.001'}]}
             toleranceBand={[-TOL, TOL]}
             yDomain={dom}
@@ -2563,8 +2571,8 @@ function FleetTrendCharts({ history }) {
           subtitle="A = Y-gap · B = X-gap · green band = within threshold (40)"
           data={points}
           lines={[
-            {key:'aGap',color:'#22d47a',name:'A-axis Y-gap'},
-            {key:'bGap',color:'#ff4d6a',name:'B-axis X-gap'},
+            {key:'aGap',color:AXIS_COLOR.A,name:'A-axis Y-gap'},
+            {key:'bGap',color:AXIS_COLOR.B,name:'B-axis X-gap'},
           ]}
           refLines={[{y:40,label:'threshold 40'}]}
           toleranceBand={[0, 40]}
@@ -2574,7 +2582,7 @@ function FleetTrendCharts({ history }) {
         <TrendChart
           title="Base Tool Length"
           data={points}
-          lines={[{key:'baseToolLength',color:'#a78bfa',name:'Base Tool Length'}]}
+          lines={[{key:'baseToolLength',color:'#00c8ff',name:'Base Tool Length'}]}
           yFormat={v=>v.toFixed(3)}
         />
       )}
