@@ -3392,6 +3392,7 @@ export default function App(){
           <div className={"ni "+(page==='Files'?'active':'')} onClick={()=>setPage('Files')}>◫ Files</div>
           <div className="nl">Diagnostics</div>
           <div className={"ni "+(page==='Diagnostics'?'active':'')} onClick={()=>setPage('Diagnostics')} style={{color:page==='Diagnostics'?undefined:'var(--ac)'}}>🩺 Mill Diagnostics</div>
+          <div className={"ni "+(page==='Fleet'?'active':'')} onClick={()=>setPage('Fleet')} style={{color:page==='Fleet'?undefined:'var(--ac)'}}>🛠 Fleet</div>
           <div className="nl">Inventory</div>
           <div className={"ni "+(page==='Pritidenta'?'active':'')} onClick={()=>setPage('Pritidenta')}>🦷 Pritidenta</div>
           <div className="nl">History</div>
