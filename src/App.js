@@ -2479,10 +2479,89 @@ function TrendCharts({ history, applogText }) {
 // It reuses the existing `db` helper, `msg` toast, and diag-* / card styles.
 // ============================================================================
 
+// Fleet's `mill_reports` rows are already flat numeric columns (no parsed
+// section tree / raw_metrics like the diagnostic_reports table), so this is a
+// lightweight sibling to trendPointsFromHistory() rather than a reuse of it —
+// it maps straight onto the same point shape TrendChart expects. Origin /
+// magazine-offset / angle-offset-range aren't selected into the Fleet query,
+// so they come through null and their charts are simply skipped by has().
+function fleetTrendPoints(history) {
+  return (history || [])
+    .filter(r => r.correction_count != null)
+    .map(r => ({
+      corr: r.correction_count,
+      gradientX: num(r.spindle_gradient_x),
+      gradientY: num(r.spindle_gradient_y),
+      aGap: num(r.a_y_gap),
+      bGap: num(r.b_x_gap),
+      originX: null, originY: null, originZ: null,
+      magX: null, magY: null, magZ: null,
+      baseToolLength: num(r.base_tool_length),
+      angleOffsetRange: null, bAxisOffsetRange: null,
+    }))
+    .sort((a, b) => a.corr - b.corr);
+}
+
+// Same chart set as the Mill Diagnostics page's TrendCharts, cut down to the
+// metrics Fleet actually has on hand (gradient, A/B gap, base tool length —
+// no applog for the error-dot overlay, no origin/magazine/offset-range data).
+function FleetTrendCharts({ history }) {
+  const points = fleetTrendPoints(history);
+  if (points.length < 2) {
+    return <div style={{fontSize:11,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",padding:'6px 2px 14px'}}>Need at least 2 saved reports for this serial to plot a trend.</div>;
+  }
+  const has = (keys) => points.some(p => keys.some(k => p[k] != null));
+
+  return (
+    <div style={{marginBottom:4}}>
+      {has(['gradientX','gradientY']) && (() => {
+        const TOL = 0.001;
+        const dom = symmetricRealDomain(points, ['gradientX','gradientY'], TOL * 1.6);
+        return (
+          <TrendChart
+            title="Spindle Gradient X / Y"
+            subtitle="0 centred · green band = within ±0.001 tolerance"
+            data={points}
+            lines={[{key:'gradientX',color:'#00c8ff',name:'Gradient X'},{key:'gradientY',color:'#ffb020',name:'Gradient Y'}]}
+            refLines={[{y:TOL,label:'+0.001'},{y:-TOL,label:'−0.001'}]}
+            toleranceBand={[-TOL, TOL]}
+            yDomain={dom}
+            zeroLine
+            yFormat={v=>v.toFixed(4)}
+            tooltipFormatter={(v)=>typeof v==='number'?v.toFixed(6):v}
+          />
+        );
+      })()}
+      {has(['aGap','bGap']) && (
+        <TrendChart
+          title="A/B-Axis P1/P2 Gap"
+          subtitle="A = Y-gap · B = X-gap · green band = within threshold (40)"
+          data={points}
+          lines={[
+            {key:'aGap',color:'#22d47a',name:'A-axis Y-gap'},
+            {key:'bGap',color:'#ff4d6a',name:'B-axis X-gap'},
+          ]}
+          refLines={[{y:40,label:'threshold 40'}]}
+          toleranceBand={[0, 40]}
+        />
+      )}
+      {has(['baseToolLength']) && (
+        <TrendChart
+          title="Base Tool Length"
+          data={points}
+          lines={[{key:'baseToolLength',color:'#a78bfa',name:'Base Tool Length'}]}
+          yFormat={v=>v.toFixed(3)}
+        />
+      )}
+    </div>
+  );
+}
+
 function Fleet({ msg }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [openSerial, setOpenSerial] = useState(null);
+  const [trendView, setTrendView] = useState('graph'); // 'graph' | 'table' — shared since only one card opens at a time
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2586,10 +2665,32 @@ function Fleet({ msg }) {
 
             {open && (
               <div style={{ marginTop: 12 }}>
-                {/* trend table across correction counts */}
-                <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 12, letterSpacing: '.5px', marginBottom: 6, color: 'var(--txm)' }}>
-                  TREND · {history.length} report(s)
+                {/* trend across correction counts — graph or table */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 12, letterSpacing: '.5px', color: 'var(--txm)' }}>
+                    TREND · {history.length} report(s)
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      className={`btn bs ${trendView === 'graph' ? 'bp' : 'bg'}`}
+                      style={{ height: 26, fontSize: 10 }}
+                      onClick={(e) => { e.stopPropagation(); setTrendView('graph'); }}
+                    >
+                      📈 Graph
+                    </button>
+                    <button
+                      className={`btn bs ${trendView === 'table' ? 'bp' : 'bg'}`}
+                      style={{ height: 26, fontSize: 10 }}
+                      onClick={(e) => { e.stopPropagation(); setTrendView('table'); }}
+                    >
+                      📋 Table
+                    </button>
+                  </div>
                 </div>
+
+                {trendView === 'graph' && <FleetTrendCharts history={history} />}
+
+                {trendView === 'table' && (
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: "'IBM Plex Mono',monospace", fontSize: 11 }}>
                     <thead>
@@ -2635,6 +2736,7 @@ function Fleet({ msg }) {
                     </tbody>
                   </table>
                 </div>
+                )}
 
                 {/* recent error codes from the latest report */}
                 {Array.isArray(latest?.recent_errors) && latest.recent_errors.length > 0 && (
