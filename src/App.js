@@ -2602,15 +2602,21 @@ function FleetTrendCharts({ history }) {
 function FleetSerialTrendGraphs({ serial, fleetHistory }) {
   const [diagHistory, setDiagHistory] = useState(null); // null = still loading
   const [loadError, setLoadError] = useState(false);
+  // Everything the lookup actually did, so we can show it on screen instead
+  // of guessing blind at why a serial did/didn't get the full chart set.
+  const [debug, setDebug] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
     setDiagHistory(null);
     setLoadError(false);
+    setDebug(null);
     (async () => {
+      const dbg = { fleetSerial: serial, exactRows: null, totalDiagSerials: null, fuzzyMatch: null, fuzzyRows: null, error: null };
       try {
         // Exact match first — the common case, and cheapest (one request).
         let rows = await db.getWhere('diagnostic_reports', 'serial', serial);
+        dbg.exactRows = Array.isArray(rows) ? rows.length : `non-array response: ${JSON.stringify(rows).slice(0,120)}`;
         // Fleet's serial comes from mill_reports (auto-synced from the machine)
         // while diagnostic_reports rows come from whatever got typed/saved on
         // the Mill Diagnostics page — two different entry paths into two
@@ -2621,10 +2627,13 @@ function FleetSerialTrendGraphs({ serial, fleetHistory }) {
         // has on file, and re-query using whichever one actually matches.
         if (!Array.isArray(rows) || rows.length === 0) {
           const allSerials = await db.distinctColumn('diagnostic_reports', 'serial');
+          dbg.totalDiagSerials = allSerials.length;
           const norm = (s) => String(s || '').trim().toLowerCase();
           const match = allSerials.find(s => norm(s) === norm(serial));
+          dbg.fuzzyMatch = match || null;
           if (match && match !== serial) {
             rows = await db.getWhere('diagnostic_reports', 'serial', match);
+            dbg.fuzzyRows = Array.isArray(rows) ? rows.length : `non-array response: ${JSON.stringify(rows).slice(0,120)}`;
           }
         }
         if (cancelled) return;
@@ -2632,8 +2641,10 @@ function FleetSerialTrendGraphs({ serial, fleetHistory }) {
           ? [...rows].sort((a, b) => (a.correction_count ?? 0) - (b.correction_count ?? 0))
           : [];
         setDiagHistory(sorted);
-      } catch {
-        if (!cancelled) { setLoadError(true); setDiagHistory([]); }
+        setDebug(dbg);
+      } catch (e) {
+        dbg.error = (e && e.message) ? e.message : String(e);
+        if (!cancelled) { setLoadError(true); setDiagHistory([]); setDebug(dbg); }
       }
     })();
     return () => { cancelled = true; };
@@ -2645,6 +2656,19 @@ function FleetSerialTrendGraphs({ serial, fleetHistory }) {
     </div>
   );
 
+  // Always-on debug line — shows on every outcome (loading excluded), so a
+  // screenshot of any state answers "what did the lookup actually find"
+  // instead of us having to guess from the rendered chart count alone.
+  const debugLine = debug && (
+    <div style={{ fontSize: 9.5, color: 'var(--txd)', opacity: 0.65, fontFamily: "'IBM Plex Mono',monospace", padding: '2px 2px 8px', wordBreak: 'break-all' }}>
+      debug: fleet_serial=[{debug.fleetSerial}] · exact_match_rows={String(debug.exactRows)}
+      {debug.totalDiagSerials != null && ` · diagnostic_reports_total_serials=${debug.totalDiagSerials}`}
+      {debug.fuzzyMatch !== null && debug.fuzzyMatch !== undefined && ` · fuzzy_match=[${debug.fuzzyMatch}]_rows=${String(debug.fuzzyRows)}`}
+      {debug.totalDiagSerials != null && !debug.fuzzyMatch && ` · no_fuzzy_match_found`}
+      {debug.error && ` · ERROR=${debug.error}`}
+    </div>
+  );
+
   if (diagHistory === null) {
     return <div style={{fontSize:11,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",padding:'6px 2px 14px'}}>Loading Mill Diagnostics history for {serial}…</div>;
   }
@@ -2652,6 +2676,7 @@ function FleetSerialTrendGraphs({ serial, fleetHistory }) {
   if (loadError) {
     return (
       <div>
+        {debugLine}
         {fallbackNote(`⚠ Couldn't load Mill Diagnostics history for ${serial} — showing live Fleet sync data instead.`)}
         <FleetTrendCharts history={fleetHistory} />
       </div>
@@ -2662,11 +2687,17 @@ function FleetSerialTrendGraphs({ serial, fleetHistory }) {
     // Same chart set as the Mill Diagnostics page: gradients, A/B gap, raw
     // A/B P1/P2, XYZ origin drift, magazine offset drift, base tool length,
     // and A/B angle offset range.
-    return <TrendCharts history={diagHistory} />;
+    return (
+      <div>
+        {debugLine}
+        <TrendCharts history={diagHistory} />
+      </div>
+    );
   }
 
   return (
     <div>
+      {debugLine}
       {fallbackNote(`No Mill Diagnostics history found for serial "${serial}" (checked for case/spacing differences too) — run its reports through 🩺 Mill Diagnostics to unlock the full chart set (origin drift, magazine offset, raw P1/P2, angle-offset range). Showing what Fleet's live sync has in the meantime:`)}
       <FleetTrendCharts history={fleetHistory} />
     </div>
