@@ -3358,6 +3358,7 @@ export default function App(){
     { page:'Follow-ups',icon:'📞',label:'Follow', badge: followupCount, badgeColor: overdueFollowupCount?'var(--rd)':'var(--am)' },
     { page:'Schedule',  icon:'◎', label:'Schedule' },
     { page:'Diagnostics', icon:'🩺', label:'Diag' },
+    { page:'Fleet', icon:'🛠', label:'Fleet' },
   ];
 
   return(<>
