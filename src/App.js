@@ -2582,6 +2582,72 @@ function FleetTrendCharts({ history }) {
   );
 }
 
+// Fleet cards only have the flat columns synced into `mill_reports` (that's
+// what FleetTrendCharts above reads). Mill Diagnostics keeps a much richer
+// history for the same serial in `diagnostic_reports` — the full parsed
+// report tree that trendPointsFromHistory / TrendCharts were built for. When
+// a Fleet card is switched to Graph view, fetch that richer history and reuse
+// the exact same TrendCharts component Mill Diagnostics shows, so a serial's
+// Fleet graphs and its Mill Diagnostics graphs are identical. Falls back to
+// the lighter Fleet-only chart set if this serial has never been run through
+// Mill Diagnostics (or only has one saved report there — not enough to trend).
+function FleetSerialTrendGraphs({ serial, fleetHistory }) {
+  const [diagHistory, setDiagHistory] = useState(null); // null = still loading
+  const [loadError, setLoadError] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDiagHistory(null);
+    setLoadError(false);
+    (async () => {
+      try {
+        const rows = await db.getWhere('diagnostic_reports', 'serial', serial);
+        if (cancelled) return;
+        const sorted = Array.isArray(rows)
+          ? [...rows].sort((a, b) => (a.correction_count ?? 0) - (b.correction_count ?? 0))
+          : [];
+        setDiagHistory(sorted);
+      } catch {
+        if (!cancelled) { setLoadError(true); setDiagHistory([]); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [serial]);
+
+  const fallbackNote = (text) => (
+    <div style={{ fontSize: 10.5, color: 'var(--txd)', fontFamily: "'IBM Plex Mono',monospace", padding: '2px 2px 10px' }}>
+      {text}
+    </div>
+  );
+
+  if (diagHistory === null) {
+    return <div style={{fontSize:11,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",padding:'6px 2px 14px'}}>Loading Mill Diagnostics history for {serial}…</div>;
+  }
+
+  if (loadError) {
+    return (
+      <div>
+        {fallbackNote(`⚠ Couldn't load Mill Diagnostics history for ${serial} — showing live Fleet sync data instead.`)}
+        <FleetTrendCharts history={fleetHistory} />
+      </div>
+    );
+  }
+
+  if (diagHistory.length >= 2) {
+    // Same chart set as the Mill Diagnostics page: gradients, A/B gap, raw
+    // A/B P1/P2, XYZ origin drift, magazine offset drift, base tool length,
+    // and A/B angle offset range.
+    return <TrendCharts history={diagHistory} />;
+  }
+
+  return (
+    <div>
+      {fallbackNote(`No Mill Diagnostics history saved for ${serial} yet — run its reports through 🩺 Mill Diagnostics to unlock the full chart set (origin drift, magazine offset, raw P1/P2, angle-offset range). Showing what Fleet's live sync has in the meantime:`)}
+      <FleetTrendCharts history={fleetHistory} />
+    </div>
+  );
+}
+
 function Fleet({ msg }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -2713,7 +2779,7 @@ function Fleet({ msg }) {
                   </div>
                 </div>
 
-                {trendView === 'graph' && <FleetTrendCharts history={history} />}
+                {trendView === 'graph' && <FleetSerialTrendGraphs serial={serial} fleetHistory={history} />}
 
                 {trendView === 'table' && (
                 <div style={{ overflowX: 'auto' }}>
