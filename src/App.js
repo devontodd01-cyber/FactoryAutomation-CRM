@@ -3410,6 +3410,7 @@ export default function App(){
           {page==='Technicians'&&<Technicians technicians={technicians} loading={loading.technicians} onAdd={addTech} onEdit={editTech} onDelete={delTech}/>}
           {page==='Files'&&<Files files={files} onUpload={uploadFiles} onDelete={deleteFile} uploading={fileUploading}/>}
           {page==='Diagnostics'&&<Diagnostics msg={msg}/>}
+           {page==='Fleet'&&<Fleet msg={msg}/>}
           {page==='Pritidenta'&&<Pritidenta msg={msg}/>}
           {page==='Archive'&&<Archive jobs={jobs} onEdit={editJob} onDelete={delJob} loading={loading.jobs}/>}
         </div>
