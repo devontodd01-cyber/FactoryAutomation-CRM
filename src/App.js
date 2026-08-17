@@ -3000,6 +3000,41 @@ function buildMillReportRow(report, rawText) {
   };
 }
 
+// Optional client-side OCR for "I'm standing at the machine, no laptop, and
+// MillPulse isn't installed yet — let me just photograph the screen." Loaded
+// from a CDN at RUNTIME rather than as an npm dependency, on purpose: this
+// app gets edited by replacing App.js from a phone via GitHub's web editor,
+// so anything that would also require touching package.json (and keeping a
+// lockfile in sync) adds real friction to that workflow. A <script> tag is a
+// one-file change like everything else here. First scan in a session
+// downloads the OCR engine (a few MB); the browser caches it after that.
+let tesseractLoadPromise = null;
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (tesseractLoadPromise) return tesseractLoadPromise;
+  tesseractLoadPromise = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+    s.onload = () => resolve(window.Tesseract);
+    s.onerror = () => { tesseractLoadPromise = null; reject(new Error('Could not load the OCR engine — check your connection and try again')); };
+    document.head.appendChild(s);
+  });
+  return tesseractLoadPromise;
+}
+
+// Runs OCR on a photo and hands back the raw recognized text — same shape
+// splitReports()/parseVPanelReport() already expect from a paste. onProgress
+// is optional, called with (status, 0..1) while Tesseract works so the UI
+// can show something other than a frozen button during the several seconds
+// this takes on a phone.
+async function ocrImageToText(file, onProgress) {
+  const Tesseract = await loadTesseract();
+  const { data } = await Tesseract.recognize(file, 'eng', {
+    logger: (m) => { if (onProgress && m && m.status) onProgress(m.status, typeof m.progress === 'number' ? m.progress : null); },
+  });
+  return data.text;
+}
+
 // Fleet shows whichever row has is_latest=true (falling back to the highest
 // correction_count only if none is flagged) — so after a manual save we need
 // to make sure exactly one row per serial carries that flag, even if the
@@ -3027,6 +3062,9 @@ function Fleet({ msg }) {
   const [addText, setAddText] = useState('');
   const [addBusy, setAddBusy] = useState(false);
   const addFileRef = useRef(null);
+  const [scanBusy, setScanBusy] = useState(false);
+  const [scanStatus, setScanStatus] = useState('');
+  const scanRef = useRef(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -3085,6 +3123,33 @@ function Fleet({ msg }) {
     }
   };
 
+  // Photograph the machine's VPanel screen instead of typing/pasting — feeds
+  // the exact same paste box and Save flow above, it's just prefilled by OCR
+  // instead of by hand. Deliberately does NOT auto-save: OCR on a photo of a
+  // small monospace report — glare, angle, tiny decimals — is good enough to
+  // save typing but not reliable enough to trust blind, so the recognized
+  // text lands in the editable textarea for a look before it's saved.
+  const handleScanFile = async (e) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    setScanBusy(true);
+    setScanStatus('starting…');
+    try {
+      const text = await ocrImageToText(f, (status, progress) => {
+        setScanStatus(`${status}${typeof progress === 'number' ? ` ${Math.round(progress * 100)}%` : ''}`);
+      });
+      if (!text || !text.trim()) throw new Error('No text recognized in that photo — try again with less glare, better focus, and the report filling more of the frame');
+      setAddText(t => (t.trim() ? t + '\n' : '') + text);
+      msg && msg('📷 Text extracted — check it against the screen below before saving');
+    } catch (err) {
+      msg && msg('⚠️ Scan failed — ' + (err.message || String(err)), 'bad');
+    } finally {
+      setScanBusy(false);
+      setScanStatus('');
+    }
+  };
+
   // group rows by serial -> { latest, history[] } (computed each render)
   const bySerial = {};
   for (const row of rows) {
@@ -3135,7 +3200,7 @@ function Fleet({ msg }) {
         <div style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:6,padding:'12px 14px',marginBottom:16}}>
           <div className="cl" style={{marginBottom:6}}>Manually add a report to Fleet</div>
           <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5,color:'var(--txd)',marginBottom:10,lineHeight:1.5}}>
-            Paste one or more raw VPanel system reports (same text you'd paste into Mill Diagnostics), or load a .txt file. Saves straight into Fleet — works for a brand-new serial that's never synced, or to backfill/add a report for one already here. Firmware, spindle hours, total work time, and recent-errors aren't in the report text itself, so those stay blank on a manually-added row.
+            Paste one or more raw VPanel system reports (same text you'd paste into Mill Diagnostics), load a .txt file, or scan the machine's screen with your camera. Saves straight into Fleet — works for a brand-new serial that's never synced, or to backfill/add a report for one already here. Firmware, spindle hours, total work time, and recent-errors aren't in the report text itself, so those stay blank on a manually-added row.
           </div>
           <textarea
             className="fi"
@@ -3144,7 +3209,14 @@ function Fleet({ msg }) {
             value={addText}
             onChange={e => setAddText(e.target.value)}
           />
-          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+            <button className="btn bs" disabled={scanBusy} onClick={() => scanRef.current?.click()}>
+              {scanBusy ? `🔎 ${scanStatus || 'reading…'}` : '📷 Scan Report'}
+            </button>
+            <input
+              ref={scanRef} type="file" accept="image/*" capture="environment" style={{display:'none'}}
+              onChange={handleScanFile}
+            />
             <button className="btn bs" onClick={() => addFileRef.current?.click()}>⬆ Load .txt file</button>
             <input
               ref={addFileRef} type="file" accept=".txt,text/plain" style={{display:'none'}}
@@ -3157,10 +3229,15 @@ function Fleet({ msg }) {
                 e.target.value = '';
               }}
             />
-            <button className="btn bp bs" disabled={addBusy || !addText.trim()} onClick={saveManualReports} style={{marginLeft:'auto'}}>
+            <button className="btn bp bs" disabled={addBusy || scanBusy || !addText.trim()} onClick={saveManualReports} style={{marginLeft:'auto'}}>
               {addBusy ? '⏳ Saving…' : '💾 Save to Fleet'}
             </button>
           </div>
+          {addText.trim() && (
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'#ffb020',marginTop:8,lineHeight:1.4}}>
+              ⚠ Especially after a camera scan: check the text above against the machine's screen before saving — OCR can misread small decimals.
+            </div>
+          )}
         </div>
       )}
 
