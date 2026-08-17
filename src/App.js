@@ -1397,6 +1397,10 @@ const DWX_THRESHOLDS = {
   // consecutive saved reports for the same machine.
   spindleGradientXStepMax: 0.0005,
   spindleGradientYStepMax: 0.0005,
+  // A/B gap already has an established hard tolerance (40) — half of it,
+  // same ratio as the gradient step thresholds above, is the drift trigger.
+  aAxisP1P2YGapStepMax: 20,
+  bAxisP1P2XGapStepMax: 20,
 };
 
 const MACHINE_PROFILES = {
@@ -2321,6 +2325,71 @@ function latestDriftStep(points, key, threshold) {
   return Math.abs(delta) > threshold ? { corr: last.corr, value: last[key], prevValue: prev[key], delta } : null;
 }
 
+// For metrics with no established physical hard tolerance to derive a step
+// threshold from (raw P1/P2 points, base tool length, angle-offset range —
+// unlike gradient or A/B gap, which have DWX_THRESHOLDS to work from), the
+// drift threshold is computed relative to that metric's OWN observed range
+// for this machine: any single step bigger than DRIFT_RANGE_PERCENT of the
+// full history's spread counts as "moving around more than usual". Self-
+// calibrating per machine/metric instead of needing a hand-picked number for
+// every raw unit in the report.
+const DRIFT_RANGE_PERCENT = 0.25;
+function relativeDriftThreshold(points, key) {
+  const vals = (points || []).map(p => p[key]).filter(v => v != null);
+  if (vals.length < 3) return Infinity; // not enough history yet to judge "unusual"
+  const range = Math.max(...vals) - Math.min(...vals);
+  return range > 0 ? range * DRIFT_RANGE_PERCENT : Infinity;
+}
+
+// Builds both the chart's triangle markers and the "is this drifting right
+// now" banner list from a list of {key, color, threshold, label} specs —
+// keeps each chart's drift wiring to a few lines instead of repeating the
+// driftSteps/latestDriftStep calls per line.
+function buildDrift(points, specs) {
+  const markers = [], latest = [];
+  for (const s of specs) {
+    driftSteps(points, s.key, s.threshold).forEach(m => markers.push({ ...m, color: s.color }));
+    const l = latestDriftStep(points, s.key, s.threshold);
+    if (l) latest.push({ ...l, color: s.color, label: s.label });
+  }
+  return { markers, latest };
+}
+
+// Origin/magazine charts are pre-normalized onto a shared ±10 scale so X/Y/Z
+// can plot together despite having different raw units — but "moved
+// unusually fast" should be judged on the RAW deviation (real units), then
+// displayed at the matching normalized Y position so the triangle lands on
+// the actual plotted line.
+function driftOnNormalizedChart(nd, axisKey, color, label) {
+  const rawKey = axisKey + 'RawDev', normKey = axisKey + 'Norm';
+  const threshold = relativeDriftThreshold(nd, rawKey);
+  const markers = driftSteps(nd, rawKey, threshold).map(s => {
+    const pt = nd.find(p => p.corr === s.corr);
+    return pt && pt[normKey] != null ? { corr: s.corr, value: pt[normKey], color } : null;
+  }).filter(Boolean);
+  const latestRaw = latestDriftStep(nd, rawKey, threshold);
+  return { markers, latest: latestRaw ? { ...latestRaw, color, label } : null };
+}
+
+// Small amber summary row, shown right above whichever chart it applies to —
+// same "is this metric moving unusually fast right now" status as the
+// triangles show historically, just surfaced as text so it doesn't require
+// hovering the chart to notice.
+function DriftBanner({ latest, note }) {
+  if (!latest || !latest.length) return null;
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',background:'var(--sur2)',border:'1px solid rgba(255,176,32,0.35)',borderRadius:6,padding:'9px 12px',marginBottom:10,fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5}}>
+      <span style={{color:'#ffb020'}}>▲ Rate-of-change warning:</span>
+      {latest.map((d, i) => (
+        <span key={i} style={{color:d.color}}>
+          {d.label} {d.delta>0?'+':''}{Math.abs(d.delta) < 1 ? d.delta.toFixed(5) : d.delta.toFixed(2)} since last report (cc {d.corr})
+        </span>
+      ))}
+      {note && <span style={{color:'var(--txd)',marginLeft:'auto'}}>{note}</span>}
+    </div>
+  );
+}
+
 // Draws drift-step markers as small triangles, distinct in shape from the
 // round applog-error dots ErrorDotsLayer draws — so a chart can show both
 // "this crossed the hard line" (circles, applog-driven) and "this jumped
@@ -2486,22 +2555,13 @@ function TrendCharts({ history, applogText }) {
         // Force 0 to the centre and guarantee the ±0.001 band is always on-screen
         // with room to breathe, even when the data hugs one side.
         const dom = symmetricRealDomain(points, ['gradientX','gradientY'], TOL * 1.6);
-        const driftMarkers = [
-          ...driftSteps(points, 'gradientX', STEP_X).map(m => ({ ...m, color: AXIS_COLOR.X })),
-          ...driftSteps(points, 'gradientY', STEP_Y).map(m => ({ ...m, color: AXIS_COLOR.Y })),
-        ];
-        const driftX = latestDriftStep(points, 'gradientX', STEP_X);
-        const driftY = latestDriftStep(points, 'gradientY', STEP_Y);
+        const { markers, latest } = buildDrift(points, [
+          {key:'gradientX',color:AXIS_COLOR.X,threshold:STEP_X,label:'Gradient X'},
+          {key:'gradientY',color:AXIS_COLOR.Y,threshold:STEP_Y,label:'Gradient Y'},
+        ]);
         return (
           <>
-            {(driftX || driftY) && (
-              <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',background:'var(--sur2)',border:'1px solid rgba(255,176,32,0.35)',borderRadius:6,padding:'9px 12px',marginBottom:10,fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5}}>
-                <span style={{color:'#ffb020'}}>▲ Rate-of-change warning:</span>
-                {driftX && <span style={{color:AXIS_COLOR.X}}>Gradient X {driftX.delta>0?'+':''}{driftX.delta.toFixed(5)} since last report (now cc {driftX.corr})</span>}
-                {driftY && <span style={{color:AXIS_COLOR.Y}}>Gradient Y {driftY.delta>0?'+':''}{driftY.delta.toFixed(5)} since last report (now cc {driftY.corr})</span>}
-                <span style={{color:'var(--txd)',marginLeft:'auto'}}>still inside ±0.001 tolerance — early warning only</span>
-              </div>
-            )}
+            <DriftBanner latest={latest} note="still inside ±0.001 tolerance — early warning only"/>
             <TrendChart
               title="Spindle Gradient X / Y"
               subtitle={`0 centred · green band = within ±0.001 tolerance · dots = errors · ▲ = single-step change > ${STEP_X}`}
@@ -2514,105 +2574,164 @@ function TrendCharts({ history, applogText }) {
               yFormat={v=>v.toFixed(4)}
               tooltipFormatter={(v)=>typeof v==='number'?v.toFixed(6):v}
               errorMarkers={errorMarkers}
-              driftMarkers={driftMarkers}
+              driftMarkers={markers}
             />
           </>
         );
       })()}
-      <TrendChart
-        title="A/B-Axis P1/P2 Gap"
-        subtitle="A = Y-gap · B = X-gap · green band = within threshold (40) · dots = errors in that correction window"
-        data={points}
-        lines={[
-          {key:'aGap',color:AXIS_COLOR.A,name:'A-axis Y-gap'},
-          {key:'bGap',color:AXIS_COLOR.B,name:'B-axis X-gap'},
-        ]}
-        refLines={[{y:40,label:'threshold 40'}]}
-        toleranceBand={[0, 40]}
-        errorMarkers={errorMarkers}
-      />
-      {has(['aP1Y','aP2Y','bP1X','bP2X']) && (
-        <TrendChart
-          title="A/B-Axis P1 / P2 Raw Values"
-          subtitle="the two correction points behind the gap above · A-axis Y-component · B-axis X-component · dots = errors in that correction window"
-          data={points}
-          lines={[
-            {key:'aP1Y',color:AXIS_COLOR.A,name:'A-axis P1 (Y)'},
-            {key:'aP2Y',color:AXIS_COLOR_LIGHT.A,name:'A-axis P2 (Y)'},
-            {key:'bP1X',color:AXIS_COLOR.B,name:'B-axis P1 (X)'},
-            {key:'bP2X',color:AXIS_COLOR_LIGHT.B,name:'B-axis P2 (X)'},
-          ]}
-          errorMarkers={errorMarkers}
-        />
-      )}
+      {(() => {
+        const STEP_A = DWX_THRESHOLDS.aAxisP1P2YGapStepMax;
+        const STEP_B = DWX_THRESHOLDS.bAxisP1P2XGapStepMax;
+        const { markers, latest } = buildDrift(points, [
+          {key:'aGap',color:AXIS_COLOR.A,threshold:STEP_A,label:'A-gap'},
+          {key:'bGap',color:AXIS_COLOR.B,threshold:STEP_B,label:'B-gap'},
+        ]);
+        return (
+          <>
+            <DriftBanner latest={latest} note="still inside the 40 threshold — early warning only"/>
+            <TrendChart
+              title="A/B-Axis P1/P2 Gap"
+              subtitle={`A = Y-gap · B = X-gap · green band = within threshold (40) · dots = errors · ▲ = single-step change > ${STEP_A}`}
+              data={points}
+              lines={[
+                {key:'aGap',color:AXIS_COLOR.A,name:'A-axis Y-gap'},
+                {key:'bGap',color:AXIS_COLOR.B,name:'B-axis X-gap'},
+              ]}
+              refLines={[{y:40,label:'threshold 40'}]}
+              toleranceBand={[0, 40]}
+              errorMarkers={errorMarkers}
+              driftMarkers={markers}
+            />
+          </>
+        );
+      })()}
+      {has(['aP1Y','aP2Y','bP1X','bP2X']) && (() => {
+        const { markers, latest } = buildDrift(points, [
+          {key:'aP1Y',color:AXIS_COLOR.A,threshold:relativeDriftThreshold(points,'aP1Y'),label:'A-axis P1 (Y)'},
+          {key:'aP2Y',color:AXIS_COLOR_LIGHT.A,threshold:relativeDriftThreshold(points,'aP2Y'),label:'A-axis P2 (Y)'},
+          {key:'bP1X',color:AXIS_COLOR.B,threshold:relativeDriftThreshold(points,'bP1X'),label:'B-axis P1 (X)'},
+          {key:'bP2X',color:AXIS_COLOR_LIGHT.B,threshold:relativeDriftThreshold(points,'bP2X'),label:'B-axis P2 (X)'},
+        ]);
+        return (
+          <>
+            <DriftBanner latest={latest} note={`▲ = single-step change > ${Math.round(DRIFT_RANGE_PERCENT*100)}% of this axis's own range`}/>
+            <TrendChart
+              title="A/B-Axis P1 / P2 Raw Values"
+              subtitle="the two correction points behind the gap above · A-axis Y-component · B-axis X-component · dots = errors in that correction window"
+              data={points}
+              lines={[
+                {key:'aP1Y',color:AXIS_COLOR.A,name:'A-axis P1 (Y)'},
+                {key:'aP2Y',color:AXIS_COLOR_LIGHT.A,name:'A-axis P2 (Y)'},
+                {key:'bP1X',color:AXIS_COLOR.B,name:'B-axis P1 (X)'},
+                {key:'bP2X',color:AXIS_COLOR_LIGHT.B,name:'B-axis P2 (X)'},
+              ]}
+              errorMarkers={errorMarkers}
+              driftMarkers={markers}
+            />
+          </>
+        );
+      })()}
       {has(['originX','originY','originZ']) && (() => {
         const { data: nd, maxDev } = centerAndNormalize(points, ['originX','originY','originZ'], 10);
+        const results = ['originX','originY','originZ'].map((k,i) => driftOnNormalizedChart(nd, k, [AXIS_COLOR.X,AXIS_COLOR.Y,AXIS_COLOR.Z][i], ['Origin X','Origin Y','Origin Z'][i]));
+        const markers = results.flatMap(r => r.markers);
+        const latest = results.map(r => r.latest).filter(Boolean);
         return (
-          <TrendChart
-            title="XYZ Origin Drift"
-            subtitle={`normalised ±10 scale · 0 = axis average · full scale = ${Math.round(maxDev)} units`}
-            data={nd}
-            lines={[
-              {key:'originXNorm',color:AXIS_COLOR.X,name:'X'},
-              {key:'originYNorm',color:AXIS_COLOR.Y,name:'Y'},
-              {key:'originZNorm',color:AXIS_COLOR.Z,name:'Z'},
-            ]}
-            yDomain={[-10, 10]}
-            yTicks={[-10,-5,0,5,10]}
-            zeroLine
-            tooltipFormatter={(v, name, props) => {
-              const key = props && props.dataKey ? props.dataKey.replace('Norm','RawDev') : null;
-              const realDev = key && props.payload ? props.payload[key] : null;
-              return realDev != null ? `${realDev > 0 ? '+' : ''}${Math.round(realDev)} units` : (typeof v === 'number' ? v.toFixed(1) : v);
-            }}
-            errorMarkers={errorMarkers}
-          />
+          <>
+            <DriftBanner latest={latest} note={`▲ = single-step change > ${Math.round(DRIFT_RANGE_PERCENT*100)}% of this axis's own range`}/>
+            <TrendChart
+              title="XYZ Origin Drift"
+              subtitle={`normalised ±10 scale · 0 = axis average · full scale = ${Math.round(maxDev)} units`}
+              data={nd}
+              lines={[
+                {key:'originXNorm',color:AXIS_COLOR.X,name:'X'},
+                {key:'originYNorm',color:AXIS_COLOR.Y,name:'Y'},
+                {key:'originZNorm',color:AXIS_COLOR.Z,name:'Z'},
+              ]}
+              yDomain={[-10, 10]}
+              yTicks={[-10,-5,0,5,10]}
+              zeroLine
+              tooltipFormatter={(v, name, props) => {
+                const key = props && props.dataKey ? props.dataKey.replace('Norm','RawDev') : null;
+                const realDev = key && props.payload ? props.payload[key] : null;
+                return realDev != null ? `${realDev > 0 ? '+' : ''}${Math.round(realDev)} units` : (typeof v === 'number' ? v.toFixed(1) : v);
+              }}
+              errorMarkers={errorMarkers}
+              driftMarkers={markers}
+            />
+          </>
         );
       })()}
       {has(['magX','magY','magZ']) && (() => {
         const { data: nd, maxDev } = centerAndNormalize(points, ['magX','magY','magZ'], 10);
+        const results = ['magX','magY','magZ'].map((k,i) => driftOnNormalizedChart(nd, k, [AXIS_COLOR.X,AXIS_COLOR.Y,AXIS_COLOR.Z][i], ['Magazine X','Magazine Y','Magazine Z'][i]));
+        const markers = results.flatMap(r => r.markers);
+        const latest = results.map(r => r.latest).filter(Boolean);
         return (
-          <TrendChart
-            title="Magazine Position Offset Drift"
-            subtitle={`normalised ±10 scale · 0 = axis average · full scale = ${Math.round(maxDev)} units`}
-            data={nd}
-            lines={[
-              {key:'magXNorm',color:AXIS_COLOR.X,name:'X'},
-              {key:'magYNorm',color:AXIS_COLOR.Y,name:'Y'},
-              {key:'magZNorm',color:AXIS_COLOR.Z,name:'Z'},
-            ]}
-            yDomain={[-10, 10]}
-            yTicks={[-10,-5,0,5,10]}
-            zeroLine
-            tooltipFormatter={(v, name, props) => {
-              const key = props && props.dataKey ? props.dataKey.replace('Norm','RawDev') : null;
-              const realDev = key && props.payload ? props.payload[key] : null;
-              return realDev != null ? `${realDev > 0 ? '+' : ''}${Math.round(realDev)} units` : (typeof v === 'number' ? v.toFixed(1) : v);
-            }}
-            errorMarkers={errorMarkers}
-          />
+          <>
+            <DriftBanner latest={latest} note={`▲ = single-step change > ${Math.round(DRIFT_RANGE_PERCENT*100)}% of this axis's own range`}/>
+            <TrendChart
+              title="Magazine Position Offset Drift"
+              subtitle={`normalised ±10 scale · 0 = axis average · full scale = ${Math.round(maxDev)} units`}
+              data={nd}
+              lines={[
+                {key:'magXNorm',color:AXIS_COLOR.X,name:'X'},
+                {key:'magYNorm',color:AXIS_COLOR.Y,name:'Y'},
+                {key:'magZNorm',color:AXIS_COLOR.Z,name:'Z'},
+              ]}
+              yDomain={[-10, 10]}
+              yTicks={[-10,-5,0,5,10]}
+              zeroLine
+              tooltipFormatter={(v, name, props) => {
+                const key = props && props.dataKey ? props.dataKey.replace('Norm','RawDev') : null;
+                const realDev = key && props.payload ? props.payload[key] : null;
+                return realDev != null ? `${realDev > 0 ? '+' : ''}${Math.round(realDev)} units` : (typeof v === 'number' ? v.toFixed(1) : v);
+              }}
+              errorMarkers={errorMarkers}
+              driftMarkers={markers}
+            />
+          </>
         );
       })()}
-      {has(['baseToolLength']) && (
-        <TrendChart
-          title="Base Tool Length"
-          data={points}
-          lines={[{key:'baseToolLength',color:'#00c8ff',name:'Base Tool Length'}]}
-          yFormat={v=>v.toFixed(3)}
-          errorMarkers={errorMarkers}
-        />
-      )}
-      {has(['angleOffsetRange','bAxisOffsetRange']) && (
-        <TrendChart
-          title="A/B-Axis Angle Offset Range (max − min of BASE curve)"
-          data={points}
-          lines={[
-            {key:'angleOffsetRange',color:AXIS_COLOR.A,name:'A-axis offset range'},
-            {key:'bAxisOffsetRange',color:AXIS_COLOR.B,name:'B-axis offset range'},
-          ]}
-          errorMarkers={errorMarkers}
-        />
-      )}
+      {has(['baseToolLength']) && (() => {
+        const { markers, latest } = buildDrift(points, [
+          {key:'baseToolLength',color:'#00c8ff',threshold:relativeDriftThreshold(points,'baseToolLength'),label:'Base Tool Length'},
+        ]);
+        return (
+          <>
+            <DriftBanner latest={latest} note={`▲ = single-step change > ${Math.round(DRIFT_RANGE_PERCENT*100)}% of this machine's own range`}/>
+            <TrendChart
+              title="Base Tool Length"
+              data={points}
+              lines={[{key:'baseToolLength',color:'#00c8ff',name:'Base Tool Length'}]}
+              yFormat={v=>v.toFixed(3)}
+              errorMarkers={errorMarkers}
+              driftMarkers={markers}
+            />
+          </>
+        );
+      })()}
+      {has(['angleOffsetRange','bAxisOffsetRange']) && (() => {
+        const { markers, latest } = buildDrift(points, [
+          {key:'angleOffsetRange',color:AXIS_COLOR.A,threshold:relativeDriftThreshold(points,'angleOffsetRange'),label:'A-axis offset range'},
+          {key:'bAxisOffsetRange',color:AXIS_COLOR.B,threshold:relativeDriftThreshold(points,'bAxisOffsetRange'),label:'B-axis offset range'},
+        ]);
+        return (
+          <>
+            <DriftBanner latest={latest} note={`▲ = single-step change > ${Math.round(DRIFT_RANGE_PERCENT*100)}% of this axis's own range`}/>
+            <TrendChart
+              title="A/B-Axis Angle Offset Range (max − min of BASE curve)"
+              data={points}
+              lines={[
+                {key:'angleOffsetRange',color:AXIS_COLOR.A,name:'A-axis offset range'},
+                {key:'bAxisOffsetRange',color:AXIS_COLOR.B,name:'B-axis offset range'},
+              ]}
+              errorMarkers={errorMarkers}
+              driftMarkers={markers}
+            />
+          </>
+        );
+      })()}
     </div>
   );
 }
@@ -2667,22 +2786,13 @@ function FleetTrendCharts({ history }) {
         const STEP_X = DWX_THRESHOLDS.spindleGradientXStepMax;
         const STEP_Y = DWX_THRESHOLDS.spindleGradientYStepMax;
         const dom = symmetricRealDomain(points, ['gradientX','gradientY'], TOL * 1.6);
-        const driftMarkers = [
-          ...driftSteps(points, 'gradientX', STEP_X).map(m => ({ ...m, color: AXIS_COLOR.X })),
-          ...driftSteps(points, 'gradientY', STEP_Y).map(m => ({ ...m, color: AXIS_COLOR.Y })),
-        ];
-        const driftX = latestDriftStep(points, 'gradientX', STEP_X);
-        const driftY = latestDriftStep(points, 'gradientY', STEP_Y);
+        const { markers, latest } = buildDrift(points, [
+          {key:'gradientX',color:AXIS_COLOR.X,threshold:STEP_X,label:'Gradient X'},
+          {key:'gradientY',color:AXIS_COLOR.Y,threshold:STEP_Y,label:'Gradient Y'},
+        ]);
         return (
           <>
-            {(driftX || driftY) && (
-              <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',background:'var(--sur2)',border:'1px solid rgba(255,176,32,0.35)',borderRadius:6,padding:'9px 12px',marginBottom:10,fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5}}>
-                <span style={{color:'#ffb020'}}>▲ Rate-of-change warning:</span>
-                {driftX && <span style={{color:AXIS_COLOR.X}}>Gradient X {driftX.delta>0?'+':''}{driftX.delta.toFixed(5)} since last report (now cc {driftX.corr})</span>}
-                {driftY && <span style={{color:AXIS_COLOR.Y}}>Gradient Y {driftY.delta>0?'+':''}{driftY.delta.toFixed(5)} since last report (now cc {driftY.corr})</span>}
-                <span style={{color:'var(--txd)',marginLeft:'auto'}}>still inside ±0.001 tolerance — early warning only</span>
-              </div>
-            )}
+            <DriftBanner latest={latest} note="still inside ±0.001 tolerance — early warning only"/>
             <TrendChart
               title="Spindle Gradient X / Y"
               subtitle={`0 centred · green band = within ±0.001 tolerance · ▲ = single-step change > ${STEP_X}`}
@@ -2694,32 +2804,53 @@ function FleetTrendCharts({ history }) {
               zeroLine
               yFormat={v=>v.toFixed(4)}
               tooltipFormatter={(v)=>typeof v==='number'?v.toFixed(6):v}
-              driftMarkers={driftMarkers}
+              driftMarkers={markers}
             />
           </>
         );
       })()}
-      {has(['aGap','bGap']) && (
-        <TrendChart
-          title="A/B-Axis P1/P2 Gap"
-          subtitle="A = Y-gap · B = X-gap · green band = within threshold (40)"
-          data={points}
-          lines={[
-            {key:'aGap',color:AXIS_COLOR.A,name:'A-axis Y-gap'},
-            {key:'bGap',color:AXIS_COLOR.B,name:'B-axis X-gap'},
-          ]}
-          refLines={[{y:40,label:'threshold 40'}]}
-          toleranceBand={[0, 40]}
-        />
-      )}
-      {has(['baseToolLength']) && (
-        <TrendChart
-          title="Base Tool Length"
-          data={points}
-          lines={[{key:'baseToolLength',color:'#00c8ff',name:'Base Tool Length'}]}
-          yFormat={v=>v.toFixed(3)}
-        />
-      )}
+      {has(['aGap','bGap']) && (() => {
+        const STEP_A = DWX_THRESHOLDS.aAxisP1P2YGapStepMax;
+        const STEP_B = DWX_THRESHOLDS.bAxisP1P2XGapStepMax;
+        const { markers, latest } = buildDrift(points, [
+          {key:'aGap',color:AXIS_COLOR.A,threshold:STEP_A,label:'A-gap'},
+          {key:'bGap',color:AXIS_COLOR.B,threshold:STEP_B,label:'B-gap'},
+        ]);
+        return (
+          <>
+            <DriftBanner latest={latest} note="still inside the 40 threshold — early warning only"/>
+            <TrendChart
+              title="A/B-Axis P1/P2 Gap"
+              subtitle={`A = Y-gap · B = X-gap · green band = within threshold (40) · ▲ = single-step change > ${STEP_A}`}
+              data={points}
+              lines={[
+                {key:'aGap',color:AXIS_COLOR.A,name:'A-axis Y-gap'},
+                {key:'bGap',color:AXIS_COLOR.B,name:'B-axis X-gap'},
+              ]}
+              refLines={[{y:40,label:'threshold 40'}]}
+              toleranceBand={[0, 40]}
+              driftMarkers={markers}
+            />
+          </>
+        );
+      })()}
+      {has(['baseToolLength']) && (() => {
+        const { markers, latest } = buildDrift(points, [
+          {key:'baseToolLength',color:'#00c8ff',threshold:relativeDriftThreshold(points,'baseToolLength'),label:'Base Tool Length'},
+        ]);
+        return (
+          <>
+            <DriftBanner latest={latest} note={`▲ = single-step change > ${Math.round(DRIFT_RANGE_PERCENT*100)}% of this machine's own range`}/>
+            <TrendChart
+              title="Base Tool Length"
+              data={points}
+              lines={[{key:'baseToolLength',color:'#00c8ff',name:'Base Tool Length'}]}
+              yFormat={v=>v.toFixed(3)}
+              driftMarkers={markers}
+            />
+          </>
+        );
+      })()}
     </div>
   );
 }
