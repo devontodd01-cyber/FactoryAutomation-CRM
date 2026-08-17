@@ -333,7 +333,8 @@ const styles = `
   .ei{font-size:28px;margin-bottom:10px;}
   .loading{display:flex;align-items:center;justify-content:center;padding:40px;color:var(--txd);font-family:'IBM Plex Mono',monospace;font-size:12px;gap:10px;}
   .spin{width:14px;height:14px;border:2px solid var(--bdr2);border-top-color:var(--ac);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0;}
-  .toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--sur2);border:1px solid var(--bdr2);border-radius:6px;padding:9px 18px;font-family:'IBM Plex Mono',monospace;font-size:11px;z-index:200;white-space:nowrap;pointer-events:none;}
+  .toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);background:var(--sur2);border:1px solid var(--bdr2);border-radius:6px;padding:9px 18px;font-family:'IBM Plex Mono',monospace;font-size:11px;z-index:200;white-space:pre-wrap;max-width:min(92vw,440px);text-align:center;line-height:1.45;pointer-events:none;}
+  .toast.bad{border-color:rgba(255,77,106,0.55);color:#ff8fa3;}
   .g2{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
   .job-card{background:var(--sur);border:1px solid var(--bdr);border-radius:8px;padding:14px;margin-bottom:10px;position:relative;overflow:hidden;}
   .job-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;}
@@ -520,7 +521,10 @@ const styles = `
 `;
 
 function StBadge({s}){return <span className={"st "+(s||'Pending').replace(' ','')}>{s||'Pending'}</span>;}
-function Toast({msg}){return msg?<div className="toast">{msg}</div>:null;}
+function Toast({toast}){
+  if (!toast || !toast.text) return null;
+  return <div className={`toast${toast.kind === 'bad' ? ' bad' : ''}`}>{toast.text}</div>;
+}
 function Loading(){return <div className="loading"><div className="spin"/>Loading...</div>;}
 
 function Modal({title,onClose,onSave,saveLabel,children}){
@@ -3947,13 +3951,17 @@ export default function App(){
   const [calNotes,setCalNotes]=useState({});
   const [loading,setLoading]=useState({jobs:true,customers:true,technicians:true});
   const [fileUploading,setFileUploading]=useState(false);
-  const [toast,setToast]=useState('');
+  const [toast,setToast]=useState(null);
   const [jobForm,setJobForm]=useState(null);
   const [showJobForm,setShowJobForm]=useState(false);
   const [showImport,setShowImport]=useState(false);
   const [showVoiceLog,setShowVoiceLog]=useState(false);
 
-  const msg=useCallback((m)=>{setToast(m);setTimeout(()=>setToast(''),2500);},[]);
+  // Error toasts ('bad') often carry a real Postgrest/DB error message, not
+  // just a short status word — give those more time on screen (and the CSS
+  // above now wraps + caps width instead of clipping a long line off-screen)
+  // so a save failure is actually readable instead of flashing by unseen.
+  const msg=useCallback((m,kind)=>{setToast({text:m,kind});setTimeout(()=>setToast(null),kind==='bad'?6000:2500);},[]);
 
   const load=useCallback(async()=>{
     try{ const [j,c,t,f]=await Promise.all([db.get('jobs'),db.get('customers'),db.get('technicians'),db.get('ref_files')]); setJobs(j||[]);setCustomers(c||[]);setTechnicians(t||[]);setFiles(f||[]); }catch{msg('⚠️ Could not connect.');}
@@ -4086,7 +4094,7 @@ export default function App(){
 
       {showVoiceLog&&<VoiceLog onClose={()=>setShowVoiceLog(false)} onJobCreated={handleVoiceJobCreated}/>}
 
-      <Toast msg={toast}/>
+      <Toast toast={toast}/>
     </div>
   </>);
 }
