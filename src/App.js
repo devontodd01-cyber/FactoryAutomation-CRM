@@ -2980,7 +2980,7 @@ function FleetSerialTrendGraphs({ serial, fleetHistory }) {
 // recent-errors come from the agent's own local telemetry, not the report
 // text itself, so those stay null on a manually-added row (Fleet's card and
 // table already render '—' for anything null).
-function buildMillReportRow(report) {
+function buildMillReportRow(report, rawText) {
   const rac = report.rac || {};
   const grad = rac["SPINDLE GRADIENT"] || {};
   return {
@@ -2993,6 +2993,10 @@ function buildMillReportRow(report) {
     b_x_gap: rac["B-AXIS"] ? xGap(rac["B-AXIS"]) : null,
     base_tool_length: typeof rac["BASE TOOL LENGTH"] === 'number' ? rac["BASE TOOL LENGTH"] : null,
     report_date: new Date().toISOString(),
+    // mill_reports has a NOT NULL raw_systemreport column — the sync agent
+    // always stores the original report text there, so a manually-added row
+    // needs to too, or the insert is rejected outright.
+    raw_systemreport: rawText,
   };
 }
 
@@ -3060,7 +3064,7 @@ function Fleet({ msg }) {
         const report = parseVPanelReport(chunk);
         if (!report.serial) throw new Error('No serial number found in this report');
         if (report.correctionCount == null) throw new Error('No correction count found in this report');
-        await db.upsert('mill_reports', buildMillReportRow(report), 'serial,correction_count');
+        await db.upsert('mill_reports', buildMillReportRow(report, chunk), 'serial,correction_count');
         touchedSerials.add(report.serial);
         ok++;
       } catch (e) {
