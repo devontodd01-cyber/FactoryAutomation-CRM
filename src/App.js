@@ -2969,11 +2969,56 @@ function FleetSerialTrendGraphs({ serial, fleetHistory }) {
   );
 }
 
+// Manual entry into Fleet writes straight into `mill_reports` — the same
+// table the MillPulse sync agent writes to — using the same VPanel report
+// parser Mill Diagnostics uses. Only the fields derivable from the raw
+// report text are filled in; firmware/spindle-hours/total-work-time/
+// recent-errors come from the agent's own local telemetry, not the report
+// text itself, so those stay null on a manually-added row (Fleet's card and
+// table already render '—' for anything null).
+function buildMillReportRow(report) {
+  const rac = report.rac || {};
+  const grad = rac["SPINDLE GRADIENT"] || {};
+  return {
+    serial: report.serial,
+    model: report.model,
+    correction_count: report.correctionCount,
+    spindle_gradient_x: typeof grad.X === 'number' ? grad.X : null,
+    spindle_gradient_y: typeof grad.Y === 'number' ? grad.Y : null,
+    a_y_gap: rac["A-AXIS"] ? yGap(rac["A-AXIS"]) : null,
+    b_x_gap: rac["B-AXIS"] ? xGap(rac["B-AXIS"]) : null,
+    base_tool_length: typeof rac["BASE TOOL LENGTH"] === 'number' ? rac["BASE TOOL LENGTH"] : null,
+    report_date: new Date().toISOString(),
+  };
+}
+
+// Fleet shows whichever row has is_latest=true (falling back to the highest
+// correction_count only if none is flagged) — so after a manual save we need
+// to make sure exactly one row per serial carries that flag, even if the
+// manually-entered report is newer than whatever the sync agent last saw, or
+// older (e.g. backfilling a report from before the agent was installed).
+async function reconcileLatestFlag(serial) {
+  const rows = await db.getWhere('mill_reports', 'serial', serial);
+  if (!Array.isArray(rows) || !rows.length) return;
+  const maxCC = Math.max(...rows.map(r => (typeof r.correction_count === 'number' ? r.correction_count : -Infinity)));
+  const headers = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' };
+  await fetch(`${SUPABASE_URL}/rest/v1/mill_reports?serial=eq.${encodeURIComponent(serial)}&correction_count=neq.${maxCC}`, {
+    method: 'PATCH', headers, body: JSON.stringify({ is_latest: false }),
+  });
+  await fetch(`${SUPABASE_URL}/rest/v1/mill_reports?serial=eq.${encodeURIComponent(serial)}&correction_count=eq.${maxCC}`, {
+    method: 'PATCH', headers, body: JSON.stringify({ is_latest: true }),
+  });
+}
+
 function Fleet({ msg }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [openSerial, setOpenSerial] = useState(null);
   const [trendView, setTrendView] = useState('graph'); // 'graph' | 'table' — shared since only one card opens at a time
+  const [showAdd, setShowAdd] = useState(false);
+  const [addText, setAddText] = useState('');
+  const [addBusy, setAddBusy] = useState(false);
+  const addFileRef = useRef(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2994,6 +3039,43 @@ function Fleet({ msg }) {
   }, [msg]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Parses whatever's in the paste box (one or several concatenated reports —
+  // same splitReports() Mill Diagnostics uses for a multi-report paste),
+  // upserts each into mill_reports, reconciles the is_latest flag per serial
+  // touched, then reloads so the new/updated machine shows up immediately.
+  const saveManualReports = async () => {
+    const text = addText.trim();
+    if (!text) return;
+    setAddBusy(true);
+    const chunks = splitReports(text);
+    let ok = 0, fail = 0, lastErr = '';
+    const touchedSerials = new Set();
+    for (const chunk of chunks) {
+      try {
+        const report = parseVPanelReport(chunk);
+        if (!report.serial) throw new Error('No serial number found in this report');
+        if (report.correctionCount == null) throw new Error('No correction count found in this report');
+        await db.upsert('mill_reports', buildMillReportRow(report), 'serial,correction_count');
+        touchedSerials.add(report.serial);
+        ok++;
+      } catch (e) {
+        fail++; lastErr = e.message || String(e);
+      }
+    }
+    for (const serial of touchedSerials) {
+      try { await reconcileLatestFlag(serial); } catch { /* non-fatal — Fleet still falls back to max correction_count */ }
+    }
+    setAddBusy(false);
+    if (ok) {
+      setAddText('');
+      setShowAdd(false);
+      msg && msg(`✅ Added ${ok} report${ok !== 1 ? 's' : ''} to Fleet${touchedSerials.size > 1 ? ` across ${touchedSerials.size} serials` : ''}${fail ? ` (${fail} failed — ${lastErr})` : ''}`);
+      load();
+    } else {
+      msg && msg(`⚠️ Nothing saved — ${lastErr || 'no valid reports found in the pasted text'}`, 'bad');
+    }
+  };
 
   // group rows by serial -> { latest, history[] } (computed each render)
   const bySerial = {};
@@ -3035,14 +3117,50 @@ function Fleet({ msg }) {
         <div className="diag-meta" style={{ margin: 0 }}>
           {loading ? 'loading…' : `${machines.length} machine(s) · ${fleetFlagged} flagged`}
         </div>
-        <button className="btn" onClick={load} style={{ marginLeft: 'auto' }}>↻ Refresh</button>
+        <button className={`btn bs ${showAdd ? 'bp' : ''}`} style={{ marginLeft: 'auto' }} onClick={() => setShowAdd(s => !s)}>
+          {showAdd ? '✕ Cancel' : '➕ Add Report'}
+        </button>
+        <button className="btn" onClick={load}>↻ Refresh</button>
       </div>
+
+      {showAdd && (
+        <div style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:6,padding:'12px 14px',marginBottom:16}}>
+          <div className="cl" style={{marginBottom:6}}>Manually add a report to Fleet</div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5,color:'var(--txd)',marginBottom:10,lineHeight:1.5}}>
+            Paste one or more raw VPanel system reports (same text you'd paste into Mill Diagnostics), or load a .txt file. Saves straight into Fleet — works for a brand-new serial that's never synced, or to backfill/add a report for one already here. Firmware, spindle hours, total work time, and recent-errors aren't in the report text itself, so those stay blank on a manually-added row.
+          </div>
+          <textarea
+            className="fi"
+            style={{minHeight:140,fontFamily:"'IBM Plex Mono',monospace",fontSize:11,marginBottom:10}}
+            placeholder="Paste system report text here…"
+            value={addText}
+            onChange={e => setAddText(e.target.value)}
+          />
+          <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+            <button className="btn bs" onClick={() => addFileRef.current?.click()}>⬆ Load .txt file</button>
+            <input
+              ref={addFileRef} type="file" accept=".txt,text/plain" style={{display:'none'}}
+              onChange={e => {
+                const f = e.target.files?.[0];
+                if (!f) return;
+                const rd = new FileReader();
+                rd.onload = () => setAddText(t => (t.trim() ? t + '\n' : '') + String(rd.result));
+                rd.readAsText(f);
+                e.target.value = '';
+              }}
+            />
+            <button className="btn bp bs" disabled={addBusy || !addText.trim()} onClick={saveManualReports} style={{marginLeft:'auto'}}>
+              {addBusy ? '⏳ Saving…' : '💾 Save to Fleet'}
+            </button>
+          </div>
+        </div>
+      )}
 
       {!loading && machines.length === 0 && (
         <div className="diag-flag info">
           <div className="diag-flag-title">No reports yet</div>
           <div className="diag-flag-desc">
-            Install MillPulse on a machine PC and run a sync. Reports will appear here.
+            Install MillPulse on a machine PC and run a sync, or use "➕ Add Report" above to enter one manually.
           </div>
         </div>
       )}
