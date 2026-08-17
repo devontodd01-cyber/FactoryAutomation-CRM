@@ -1378,6 +1378,7 @@ function parseReportBody(body) {
 const DWX_THRESHOLDS = {
   priorityOrder: [
     "spindle_gradient_x_collet_wear",
+    "spindle_gradient_x_drift",
     "spindle_gradient_y_sign_flip",
     "magazine_offset_base_tool_length_drift",
     "a_axis_angle_offset_curve",
@@ -1388,6 +1389,14 @@ const DWX_THRESHOLDS = {
   bAxisP1P2XGapMax: 40,
   magazineBallscrewDriftMax: 40,
   spindleGradientXColletWearMax: 0.001,
+  // Rate-of-change ("drift") triggers — separate from the absolute limits
+  // above. A value can sit safely inside its hard tolerance (e.g. gradient X
+  // under ±0.001) but still be moving unusually fast report-to-report — an
+  // early-warning sign worth flagging on its own, before it ever crosses the
+  // hard line. Threshold = max allowed |value[n] − value[n-1]| between two
+  // consecutive saved reports for the same machine.
+  spindleGradientXStepMax: 0.0005,
+  spindleGradientYStepMax: 0.0005,
 };
 
 const MACHINE_PROFILES = {
@@ -1577,6 +1586,24 @@ function diagnoseSpindleGradientX(r) {
   return { check: "spindle_gradient_x_collet_wear", currentX: x, threshold, flagged: Math.abs(x) > threshold, thresholdsValidatedForModel: r.profile.thresholdsValidated };
 }
 
+// Rate-of-change companion to the hard-tolerance check above. Flags a big
+// single-step jump in gradient X even while the absolute value is still
+// inside ±0.001 — catches accelerating collet wear earlier than waiting for
+// the hard line to be crossed. Needs the previous report for the SAME
+// machine to compare against (caller is responsible for that ordering).
+function diagnoseSpindleGradientXDrift(r, previousGradientX) {
+  const grad = r.rac["SPINDLE GRADIENT"];
+  if (!grad || typeof grad.X !== "number") return null;
+  const x = grad.X;
+  const threshold = r.profile.thresholds.spindleGradientXStepMax;
+  const result = { check: "spindle_gradient_x_drift", currentX: x, previousX: previousGradientX ?? null, delta: null, threshold, flagged: false, thresholdsValidatedForModel: r.profile.thresholdsValidated };
+  if (previousGradientX != null) {
+    result.delta = x - previousGradientX;
+    result.flagged = Math.abs(result.delta) > threshold;
+  }
+  return result;
+}
+
 function diagnoseMagazineBallscrewDrift(r, previousMagazineOffset, previousBaseToolLength) {
   const currentBaseToolLength = r.rac["BASE TOOL LENGTH"];
   const currentMagazineOffset = r.atc["MAGAZINE POSITION OFFSET"];
@@ -1623,6 +1650,7 @@ function diagnoseAAxisAngleOffsetCurve(r) {
 
 const DIAGNOSTIC_CHECKS = {
   spindle_gradient_x_collet_wear: (r) => diagnoseSpindleGradientX(r),
+  spindle_gradient_x_drift: (r, prev) => diagnoseSpindleGradientXDrift(r, prev.gradientX),
   spindle_gradient_y_sign_flip: (r, prev) => diagnoseSpindleGradientY(r, prev.gradientY),
   magazine_offset_base_tool_length_drift: (r, prev) => diagnoseMagazineBallscrewDrift(r, prev.magazineOffset, prev.baseToolLength),
   a_axis_angle_offset_curve: (r) => diagnoseAAxisAngleOffsetCurve(r),
@@ -1655,6 +1683,7 @@ function diagnoseDice3B9B(diceEntry) {
 
 const CHECK_INFO = {
   spindle_gradient_x_collet_wear: { label: "Spindle Gradient X", cause: "Magnitude above 0.001 indicates collet wear.", action: "Swap the collet." },
+  spindle_gradient_x_drift: { label: "Spindle Gradient X — Rapid Change", cause: "Moved more than 0.0005 since the previous report — still inside the ±0.001 hard tolerance, but accelerating faster than normal. Early warning, not yet a failure.", action: "Keep an eye on it; re-check sooner than your usual interval." },
   spindle_gradient_y_sign_flip: { label: "Spindle Gradient Y Sign-Flip", cause: "Sign alternates vs. the previous report — inconsistent calibration-pin seating (collet wear or spindle bore issue, not progressive drift).", action: "Clean/hone the spindle bore, or swap the collet." },
   magazine_offset_base_tool_length_drift: { label: "Magazine Offset / Base Tool Length Drift", cause: "ATC magazine offset and base tool length are moving together past threshold — possible ballscrew fault/backlash.", action: "Inspect the ballscrew for backlash or wear." },
   a_axis_angle_offset_curve: { label: "A-Axis Angle Offset Curve", cause: "Erratic, non-monotonic offset curve — possible A-axis gear backlash/looseness (heuristic — confirm visually and with DICE).", action: "Physically inspect the A-axis gear assembly for feelable loose points." },
@@ -1713,6 +1742,7 @@ function DiagFlagCard({ checkKey, data }) {
       {data.flagged && info.action && <div className="diag-flag-action">→ {info.action}</div>}
       <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',marginTop:6}}>
         {checkKey === 'spindle_gradient_x_collet_wear' && <>X: {data.currentX} (threshold ±{data.threshold})</>}
+        {checkKey === 'spindle_gradient_x_drift' && <>X: {data.currentX}{data.previousX!=null && <>, previous: {data.previousX}, Δ {data.delta>0?'+':''}{data.delta?.toFixed(6)}</>} (step threshold ±{data.threshold})</>}
         {checkKey === 'spindle_gradient_y_sign_flip' && <>current Y: {data.currentY}{data.previousY!=null && <>, previous Y: {data.previousY}</>}</>}
         {checkKey === 'magazine_offset_base_tool_length_drift' && <>BaseToolLength Δ: {data.baseToolLengthDelta ?? '—'} {data.flaggedAxis && <>· offset axis "{data.flaggedAxis}" moved together</>}</>}
         {checkKey === 'a_axis_angle_offset_curve' && <>curve: [{(data.curve||[]).join(', ')}] · {data.reversals} direction reversal{data.reversals===1?'':'s'}</>}
@@ -2262,6 +2292,67 @@ function ErrorDotsLayer(props) {
   );
 }
 
+// Rate-of-change ("drift") detection for trend charts — independent of the
+// absolute hard-tolerance bands (toleranceBand/refLines above). A metric can
+// sit safely inside tolerance but still be moving unusually fast between
+// consecutive saved reports; that's an early-warning signal worth its own
+// marker. `points` must be sorted by corr ascending (every caller here
+// already sorts before this runs).
+function driftSteps(points, key, threshold) {
+  const withVal = (points || []).filter(p => p[key] != null);
+  const out = [];
+  for (let i = 1; i < withVal.length; i++) {
+    const delta = withVal[i][key] - withVal[i - 1][key];
+    if (Math.abs(delta) > threshold) {
+      out.push({ corr: withVal[i].corr, value: withVal[i][key], prevValue: withVal[i - 1][key], delta });
+    }
+  }
+  return out;
+}
+// Just the most recent step — what to show as a glanceable "is this thing
+// drifting right now" status. Returns null if the latest step is calm (or
+// there isn't enough history yet), even if an older step once tripped it.
+function latestDriftStep(points, key, threshold) {
+  const withVal = (points || []).filter(p => p[key] != null);
+  if (withVal.length < 2) return null;
+  const last = withVal[withVal.length - 1];
+  const prev = withVal[withVal.length - 2];
+  const delta = last[key] - prev[key];
+  return Math.abs(delta) > threshold ? { corr: last.corr, value: last[key], prevValue: prev[key], delta } : null;
+}
+
+// Draws drift-step markers as small triangles, distinct in shape from the
+// round applog-error dots ErrorDotsLayer draws — so a chart can show both
+// "this crossed the hard line" (circles, applog-driven) and "this jumped
+// unusually fast" (triangles, drift-driven) without visually colliding.
+function DriftDotsLayer({ xAxisMap, yAxisMap, markers }) {
+  if (!markers || !markers.length || !xAxisMap || !yAxisMap) return null;
+  const xAxis = xAxisMap[Object.keys(xAxisMap)[0]];
+  const yAxis = yAxisMap[Object.keys(yAxisMap)[0]];
+  const xScale = xAxis && (xAxis.scale || (xAxis.axis && xAxis.axis.scale));
+  const yScale = yAxis && (yAxis.scale || (yAxis.axis && yAxis.axis.scale));
+  if (typeof xScale !== 'function' || typeof yScale !== 'function') return null;
+  return (
+    <g>
+      {markers.map((m, i) => {
+        const cx = xScale(m.corr);
+        const cy = yScale(m.value);
+        if (cx == null || cy == null || isNaN(cx) || isNaN(cy)) return null;
+        const s = 5.5;
+        return (
+          <polygon
+            key={i}
+            points={`${cx},${cy - s} ${cx - s},${cy + s} ${cx + s},${cy + s}`}
+            fill={m.color || '#ffb020'}
+            stroke="#0a0c10"
+            strokeWidth={1.2}
+          />
+        );
+      })}
+    </g>
+  );
+}
+
 // One color per axis, held constant across every trend chart (Mill Diagnostics
 // AND Fleet) so X/Y/Z/A/B always mean the same thing at a glance no matter
 // which chart you're looking at. AXIS_COLOR_LIGHT is a second, lighter shade
@@ -2270,7 +2361,7 @@ function ErrorDotsLayer(props) {
 const AXIS_COLOR = { X: '#f472b6', Y: '#ffb020', Z: '#3b82f6', A: '#a78bfa', B: '#22d47a' };
 const AXIS_COLOR_LIGHT = { A: '#c4b5fd', B: '#86efac' };
 
-function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks, zeroLine, subtitle, yTicks, tooltipFormatter, toleranceBand, errorMarkers }) {
+function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks, zeroLine, subtitle, yTicks, tooltipFormatter, toleranceBand, errorMarkers, driftMarkers }) {
   const [hovered, setHovered] = useState(null); // {e, x, y} for the error tooltip
   const wrapRef = useRef(null);
 
@@ -2339,6 +2430,11 @@ function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks
                 <ErrorDotsLayer {...cp} markers={markers} onHover={handleHover} onLeave={() => setHovered(null)} />
               )}/>
             )}
+            {driftMarkers && driftMarkers.length > 0 && (
+              <Customized component={(cp) => (
+                <DriftDotsLayer {...cp} markers={driftMarkers} />
+              )}/>
+            )}
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -2385,23 +2481,42 @@ function TrendCharts({ history, applogText }) {
       )}
       {(() => {
         const TOL = 0.001;
+        const STEP_X = DWX_THRESHOLDS.spindleGradientXStepMax;
+        const STEP_Y = DWX_THRESHOLDS.spindleGradientYStepMax;
         // Force 0 to the centre and guarantee the ±0.001 band is always on-screen
         // with room to breathe, even when the data hugs one side.
         const dom = symmetricRealDomain(points, ['gradientX','gradientY'], TOL * 1.6);
+        const driftMarkers = [
+          ...driftSteps(points, 'gradientX', STEP_X).map(m => ({ ...m, color: AXIS_COLOR.X })),
+          ...driftSteps(points, 'gradientY', STEP_Y).map(m => ({ ...m, color: AXIS_COLOR.Y })),
+        ];
+        const driftX = latestDriftStep(points, 'gradientX', STEP_X);
+        const driftY = latestDriftStep(points, 'gradientY', STEP_Y);
         return (
-          <TrendChart
-            title="Spindle Gradient X / Y"
-            subtitle="0 centred · green band = within ±0.001 tolerance · dots = errors in that correction window"
-            data={points}
-            lines={[{key:'gradientX',color:AXIS_COLOR.X,name:'Gradient X'},{key:'gradientY',color:AXIS_COLOR.Y,name:'Gradient Y'}]}
-            refLines={[{y:TOL,label:'+0.001'},{y:-TOL,label:'−0.001'}]}
-            toleranceBand={[-TOL, TOL]}
-            yDomain={dom}
-            zeroLine
-            yFormat={v=>v.toFixed(4)}
-            tooltipFormatter={(v)=>typeof v==='number'?v.toFixed(6):v}
-            errorMarkers={errorMarkers}
-          />
+          <>
+            {(driftX || driftY) && (
+              <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',background:'var(--sur2)',border:'1px solid rgba(255,176,32,0.35)',borderRadius:6,padding:'9px 12px',marginBottom:10,fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5}}>
+                <span style={{color:'#ffb020'}}>▲ Rate-of-change warning:</span>
+                {driftX && <span style={{color:AXIS_COLOR.X}}>Gradient X {driftX.delta>0?'+':''}{driftX.delta.toFixed(5)} since last report (now cc {driftX.corr})</span>}
+                {driftY && <span style={{color:AXIS_COLOR.Y}}>Gradient Y {driftY.delta>0?'+':''}{driftY.delta.toFixed(5)} since last report (now cc {driftY.corr})</span>}
+                <span style={{color:'var(--txd)',marginLeft:'auto'}}>still inside ±0.001 tolerance — early warning only</span>
+              </div>
+            )}
+            <TrendChart
+              title="Spindle Gradient X / Y"
+              subtitle={`0 centred · green band = within ±0.001 tolerance · dots = errors · ▲ = single-step change > ${STEP_X}`}
+              data={points}
+              lines={[{key:'gradientX',color:AXIS_COLOR.X,name:'Gradient X'},{key:'gradientY',color:AXIS_COLOR.Y,name:'Gradient Y'}]}
+              refLines={[{y:TOL,label:'+0.001'},{y:-TOL,label:'−0.001'}]}
+              toleranceBand={[-TOL, TOL]}
+              yDomain={dom}
+              zeroLine
+              yFormat={v=>v.toFixed(4)}
+              tooltipFormatter={(v)=>typeof v==='number'?v.toFixed(6):v}
+              errorMarkers={errorMarkers}
+              driftMarkers={driftMarkers}
+            />
+          </>
         );
       })()}
       <TrendChart
@@ -2549,20 +2664,39 @@ function FleetTrendCharts({ history }) {
     <div style={{marginBottom:4}}>
       {has(['gradientX','gradientY']) && (() => {
         const TOL = 0.001;
+        const STEP_X = DWX_THRESHOLDS.spindleGradientXStepMax;
+        const STEP_Y = DWX_THRESHOLDS.spindleGradientYStepMax;
         const dom = symmetricRealDomain(points, ['gradientX','gradientY'], TOL * 1.6);
+        const driftMarkers = [
+          ...driftSteps(points, 'gradientX', STEP_X).map(m => ({ ...m, color: AXIS_COLOR.X })),
+          ...driftSteps(points, 'gradientY', STEP_Y).map(m => ({ ...m, color: AXIS_COLOR.Y })),
+        ];
+        const driftX = latestDriftStep(points, 'gradientX', STEP_X);
+        const driftY = latestDriftStep(points, 'gradientY', STEP_Y);
         return (
-          <TrendChart
-            title="Spindle Gradient X / Y"
-            subtitle="0 centred · green band = within ±0.001 tolerance"
-            data={points}
-            lines={[{key:'gradientX',color:AXIS_COLOR.X,name:'Gradient X'},{key:'gradientY',color:AXIS_COLOR.Y,name:'Gradient Y'}]}
-            refLines={[{y:TOL,label:'+0.001'},{y:-TOL,label:'−0.001'}]}
-            toleranceBand={[-TOL, TOL]}
-            yDomain={dom}
-            zeroLine
-            yFormat={v=>v.toFixed(4)}
-            tooltipFormatter={(v)=>typeof v==='number'?v.toFixed(6):v}
-          />
+          <>
+            {(driftX || driftY) && (
+              <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',background:'var(--sur2)',border:'1px solid rgba(255,176,32,0.35)',borderRadius:6,padding:'9px 12px',marginBottom:10,fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5}}>
+                <span style={{color:'#ffb020'}}>▲ Rate-of-change warning:</span>
+                {driftX && <span style={{color:AXIS_COLOR.X}}>Gradient X {driftX.delta>0?'+':''}{driftX.delta.toFixed(5)} since last report (now cc {driftX.corr})</span>}
+                {driftY && <span style={{color:AXIS_COLOR.Y}}>Gradient Y {driftY.delta>0?'+':''}{driftY.delta.toFixed(5)} since last report (now cc {driftY.corr})</span>}
+                <span style={{color:'var(--txd)',marginLeft:'auto'}}>still inside ±0.001 tolerance — early warning only</span>
+              </div>
+            )}
+            <TrendChart
+              title="Spindle Gradient X / Y"
+              subtitle={`0 centred · green band = within ±0.001 tolerance · ▲ = single-step change > ${STEP_X}`}
+              data={points}
+              lines={[{key:'gradientX',color:AXIS_COLOR.X,name:'Gradient X'},{key:'gradientY',color:AXIS_COLOR.Y,name:'Gradient Y'}]}
+              refLines={[{y:TOL,label:'+0.001'},{y:-TOL,label:'−0.001'}]}
+              toleranceBand={[-TOL, TOL]}
+              yDomain={dom}
+              zeroLine
+              yFormat={v=>v.toFixed(4)}
+              tooltipFormatter={(v)=>typeof v==='number'?v.toFixed(6):v}
+              driftMarkers={driftMarkers}
+            />
+          </>
         );
       })()}
       {has(['aGap','bGap']) && (
@@ -2741,18 +2875,27 @@ function Fleet({ msg }) {
     return { serial, latest, history: sorted };
   }).sort((a, b) => a.serial.localeCompare(b.serial));
 
-  // thresholds mirror the diagnostics engine
-  const flags = (r) => {
+  // thresholds mirror the diagnostics engine. Pass the machine's full history
+  // (not just latest) so the rate-of-change checks have a previous point to
+  // compare against — same idea as the diag-flag drift check on Mill
+  // Diagnostics, just computed client-side from what Fleet already has in
+  // memory instead of needing another DB round trip.
+  const flags = (r, hist) => {
     if (!r) return [];
     const out = [];
     if (r.spindle_gradient_x != null && Math.abs(r.spindle_gradient_x) > 0.001)
       out.push('Spindle X');
     if (r.a_y_gap != null && r.a_y_gap > 40) out.push('A-gap');
     if (r.b_x_gap != null && r.b_x_gap > 40) out.push('B-gap');
+    if (Array.isArray(hist) && hist.length >= 2) {
+      const pts = fleetTrendPoints(hist);
+      if (latestDriftStep(pts, 'gradientX', DWX_THRESHOLDS.spindleGradientXStepMax)) out.push('Spindle X Δ');
+      if (latestDriftStep(pts, 'gradientY', DWX_THRESHOLDS.spindleGradientYStepMax)) out.push('Spindle Y Δ');
+    }
     return out;
   };
 
-  const fleetFlagged = machines.filter(m => flags(m.latest).length > 0).length;
+  const fleetFlagged = machines.filter(m => flags(m.latest, m.history).length > 0).length;
 
   return (
     <div>
@@ -2774,7 +2917,7 @@ function Fleet({ msg }) {
       )}
 
       {machines.map(({ serial, latest, history }) => {
-        const f = flags(latest);
+        const f = flags(latest, history);
         const isBad = f.length > 0;
         const open = openSerial === serial;
         return (
@@ -2856,13 +2999,16 @@ function Fleet({ msg }) {
                         const prev = history[i - 1];
                         const yflip = prev && h.spindle_gradient_y != null && prev.spindle_gradient_y != null
                           && (h.spindle_gradient_y > 0) !== (prev.spindle_gradient_y > 0);
+                        const xOver = h.spindle_gradient_x != null && Math.abs(h.spindle_gradient_x) > 0.001;
+                        const xDrift = !xOver && prev && h.spindle_gradient_x != null && prev.spindle_gradient_x != null
+                          && Math.abs(h.spindle_gradient_x - prev.spindle_gradient_x) > DWX_THRESHOLDS.spindleGradientXStepMax;
                         return (
                           <tr key={h.correction_count} style={{ borderTop: '1px solid var(--bdr)' }}>
                             <td style={{ padding: '4px 8px', color: h.is_latest ? 'var(--ac)' : 'var(--tx)' }}>
                               {h.correction_count}{h.is_latest ? ' •' : ''}
                             </td>
-                            <td style={{ padding: '4px 8px', color: (h.spindle_gradient_x != null && Math.abs(h.spindle_gradient_x) > 0.001) ? 'var(--rd)' : 'var(--tx)' }}>
-                              {fmtNum(h.spindle_gradient_x)}
+                            <td style={{ padding: '4px 8px', color: xOver ? 'var(--rd)' : (xDrift ? '#ffb020' : 'var(--tx)') }} title={xDrift ? `Jumped ${(h.spindle_gradient_x - prev.spindle_gradient_x).toFixed(5)} since previous report` : undefined}>
+                              {fmtNum(h.spindle_gradient_x)}{xDrift ? ' ▲' : ''}
                             </td>
                             <td style={{ padding: '4px 8px', color: yflip ? 'var(--rd)' : 'var(--tx)' }}>
                               {fmtNum(h.spindle_gradient_y)}{yflip ? ' ⇄' : ''}
@@ -3108,10 +3254,11 @@ function Diagnostics({ msg }) {
     const perReport = [];
     for (const [, group] of bySerial) {
       group.sort((a, b) => (a.parsed.correctionCount ?? Infinity) - (b.parsed.correctionCount ?? Infinity));
-      let prevGradientY = null, prevMagOffset = null, prevBaseToolLength = null;
+      let prevGradientX = null, prevGradientY = null, prevMagOffset = null, prevBaseToolLength = null;
       for (const { raw, parsed: r } of group) {
-        const diag = diagnoseReport(r, { gradientY: prevGradientY, magazineOffset: prevMagOffset, baseToolLength: prevBaseToolLength });
+        const diag = diagnoseReport(r, { gradientX: prevGradientX, gradientY: prevGradientY, magazineOffset: prevMagOffset, baseToolLength: prevBaseToolLength });
         const grad = r.rac["SPINDLE GRADIENT"];
+        if (grad && typeof grad.X === "number") prevGradientX = grad.X;
         if (grad && typeof grad.Y === "number") prevGradientY = grad.Y;
         const mo = r.atc["MAGAZINE POSITION OFFSET"];
         if (Array.isArray(mo)) prevMagOffset = mo;
