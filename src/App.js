@@ -2622,11 +2622,8 @@ function DriftDotsLayer({ xAxisMap, yAxisMap, markers }) {
 
 // One color per axis, held constant across every trend chart (Mill Diagnostics
 // AND Fleet) so X/Y/Z/A/B always mean the same thing at a glance no matter
-// which chart you're looking at. AXIS_COLOR_LIGHT is a second, lighter shade
-// used only when a single chart needs two lines for the same axis (e.g. the
-// P1 vs P2 raw-value chart) — still instantly recognizable as "that axis".
+// which chart you're looking at.
 const AXIS_COLOR = { X: '#f472b6', Y: '#ffb020', Z: '#3b82f6', A: '#a78bfa', B: '#22d47a' };
-const AXIS_COLOR_LIGHT = { A: '#c4b5fd', B: '#86efac' };
 
 function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks, zeroLine, subtitle, yTicks, tooltipFormatter, toleranceBand, errorMarkers, driftMarkers }) {
   const [hovered, setHovered] = useState(null); // {e, x, y} for the error tooltip
@@ -2797,32 +2794,6 @@ function TrendCharts({ history, applogText }) {
               ]}
               refLines={[{y:100,label:'threshold 100'}]}
               toleranceBand={[0, 100]}
-              errorMarkers={errorMarkers}
-              driftMarkers={markers}
-            />
-          </>
-        );
-      })()}
-      {has(['aP1Y','aP2Y','bP1X','bP2X']) && (() => {
-        const { markers, latest } = buildDrift(points, [
-          {key:'aP1Y',color:AXIS_COLOR.A,threshold:relativeDriftThreshold(points,'aP1Y'),label:'A-axis P1 (Y)'},
-          {key:'aP2Y',color:AXIS_COLOR_LIGHT.A,threshold:relativeDriftThreshold(points,'aP2Y'),label:'A-axis P2 (Y)'},
-          {key:'bP1X',color:AXIS_COLOR.B,threshold:relativeDriftThreshold(points,'bP1X'),label:'B-axis P1 (X)'},
-          {key:'bP2X',color:AXIS_COLOR_LIGHT.B,threshold:relativeDriftThreshold(points,'bP2X'),label:'B-axis P2 (X)'},
-        ]);
-        return (
-          <>
-            <DriftBanner latest={latest} note={`▲ = single-step change > ${Math.round(DRIFT_RANGE_PERCENT*100)}% of this axis's own range`}/>
-            <TrendChart
-              title="A/B-Axis P1 / P2 Raw Values"
-              subtitle="the two correction points behind the gap above · A-axis Y-component · B-axis X-component · dots = errors in that correction window"
-              data={points}
-              lines={[
-                {key:'aP1Y',color:AXIS_COLOR.A,name:'A-axis P1 (Y)'},
-                {key:'aP2Y',color:AXIS_COLOR_LIGHT.A,name:'A-axis P2 (Y)'},
-                {key:'bP1X',color:AXIS_COLOR.B,name:'B-axis P1 (X)'},
-                {key:'bP2X',color:AXIS_COLOR_LIGHT.B,name:'B-axis P2 (X)'},
-              ]}
               errorMarkers={errorMarkers}
               driftMarkers={markers}
             />
@@ -3410,16 +3381,42 @@ function Fleet({ msg }) {
   const flags = (r, hist) => {
     if (!r) return [];
     const out = [];
-    if (r.spindle_gradient_x != null && Math.abs(r.spindle_gradient_x) > 0.001)
+    if (r.spindle_gradient_x != null && Math.abs(r.spindle_gradient_x) > DWX_THRESHOLDS.spindleGradientXColletWearMax)
       out.push('Spindle X');
-    if (r.a_y_gap != null && r.a_y_gap > 40) out.push('A-gap');
-    if (r.b_x_gap != null && r.b_x_gap > 40) out.push('B-gap');
+    if (r.spindle_gradient_y != null && Math.abs(r.spindle_gradient_y) > DWX_THRESHOLDS.spindleGradientYColletWearMax)
+      out.push('Spindle Y');
+    if (r.a_y_gap != null && r.a_y_gap > DWX_THRESHOLDS.aAxisP1P2YGapMax) out.push('A-gap');
+    if (r.b_x_gap != null && r.b_x_gap > DWX_THRESHOLDS.bAxisP1P2XGapMax) out.push('B-gap');
     if (Array.isArray(hist) && hist.length >= 2) {
       const pts = fleetTrendPoints(hist);
       if (latestDriftStep(pts, 'gradientX', DWX_THRESHOLDS.spindleGradientXStepMax)) out.push('Spindle X Δ');
       if (latestDriftStep(pts, 'gradientY', DWX_THRESHOLDS.spindleGradientYStepMax)) out.push('Spindle Y Δ');
     }
     return out;
+  };
+
+  // Highest-priority ACTIONABLE flag for a machine, computed from the exact
+  // same rule engine (fleetDiagnose → DIAGNOSTIC_CHECKS priorityOrder) Mill
+  // Diagnostics uses — so the "recommended fix" shown on the collapsed Fleet
+  // card can never say something different from what the expanded diagnostic
+  // card would say for the same reading. `prevRow` is the report immediately
+  // before `latest` in this machine's own sorted history (bounce checks need
+  // it; magnitude-only checks work fine without it).
+  const topRecommendation = (latest, hist) => {
+    if (!latest) return null;
+    const sorted = Array.isArray(hist) ? hist : [];
+    const idx = sorted.indexOf(latest);
+    const prevRow = idx > 0 ? sorted[idx - 1] : null;
+    const diag = fleetDiagnose(latest, prevRow);
+    const order = getProfile(latest.model).thresholds.priorityOrder;
+    for (const key of order) {
+      const hit = diag.find(d => d.check === key && d.flagged);
+      if (hit) {
+        const info = CHECK_INFO[key] || {};
+        return { check: key, label: info.label || key, action: hit.priorityNote || info.action || '', cause: info.cause || '' };
+      }
+    }
+    return null;
   };
 
   const fleetFlagged = machines.filter(m => flags(m.latest, m.history).length > 0).length;
@@ -3495,6 +3492,7 @@ function Fleet({ msg }) {
         const f = flags(latest, history);
         const isBad = f.length > 0;
         const open = openSerial === serial;
+        const rec = topRecommendation(latest, history);
         return (
           <div key={serial} className="diag-report-card">
             <div
@@ -3527,6 +3525,12 @@ function Fleet({ msg }) {
               <span>Base tool: {latest?.base_tool_length ?? '—'}</span>
               <span>Spindle hrs: {latest?.spindle_hours || '—'}</span>
             </div>
+
+            {rec && (
+              <div className="diag-flag-action" style={{ marginTop: 6 }}>
+                → {rec.label}: {rec.action}
+              </div>
+            )}
 
             {open && (
               <div style={{ marginTop: 12 }}>
