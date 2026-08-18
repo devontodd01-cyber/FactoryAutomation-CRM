@@ -3265,6 +3265,55 @@ async function reconcileLatestFlag(serial) {
   });
 }
 
+// Links a Fleet serial to a row in the existing dispatch-CRM `customers`
+// table (the same one the Customers tab manages — this doesn't create a
+// second customer list, just points a machine at one). Local draft state so
+// typing/selecting doesn't fire a save on every keystroke; the Save button
+// only appears once something's actually changed.
+function MachineOwnerEditor({ serial, owner, customers, onSave }) {
+  const [customerId, setCustomerId] = useState(owner?.customer_id ?? '');
+  const [nickname, setNickname] = useState(owner?.nickname ?? '');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    setCustomerId(owner?.customer_id ?? '');
+    setNickname(owner?.nickname ?? '');
+  }, [owner, serial]);
+  const dirty = (owner?.customer_id ?? '') !== customerId || (owner?.nickname ?? '') !== nickname;
+  return (
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', background: 'var(--sur2)', border: '1px solid var(--bdr)', borderRadius: 6, padding: '8px 10px', marginBottom: 12 }} onClick={e => e.stopPropagation()}>
+      <span style={{ fontSize: 10, color: 'var(--txd)', fontFamily: "'IBM Plex Mono',monospace" }}>OWNER</span>
+      <select
+        className="fsl" style={{ maxWidth: 220, margin: 0 }}
+        value={customerId}
+        onChange={e => setCustomerId(e.target.value ? Number(e.target.value) : '')}
+      >
+        <option value="">— Unassigned —</option>
+        {customers.map(c => <option key={c.id} value={c.id}>{c.company}</option>)}
+      </select>
+      <input
+        className="fi" style={{ maxWidth: 180, margin: 0 }}
+        placeholder="Nickname (optional)"
+        value={nickname}
+        onChange={e => setNickname(e.target.value)}
+      />
+      {customers.length === 0 && (
+        <span style={{ fontSize: 10, color: 'var(--txd)', fontFamily: "'IBM Plex Mono',monospace" }}>
+          No customers yet — add one in the Customers tab first.
+        </span>
+      )}
+      {dirty && (
+        <button
+          className="btn bp bs"
+          disabled={saving}
+          onClick={async () => { setSaving(true); await onSave(serial, customerId || null, nickname.trim() || null); setSaving(false); }}
+        >
+          {saving ? '⏳' : '💾 Save'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function Fleet({ msg }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -3277,17 +3326,28 @@ function Fleet({ msg }) {
   const [scanBusy, setScanBusy] = useState(false);
   const [scanStatus, setScanStatus] = useState('');
   const scanRef = useRef(null);
+  // Which customer (from the existing dispatch-CRM `customers` table) owns
+  // each serial. `machineOwners` is the `machines` table — deliberately named
+  // apart from the `machines` local var below (the grouped-by-serial fleet
+  // list) so the two don't collide.
+  const [machineOwners, setMachineOwners] = useState([]);
+  const [customers, setCustomers] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       // pull every report, newest first; we group by serial client-side
-      const r = await fetch(
-        `${SUPABASE_URL}/rest/v1/mill_reports?select=serial,model,correction_count,firmware_main,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length,spindle_hours,total_work_time,report_date,recent_errors,is_latest,created_at&order=serial.asc,correction_count.asc`,
-        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
-      );
-      const data = await r.json();
-      setRows(Array.isArray(data) ? data : []);
+      const [r, ownersData, customersData] = await Promise.all([
+        fetch(
+          `${SUPABASE_URL}/rest/v1/mill_reports?select=serial,model,correction_count,firmware_main,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length,spindle_hours,total_work_time,report_date,recent_errors,is_latest,created_at&order=serial.asc,correction_count.asc`,
+          { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+        ).then(res => res.json()),
+        db.get('machines').catch(() => []),
+        db.get('customers').catch(() => []),
+      ]);
+      setRows(Array.isArray(r) ? r : []);
+      setMachineOwners(Array.isArray(ownersData) ? ownersData : []);
+      setCustomers(Array.isArray(customersData) ? customersData : []);
     } catch (e) {
       msg && msg('Failed to load fleet: ' + e.message, 'bad');
       setRows([]);
@@ -3295,6 +3355,16 @@ function Fleet({ msg }) {
       setLoading(false);
     }
   }, [msg]);
+
+  const saveMachineOwner = async (serial, customerId, nickname) => {
+    try {
+      await db.upsert('machines', { serial, customer_id: customerId, nickname }, 'serial');
+      setMachineOwners(prev => [...prev.filter(m => m.serial !== serial), { serial, customer_id: customerId, nickname }]);
+      msg && msg('✅ Saved');
+    } catch (e) {
+      msg && msg('⚠️ Could not save owner — ' + e.message, 'bad');
+    }
+  };
 
   useEffect(() => { load(); }, [load]);
 
@@ -3367,11 +3437,28 @@ function Fleet({ msg }) {
   for (const row of rows) {
     (bySerial[row.serial] = bySerial[row.serial] || []).push(row);
   }
+  // Owner lookup: serial -> machines-table row -> customers-table row. Both
+  // come from the existing dispatch-CRM `customers` table (same one the
+  // Customers tab manages) — Fleet just links a serial to one, it doesn't
+  // duplicate customer creation.
+  const ownerBySerial = {};
+  for (const m of machineOwners) ownerBySerial[m.serial] = m;
+  const customerById = {};
+  for (const c of customers) customerById[c.id] = c;
+
   const machines = Object.entries(bySerial).map(([serial, list]) => {
     const sorted = [...list].sort((a, b) => (a.correction_count || 0) - (b.correction_count || 0));
     const latest = sorted.find(x => x.is_latest) || sorted[sorted.length - 1];
-    return { serial, latest, history: sorted };
-  }).sort((a, b) => a.serial.localeCompare(b.serial));
+    const owner = ownerBySerial[serial] || null;
+    const customer = owner && owner.customer_id != null ? customerById[owner.customer_id] || null : null;
+    return { serial, latest, history: sorted, owner, customer };
+  }).sort((a, b) => {
+    const an = a.customer?.company, bn = b.customer?.company;
+    if (an && bn) return an.localeCompare(bn) || a.serial.localeCompare(b.serial);
+    if (an && !bn) return -1;
+    if (!an && bn) return 1;
+    return a.serial.localeCompare(b.serial);
+  });
 
   // thresholds mirror the diagnostics engine. Pass the machine's full history
   // (not just latest) so the rate-of-change checks have a previous point to
@@ -3488,11 +3575,12 @@ function Fleet({ msg }) {
         </div>
       )}
 
-      {machines.map(({ serial, latest, history }) => {
+      {machines.map(({ serial, latest, history, owner, customer }) => {
         const f = flags(latest, history);
         const isBad = f.length > 0;
         const open = openSerial === serial;
         const rec = topRecommendation(latest, history);
+        const displayName = customer?.company || (owner?.nickname) || serial;
         return (
           <div key={serial} className="diag-report-card">
             <div
@@ -3500,13 +3588,14 @@ function Fleet({ msg }) {
               style={{ cursor: 'pointer' }}
               onClick={() => setOpenSerial(open ? null : serial)}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
                 <span style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 15 }}>
-                  {serial}
+                  {displayName}
                 </span>
                 <span className="diag-meta" style={{ margin: 0 }}>
-                  {latest?.model || '—'} · cc {latest?.correction_count ?? '—'} · fw {latest?.firmware_main || '—'}
+                  {customer && `${serial} · `}{owner?.nickname && customer && `${owner.nickname} · `}{latest?.model || '—'} · cc {latest?.correction_count ?? '—'} · fw {latest?.firmware_main || '—'}
                 </span>
+                {!customer && <span style={{fontSize:9,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",border:'1px solid var(--bdr)',borderRadius:4,padding:'1px 6px'}}>unassigned</span>}
               </div>
               <span
                 className={`diag-flag-title`}
@@ -3534,6 +3623,8 @@ function Fleet({ msg }) {
 
             {open && (
               <div style={{ marginTop: 12 }}>
+                <MachineOwnerEditor serial={serial} owner={owner} customers={customers} onSave={saveMachineOwner} />
+
                 {/* trend across correction counts — graph or table */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                   <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 12, letterSpacing: '.5px', color: 'var(--txm)' }}>
