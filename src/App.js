@@ -1379,32 +1379,86 @@ function parseReportBody(body) {
   return root;
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Diagnostic rule set — dictated directly by the shop's own calibration
+// technician (Aug 2026) from real machine-side experience, not inferred from
+// the report format. Order of priority, in the technician's own words:
+//
+//  1. Gradient (X or Y) magnitude > 0.001, and STABLE (not bouncing per #2)
+//     → spindle misalignment.
+//  2. Gradient (X or Y) bouncing ≥0.0005 between consecutive reports —
+//     regardless of whether it's inside or outside the ±0.001 tolerance —
+//     → collet wear (replace the collet). Takes priority over #1 for the
+//     same axis: a bouncing-and-out-of-tolerance gradient is collet wear,
+//     not misalignment.
+//  3. Origin drift: any single axis (X, Y, or Z) bouncing ≥100 units between
+//     consecutive reports → flag that specific axis. Independent of gradient
+//     — this is measured regardless of gradient status.
+//  4. A/B-axis P1/P2 gap (A = Y-gap, B = X-gap):
+//       stable and > 100 units            → axis alignment issue
+//       bouncing ≥100 units               → ballscrew wear (not repeating) —
+//                                            A-gap → Y-axis, B-gap → X-axis
+//     Confirmed via real correction logs (two different machines/models):
+//     gradient is computed downstream of the A/B P1/P2 points, so if
+//     gradient is ALSO flagged at the same time the gap is bouncing,
+//     address the ballscrew FIRST, then re-check gradient.
+//  5. Magazine offset bouncing ≥100 units on any axis → axis misalignment or
+//     ballscrew wear (dual-cause — not disambiguated). NOT gated on
+//     gradient: the magazine offset reading is captured as its own
+//     self-contained first step (pick up calibration pin → measure a
+//     cylinder on the magazine → put tool away → re-grab tool to measure the
+//     rest of the machine's positions), fully decoupled from the rotary
+//     positioning gradient is derived from.
+//  6. Base tool length bouncing ≥100 units, while BOTH the Z origin axis and
+//     the magazine Z-axis value stay clean → bad tool setter switch (the
+//     switch itself is at fault, not a mechanical Z-axis problem).
+//  7. Angle offset — A-axis and B-axis independently, using AngleOffset(Base)
+//     with index 0 excluded (fixed baseline, not a real measured point):
+//       range (max − min) of the remaining values > 200 units, OR
+//       any two ADJACENT values differing by > 50 units
+//     → bad A-axis / bad B-axis (whichever array tripped it). Not gated on
+//     gradient.
+// ────────────────────────────────────────────────────────────────────────────
 const DWX_THRESHOLDS = {
   priorityOrder: [
-    "spindle_gradient_x_collet_wear",
+    // Bounce checks first — these represent active wear and take priority
+    // over the corresponding stable/magnitude check on the same metric.
     "spindle_gradient_x_drift",
-    "spindle_gradient_y_sign_flip",
-    "magazine_offset_base_tool_length_drift",
-    "a_axis_angle_offset_curve",
+    "spindle_gradient_y_drift",
+    "a_axis_p1_p2_gap_drift",
+    "b_axis_p1_p2_gap_drift",
+    // Stable/magnitude checks.
+    "spindle_gradient_x_collet_wear",
+    "spindle_gradient_y_collet_wear",
     "a_axis_p1_p2_gap",
     "b_axis_p1_p2_gap",
+    // Independent axis/positional checks.
+    "origin_x_drift",
+    "origin_y_drift",
+    "origin_z_drift",
+    "magazine_offset_drift",
+    "base_tool_length_drift",
+    "a_axis_angle_offset",
+    "b_axis_angle_offset",
   ],
-  aAxisP1P2YGapMax: 40,
-  bAxisP1P2XGapMax: 40,
-  magazineBallscrewDriftMax: 40,
+  aAxisP1P2YGapMax: 100,
+  bAxisP1P2XGapMax: 100,
   spindleGradientXColletWearMax: 0.001,
-  // Rate-of-change ("drift") triggers — separate from the absolute limits
-  // above. A value can sit safely inside its hard tolerance (e.g. gradient X
-  // under ±0.001) but still be moving unusually fast report-to-report — an
-  // early-warning sign worth flagging on its own, before it ever crosses the
-  // hard line. Threshold = max allowed |value[n] − value[n-1]| between two
-  // consecutive saved reports for the same machine.
+  spindleGradientYColletWearMax: 0.001,
+  // Rate-of-change ("bounce") triggers — a value can sit safely inside its
+  // hard tolerance but still be moving unusually fast report-to-report,
+  // which is itself the diagnostic signal (see rule 2 above). Threshold =
+  // max allowed |value[n] − value[n-1]| between two consecutive saved
+  // reports for the same machine.
   spindleGradientXStepMax: 0.0005,
   spindleGradientYStepMax: 0.0005,
-  // A/B gap already has an established hard tolerance (40) — half of it,
-  // same ratio as the gradient step thresholds above, is the drift trigger.
-  aAxisP1P2YGapStepMax: 20,
-  bAxisP1P2XGapStepMax: 20,
+  aAxisP1P2YGapStepMax: 100,
+  bAxisP1P2XGapStepMax: 100,
+  originAxisStepMax: 100,
+  magazineOffsetStepMax: 100,
+  baseToolLengthStepMax: 100,
+  angleOffsetRangeMax: 200,
+  angleOffsetAdjacentDiffMax: 50,
 };
 
 const MACHINE_PROFILES = {
@@ -1559,112 +1613,240 @@ function xGap(pointObj) {
   return Math.abs(p2[0] - p1[0]);
 }
 
-function diagnoseAAxisGap(r) {
-  const a = r.rac["A-AXIS"];
-  if (!a) return null;
-  const gap = yGap(a);
-  if (gap == null) return null;
-  const threshold = r.profile.thresholds.aAxisP1P2YGapMax;
-  return { check: "a_axis_p1_p2_gap", gap, threshold, flagged: gap > threshold, thresholdsValidatedForModel: r.profile.thresholdsValidated };
-}
-
-function diagnoseBAxisGap(r) {
-  const b = r.rac["B-AXIS"];
-  if (!b) return null;
-  const gap = xGap(b);
-  if (gap == null) return null;
-  const threshold = r.profile.thresholds.bAxisP1P2XGapMax;
-  return { check: "b_axis_p1_p2_gap", gap, threshold, flagged: gap > threshold, thresholdsValidatedForModel: r.profile.thresholdsValidated };
-}
-
-function diagnoseSpindleGradientY(r, previousGradientY) {
+// ── Rule 1 / 2 — Spindle Gradient (X and Y, each independently) ─────────────
+// Hard-tolerance (magnitude) check: |value| > 0.001 → flagged. On its own,
+// while stable, this reads as spindle misalignment (rule 1). The companion
+// *Drift check right below it is what determines whether "stable" is true.
+function diagnoseGradientHard(r, axis) {
   const grad = r.rac["SPINDLE GRADIENT"];
-  if (!grad || typeof grad.Y !== "number") return null;
-  const y = grad.Y;
-  const result = { check: "spindle_gradient_y_sign_flip", currentY: y, previousY: previousGradientY ?? null, flagged: false, thresholdsValidatedForModel: r.profile.thresholdsValidated };
-  if (previousGradientY != null) result.flagged = (y > 0) !== (previousGradientY > 0);
-  return result;
+  if (!grad || typeof grad[axis] !== "number") return null;
+  const v = grad[axis];
+  const threshold = axis === "X" ? r.profile.thresholds.spindleGradientXColletWearMax : r.profile.thresholds.spindleGradientYColletWearMax;
+  return { check: `spindle_gradient_${axis.toLowerCase()}_collet_wear`, axis, currentValue: v, threshold, flagged: Math.abs(v) > threshold, thresholdsValidatedForModel: r.profile.thresholdsValidated };
 }
+function diagnoseSpindleGradientXHard(r) { return diagnoseGradientHard(r, "X"); }
+function diagnoseSpindleGradientYHard(r) { return diagnoseGradientHard(r, "Y"); }
 
-function diagnoseSpindleGradientX(r) {
+// Bounce (rate-of-change) check: |value[n] − value[n-1]| ≥ 0.0005 between
+// consecutive reports for the SAME machine, regardless of whether the
+// magnitude is inside or outside the ±0.001 hard tolerance. This is collet
+// wear (rule 2) and takes priority over the hard-tolerance check above for
+// the same axis — see the priority-note pass in diagnoseReport().
+function diagnoseGradientDrift(r, axis, previousValue) {
   const grad = r.rac["SPINDLE GRADIENT"];
-  if (!grad || typeof grad.X !== "number") return null;
-  const x = grad.X;
-  const threshold = r.profile.thresholds.spindleGradientXColletWearMax;
-  return { check: "spindle_gradient_x_collet_wear", currentX: x, threshold, flagged: Math.abs(x) > threshold, thresholdsValidatedForModel: r.profile.thresholdsValidated };
-}
-
-// Rate-of-change companion to the hard-tolerance check above. Flags a big
-// single-step jump in gradient X even while the absolute value is still
-// inside ±0.001 — catches accelerating collet wear earlier than waiting for
-// the hard line to be crossed. Needs the previous report for the SAME
-// machine to compare against (caller is responsible for that ordering).
-function diagnoseSpindleGradientXDrift(r, previousGradientX) {
-  const grad = r.rac["SPINDLE GRADIENT"];
-  if (!grad || typeof grad.X !== "number") return null;
-  const x = grad.X;
-  const threshold = r.profile.thresholds.spindleGradientXStepMax;
-  const result = { check: "spindle_gradient_x_drift", currentX: x, previousX: previousGradientX ?? null, delta: null, threshold, flagged: false, thresholdsValidatedForModel: r.profile.thresholdsValidated };
-  if (previousGradientX != null) {
-    result.delta = x - previousGradientX;
-    result.flagged = Math.abs(result.delta) > threshold;
+  if (!grad || typeof grad[axis] !== "number") return null;
+  const v = grad[axis];
+  const threshold = axis === "X" ? r.profile.thresholds.spindleGradientXStepMax : r.profile.thresholds.spindleGradientYStepMax;
+  const result = { check: `spindle_gradient_${axis.toLowerCase()}_drift`, axis, currentValue: v, previousValue: previousValue ?? null, delta: null, threshold, flagged: false, thresholdsValidatedForModel: r.profile.thresholdsValidated };
+  if (previousValue != null) {
+    result.delta = v - previousValue;
+    result.flagged = Math.abs(result.delta) >= threshold;
   }
   return result;
 }
+function diagnoseSpindleGradientXDrift(r, previousGradientX) { return diagnoseGradientDrift(r, "X", previousGradientX); }
+function diagnoseSpindleGradientYDrift(r, previousGradientY) { return diagnoseGradientDrift(r, "Y", previousGradientY); }
 
-function diagnoseMagazineBallscrewDrift(r, previousMagazineOffset, previousBaseToolLength) {
-  const currentBaseToolLength = r.rac["BASE TOOL LENGTH"];
-  const currentMagazineOffset = r.atc["MAGAZINE POSITION OFFSET"];
-  if (typeof currentBaseToolLength !== "number" || !Array.isArray(currentMagazineOffset)) return null;
-  const threshold = r.profile.thresholds.magazineBallscrewDriftMax;
+// ── Rule 4 — A/B-axis P1/P2 gap (A = Y-gap, B = X-gap) ───────────────────────
+// Stable/magnitude check: gap > 100 units → axis alignment issue.
+function diagnoseAxisGap(r, axisKey, gapFn, checkKey, thresholdKey) {
+  const ax = r.rac[axisKey];
+  if (!ax) return null;
+  const gap = gapFn(ax);
+  if (gap == null) return null;
+  const threshold = r.profile.thresholds[thresholdKey];
+  return { check: checkKey, gap, threshold, flagged: gap > threshold, thresholdsValidatedForModel: r.profile.thresholdsValidated };
+}
+function diagnoseAAxisGap(r) { return diagnoseAxisGap(r, "A-AXIS", yGap, "a_axis_p1_p2_gap", "aAxisP1P2YGapMax"); }
+function diagnoseBAxisGap(r) { return diagnoseAxisGap(r, "B-AXIS", xGap, "b_axis_p1_p2_gap", "bAxisP1P2XGapMax"); }
+
+// Bounce check: gap moving ≥100 units between consecutive reports → ballscrew
+// wear (not repeating) — A-gap → Y-axis ballscrew, B-gap → X-axis ballscrew.
+// Confirmed via real correction logs that gradient is computed downstream of
+// these P1/P2 points, so when gradient is ALSO flagged at the same time, the
+// ballscrew gets addressed first (see the priority-note pass below).
+function diagnoseAxisGapDrift(r, axisKey, gapFn, previousGap, checkKey, thresholdKey) {
+  const ax = r.rac[axisKey];
+  if (!ax) return null;
+  const gap = gapFn(ax);
+  if (gap == null) return null;
+  const threshold = r.profile.thresholds[thresholdKey];
+  const result = { check: checkKey, gap, previousGap: previousGap ?? null, delta: null, threshold, flagged: false, thresholdsValidatedForModel: r.profile.thresholdsValidated };
+  if (previousGap != null) {
+    result.delta = gap - previousGap;
+    result.flagged = Math.abs(result.delta) >= threshold;
+  }
+  return result;
+}
+function diagnoseAAxisGapDrift(r, previousAGap) { return diagnoseAxisGapDrift(r, "A-AXIS", yGap, previousAGap, "a_axis_p1_p2_gap_drift", "aAxisP1P2YGapStepMax"); }
+function diagnoseBAxisGapDrift(r, previousBGap) { return diagnoseAxisGapDrift(r, "B-AXIS", xGap, previousBGap, "b_axis_p1_p2_gap_drift", "bAxisP1P2XGapStepMax"); }
+
+// ── Rule 3 — Origin drift, per axis (X / Y / Z independently) ───────────────
+// Any single axis bouncing ≥100 units between consecutive reports → flag
+// that axis. Not gated on gradient — measured regardless.
+function diagnoseOriginAxisDrift(r, previousOrigin, idx, axisLabel, checkKey) {
+  const origin = extractOrigin(r.sections || {}, r.rac);
+  const v = origin[idx];
+  if (v == null) return null;
+  const threshold = r.profile.thresholds.originAxisStepMax;
+  const prevV = Array.isArray(previousOrigin) ? previousOrigin[idx] : null;
+  const result = { check: checkKey, axis: axisLabel, currentValue: v, previousValue: prevV ?? null, delta: null, threshold, flagged: false, thresholdsValidatedForModel: r.profile.thresholdsValidated };
+  if (prevV != null) {
+    result.delta = v - prevV;
+    result.flagged = Math.abs(result.delta) >= threshold;
+  }
+  return result;
+}
+function diagnoseOriginXDrift(r, previousOrigin) { return diagnoseOriginAxisDrift(r, previousOrigin, 0, "X", "origin_x_drift"); }
+function diagnoseOriginYDrift(r, previousOrigin) { return diagnoseOriginAxisDrift(r, previousOrigin, 1, "Y", "origin_y_drift"); }
+function diagnoseOriginZDrift(r, previousOrigin) { return diagnoseOriginAxisDrift(r, previousOrigin, 2, "Z", "origin_z_drift"); }
+
+// ── Rule 5 — Magazine offset bounce, dual-cause ──────────────────────────────
+// Any axis of the magazine position offset bouncing ≥100 units between
+// consecutive reports → axis misalignment OR ballscrew wear (not
+// disambiguated). Deliberately NOT gated on gradient: the magazine offset
+// reading is captured as a self-contained first step in the calibration
+// sequence (pick up calibration pin → measure a cylinder on the magazine →
+// put tool away → re-grab tool to measure the rest of the machine's
+// positions) with no rotary positioning involved, so it has no mechanical
+// path back to the gradient reading.
+function diagnoseMagazineOffsetDrift(r, previousMagazineOffset) {
+  const current = r.atc["MAGAZINE POSITION OFFSET"];
+  if (!Array.isArray(current)) return null;
+  const threshold = r.profile.thresholds.magazineOffsetStepMax;
+  const axisNames = ["X", "Y", "Z"];
   const result = {
-    check: "magazine_offset_base_tool_length_drift",
-    currentBaseToolLength, currentMagazineOffset,
-    previousBaseToolLength: previousBaseToolLength ?? null,
+    check: "magazine_offset_drift", currentMagazineOffset: current,
     previousMagazineOffset: previousMagazineOffset ?? null,
-    threshold, flagged: false,
+    delta: null, flaggedAxes: [], threshold, flagged: false,
     thresholdsValidatedForModel: r.profile.thresholdsValidated,
   };
-  if (previousBaseToolLength == null || previousMagazineOffset == null) return result;
-  const baseToolLengthDelta = currentBaseToolLength - previousBaseToolLength;
-  const axisNames = ["x", "y", "z"];
-  const magazineOffsetDelta = {};
-  currentMagazineOffset.forEach((v, i) => { magazineOffsetDelta[axisNames[i] || i] = v - (previousMagazineOffset[i] ?? v); });
-  result.baseToolLengthDelta = baseToolLengthDelta;
-  result.magazineOffsetDelta = magazineOffsetDelta;
-  if (Math.abs(baseToolLengthDelta) > threshold) {
-    const btSign = baseToolLengthDelta > 0;
-    for (const [axis, delta] of Object.entries(magazineOffsetDelta)) {
-      if (Math.abs(delta) > threshold && (delta > 0) === btSign) { result.flagged = true; result.flaggedAxis = axis; break; }
-    }
+  if (!Array.isArray(previousMagazineOffset)) return result;
+  const delta = {};
+  current.forEach((v, i) => { delta[axisNames[i] || i] = v - (previousMagazineOffset[i] ?? v); });
+  result.delta = delta;
+  result.flaggedAxes = Object.entries(delta).filter(([, d]) => Math.abs(d) >= threshold).map(([axis]) => axis);
+  result.flagged = result.flaggedAxes.length > 0;
+  return result;
+}
+
+// ── Rule 6 — Base tool length bounce → bad tool setter switch ───────────────
+// Bouncing ≥100 units while BOTH the Z-origin axis and the magazine Z-axis
+// value stay clean (< 100 units of their own movement) isolates the cause to
+// the tool setter switch itself, since every other Z-related reading is
+// stable. If either Z reference also moved, the bounce is more likely
+// explained by real Z-axis movement rather than a switch fault, so this does
+// NOT get flagged as a tool-setter issue in that case.
+function diagnoseBaseToolLengthDrift(r, previousBaseToolLength, previousOrigin, previousMagazineOffset) {
+  const current = r.rac["BASE TOOL LENGTH"];
+  if (typeof current !== "number") return null;
+  const threshold = r.profile.thresholds.baseToolLengthStepMax;
+  const result = {
+    check: "base_tool_length_drift", currentValue: current,
+    previousValue: previousBaseToolLength ?? null, delta: null,
+    threshold, flagged: false, bounceObservedButZDirty: false,
+    thresholdsValidatedForModel: r.profile.thresholdsValidated,
+  };
+  if (previousBaseToolLength == null) return result;
+  result.delta = current - previousBaseToolLength;
+  const bounced = Math.abs(result.delta) >= threshold;
+  if (!bounced) return result;
+
+  const origin = extractOrigin(r.sections || {}, r.rac);
+  const originZ = origin[2];
+  const originZPrev = Array.isArray(previousOrigin) ? previousOrigin[2] : null;
+  const originZClean = originZ == null || originZPrev == null || Math.abs(originZ - originZPrev) < r.profile.thresholds.originAxisStepMax;
+
+  const mag = r.atc["MAGAZINE POSITION OFFSET"];
+  const magZ = Array.isArray(mag) ? mag[2] : null;
+  const magZPrev = Array.isArray(previousMagazineOffset) ? previousMagazineOffset[2] : null;
+  const magZClean = magZ == null || magZPrev == null || Math.abs(magZ - magZPrev) < r.profile.thresholds.magazineOffsetStepMax;
+
+  if (originZClean && magZClean) {
+    result.flagged = true;
+  } else {
+    result.bounceObservedButZDirty = true;
   }
   return result;
 }
 
-function diagnoseAAxisAngleOffsetCurve(r) {
-  const a = r.rac["A-AXIS"];
-  const curve = a && a["ANGLE OFFSET (BASE)"];
-  if (!Array.isArray(curve) || curve.length < 3) return null;
-  let reversals = 0, lastSign = null;
-  for (let i = 1; i < curve.length; i++) {
-    const d = curve[i] - curve[i - 1];
-    if (d === 0) continue;
-    const sign = d > 0;
-    if (lastSign !== null && sign !== lastSign) reversals++;
-    lastSign = sign;
-  }
-  return { check: "a_axis_angle_offset_curve", curve, reversals, flagged: reversals >= 2, thresholdsValidatedForModel: r.profile.thresholdsValidated };
+// ── Rule 7 — Angle offset, A and B independently ─────────────────────────────
+// Using AngleOffset(Base), with index 0 excluded (it's a fixed baseline, not
+// a real measured point): range (max − min) of the remaining values > 200
+// units, OR any two ADJACENT values differing by > 50 units → bad A/B axis.
+// Not gated on gradient.
+function diagnoseAxisAngleOffset(r, axisKey, axisLabel, checkKey) {
+  const ax = r.rac[axisKey];
+  const rawCurve = ax && ax["ANGLE OFFSET (BASE)"];
+  if (!Array.isArray(rawCurve) || rawCurve.length < 2) return null;
+  const trimmed = rawCurve.slice(1).filter(v => typeof v === "number" && !Number.isNaN(v));
+  if (trimmed.length < 2) return null;
+  const range = Math.max(...trimmed) - Math.min(...trimmed);
+  let maxAdjacentDiff = 0;
+  for (let i = 1; i < trimmed.length; i++) maxAdjacentDiff = Math.max(maxAdjacentDiff, Math.abs(trimmed[i] - trimmed[i - 1]));
+  const rangeThreshold = r.profile.thresholds.angleOffsetRangeMax;
+  const adjacentThreshold = r.profile.thresholds.angleOffsetAdjacentDiffMax;
+  return {
+    check: checkKey, axis: axisLabel, curve: rawCurve, trimmedCurve: trimmed,
+    range, rangeThreshold, maxAdjacentDiff, adjacentThreshold,
+    flagged: range > rangeThreshold || maxAdjacentDiff > adjacentThreshold,
+    thresholdsValidatedForModel: r.profile.thresholdsValidated,
+  };
 }
+function diagnoseAAxisAngleOffset(r) { return diagnoseAxisAngleOffset(r, "A-AXIS", "A", "a_axis_angle_offset"); }
+function diagnoseBAxisAngleOffset(r) { return diagnoseAxisAngleOffset(r, "B-AXIS", "B", "b_axis_angle_offset"); }
 
 const DIAGNOSTIC_CHECKS = {
-  spindle_gradient_x_collet_wear: (r) => diagnoseSpindleGradientX(r),
   spindle_gradient_x_drift: (r, prev) => diagnoseSpindleGradientXDrift(r, prev.gradientX),
-  spindle_gradient_y_sign_flip: (r, prev) => diagnoseSpindleGradientY(r, prev.gradientY),
-  magazine_offset_base_tool_length_drift: (r, prev) => diagnoseMagazineBallscrewDrift(r, prev.magazineOffset, prev.baseToolLength),
-  a_axis_angle_offset_curve: (r) => diagnoseAAxisAngleOffsetCurve(r),
+  spindle_gradient_y_drift: (r, prev) => diagnoseSpindleGradientYDrift(r, prev.gradientY),
+  a_axis_p1_p2_gap_drift: (r, prev) => diagnoseAAxisGapDrift(r, prev.aGap),
+  b_axis_p1_p2_gap_drift: (r, prev) => diagnoseBAxisGapDrift(r, prev.bGap),
+  spindle_gradient_x_collet_wear: (r) => diagnoseSpindleGradientXHard(r),
+  spindle_gradient_y_collet_wear: (r) => diagnoseSpindleGradientYHard(r),
   a_axis_p1_p2_gap: (r) => diagnoseAAxisGap(r),
   b_axis_p1_p2_gap: (r) => diagnoseBAxisGap(r),
+  origin_x_drift: (r, prev) => diagnoseOriginXDrift(r, prev.origin),
+  origin_y_drift: (r, prev) => diagnoseOriginYDrift(r, prev.origin),
+  origin_z_drift: (r, prev) => diagnoseOriginZDrift(r, prev.origin),
+  magazine_offset_drift: (r, prev) => diagnoseMagazineOffsetDrift(r, prev.magazineOffset),
+  base_tool_length_drift: (r, prev) => diagnoseBaseToolLengthDrift(r, prev.baseToolLength, prev.origin, prev.magazineOffset),
+  a_axis_angle_offset: (r) => diagnoseAAxisAngleOffset(r),
+  b_axis_angle_offset: (r) => diagnoseBAxisAngleOffset(r),
 };
+
+// Cross-check pass: within the SAME metric, a bounce flag outranks its
+// stable/magnitude sibling (rule 2 over rule 1, ballscrew-bounce over
+// alignment-magnitude). Across metrics, per rule 4's confirmed resolution,
+// a bouncing A/B gap outranks a flagged gradient — ballscrew gets addressed
+// first, then gradient gets re-checked. These are annotated onto the result
+// objects as `priorityNote` rather than suppressing either flag, so both
+// stay visible on the report.
+function annotateDiagnosticPriority(results) {
+  const byKey = {};
+  for (const r of results) byKey[r.check] = r;
+  const pair = (hardKey, driftKey, hardCause, driftCause) => {
+    const hard = byKey[hardKey], drift = byKey[driftKey];
+    if (hard && hard.flagged && drift && drift.flagged) {
+      hard.priorityNote = `Also bouncing report-to-report — treat as ${driftCause}, not ${hardCause}. See the accompanying rapid-change flag.`;
+    }
+  };
+  pair("spindle_gradient_x_collet_wear", "spindle_gradient_x_drift", "spindle misalignment", "collet wear");
+  pair("spindle_gradient_y_collet_wear", "spindle_gradient_y_drift", "spindle misalignment", "collet wear");
+  pair("a_axis_p1_p2_gap", "a_axis_p1_p2_gap_drift", "a Y-axis alignment issue", "Y-axis ballscrew wear");
+  pair("b_axis_p1_p2_gap", "b_axis_p1_p2_gap_drift", "an X-axis alignment issue", "X-axis ballscrew wear");
+
+  const gradientFlagged = ["spindle_gradient_x_collet_wear", "spindle_gradient_y_collet_wear", "spindle_gradient_x_drift", "spindle_gradient_y_drift"]
+    .some(k => byKey[k] && byKey[k].flagged);
+  const gapDriftFlags = ["a_axis_p1_p2_gap_drift", "b_axis_p1_p2_gap_drift"].map(k => byKey[k]).filter(g => g && g.flagged);
+  if (gradientFlagged && gapDriftFlags.length) {
+    for (const g of gapDriftFlags) g.priorityOverGradient = true;
+    for (const k of ["spindle_gradient_x_collet_wear", "spindle_gradient_y_collet_wear", "spindle_gradient_x_drift", "spindle_gradient_y_drift"]) {
+      const g = byKey[k];
+      if (g && g.flagged) g.priorityNote = "The A/B-axis gap is also bouncing — address the ballscrew wear FIRST, then re-check this gradient reading (gradient is computed downstream of the A/B calibration points).";
+    }
+  }
+  return results;
+}
 
 function diagnoseReport(r, prev = {}) {
   const order = r.profile.thresholds.priorityOrder;
@@ -1675,7 +1857,7 @@ function diagnoseReport(r, prev = {}) {
     const out = fn(r, prev);
     if (out) results.push(out);
   }
-  return results;
+  return annotateDiagnosticPriority(results);
 }
 
 function diagnoseDice3B9B(diceEntry) {
@@ -1690,13 +1872,21 @@ function diagnoseDice3B9B(diceEntry) {
 }
 
 const CHECK_INFO = {
-  spindle_gradient_x_collet_wear: { label: "Spindle Gradient X", cause: "Magnitude above 0.001 indicates collet wear.", action: "Swap the collet." },
-  spindle_gradient_x_drift: { label: "Spindle Gradient X — Rapid Change", cause: "Moved more than 0.0005 since the previous report — still inside the ±0.001 hard tolerance, but accelerating faster than normal. Early warning, not yet a failure.", action: "Keep an eye on it; re-check sooner than your usual interval." },
-  spindle_gradient_y_sign_flip: { label: "Spindle Gradient Y Sign-Flip", cause: "Sign alternates vs. the previous report — inconsistent calibration-pin seating (collet wear or spindle bore issue, not progressive drift).", action: "Clean/hone the spindle bore, or swap the collet." },
-  magazine_offset_base_tool_length_drift: { label: "Magazine Offset / Base Tool Length Drift", cause: "ATC magazine offset and base tool length are moving together past threshold — possible ballscrew fault/backlash.", action: "Inspect the ballscrew for backlash or wear." },
-  a_axis_angle_offset_curve: { label: "A-Axis Angle Offset Curve", cause: "Erratic, non-monotonic offset curve — possible A-axis gear backlash/looseness (heuristic — confirm visually and with DICE).", action: "Physically inspect the A-axis gear assembly for feelable loose points." },
-  a_axis_p1_p2_gap: { label: "A-Axis P1/P2 Y-Gap", cause: "Not a reliable standalone indicator on its own — cross-reference with DICE 3B/9B Bottom Width before acting.", action: "Confirm with a DICE measurement before doing any repair." },
-  b_axis_p1_p2_gap: { label: "B-Axis P1/P2 X-Gap", cause: "Elevated off-axis deviation on the B-axis (mirrors A-axis's Y-gap check — B's designed travel is Y, so its deviation check is on X).", action: "Inspect the B-axis for backlash." },
+  spindle_gradient_x_collet_wear: { label: "Spindle Gradient X", cause: "Magnitude over ±0.001. If stable report-to-report (see the accompanying rapid-change flag) this points to spindle misalignment.", action: "Re-align the spindle. If it's also bouncing, replace the collet first — see the rapid-change flag." },
+  spindle_gradient_y_collet_wear: { label: "Spindle Gradient Y", cause: "Magnitude over ±0.001. If stable report-to-report (see the accompanying rapid-change flag) this points to spindle misalignment.", action: "Re-align the spindle. If it's also bouncing, replace the collet first — see the rapid-change flag." },
+  spindle_gradient_x_drift: { label: "Spindle Gradient X — Rapid Change", cause: "Moved ≥0.0005 since the previous report — regardless of whether it's inside or outside the ±0.001 tolerance. This is the signature of collet wear, not progressive misalignment.", action: "Replace the collet." },
+  spindle_gradient_y_drift: { label: "Spindle Gradient Y — Rapid Change", cause: "Moved ≥0.0005 since the previous report — regardless of whether it's inside or outside the ±0.001 tolerance. This is the signature of collet wear, not progressive misalignment.", action: "Replace the collet." },
+  a_axis_p1_p2_gap: { label: "A-Axis P1/P2 Y-Gap", cause: "Stable and over 100 units — Y-axis alignment issue.", action: "Inspect/re-align the Y-axis." },
+  b_axis_p1_p2_gap: { label: "B-Axis P1/P2 X-Gap", cause: "Stable and over 100 units — X-axis alignment issue.", action: "Inspect/re-align the X-axis." },
+  a_axis_p1_p2_gap_drift: { label: "A-Axis P1/P2 Gap — Rapid Change", cause: "Bouncing ≥100 units between reports — Y-axis ballscrew wear (not repeating), not alignment.", action: "Inspect the Y-axis ballscrew for wear/backlash." },
+  b_axis_p1_p2_gap_drift: { label: "B-Axis P1/P2 Gap — Rapid Change", cause: "Bouncing ≥100 units between reports — X-axis ballscrew wear (not repeating), not alignment.", action: "Inspect the X-axis ballscrew for wear/backlash." },
+  origin_x_drift: { label: "Origin X Drift", cause: "Origin X moved ≥100 units since the previous report.", action: "Investigate the X-axis for the cause of the shift." },
+  origin_y_drift: { label: "Origin Y Drift", cause: "Origin Y moved ≥100 units since the previous report.", action: "Investigate the Y-axis for the cause of the shift." },
+  origin_z_drift: { label: "Origin Z Drift", cause: "Origin Z moved ≥100 units since the previous report.", action: "Investigate the Z-axis for the cause of the shift." },
+  magazine_offset_drift: { label: "Magazine Position Offset — Rapid Change", cause: "Magazine offset bouncing ≥100 units on at least one axis between reports — axis misalignment or ballscrew wear (not disambiguated from the system report alone).", action: "Inspect the flagged axis for both alignment and ballscrew wear." },
+  base_tool_length_drift: { label: "Base Tool Length — Rapid Change", cause: "Bouncing ≥100 units between reports while the Z origin and magazine Z-axis value both stay clean — isolates the fault to the tool setter switch itself.", action: "Inspect/replace the tool setter switch." },
+  a_axis_angle_offset: { label: "A-Axis Angle Offset", cause: "AngleOffset(Base) curve (excluding the fixed index-0 baseline) has a range over 200 units or an adjacent-value jump over 50 units — bad A-axis.", action: "Inspect the A-axis." },
+  b_axis_angle_offset: { label: "B-Axis Angle Offset", cause: "AngleOffset(Base) curve (excluding the fixed index-0 baseline) has a range over 200 units or an adjacent-value jump over 50 units — bad B-axis.", action: "Inspect the B-axis." },
   dice_3b_9b_bottom_width: { label: "DICE 3B/9B Bottom Width Y-Pair", cause: "Most reliable physical signal for A-axis/Y-axis origin mismatch — the error is only fully expressed at full-depth engagement.", action: "If elevated alongside a flagged A-axis gap, proceed toward an A-axis rebuild." },
 };
 
@@ -1748,14 +1938,17 @@ function DiagFlagCard({ checkKey, data }) {
       <div className="diag-flag-title">{data.flagged ? '⚠ ' : '✓ '}{info.label}{!data.thresholdsValidatedForModel && <span style={{color:'var(--txd)',fontWeight:400,fontSize:10,marginLeft:6}}>(unvalidated for this model)</span>}</div>
       <div className="diag-flag-desc">{info.cause}</div>
       {data.flagged && info.action && <div className="diag-flag-action">→ {info.action}</div>}
+      {data.priorityNote && <div className="diag-flag-action" style={{color:'#ffb020'}}>⚑ {data.priorityNote}</div>}
       <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',marginTop:6}}>
-        {checkKey === 'spindle_gradient_x_collet_wear' && <>X: {data.currentX} (threshold ±{data.threshold})</>}
-        {checkKey === 'spindle_gradient_x_drift' && <>X: {data.currentX}{data.previousX!=null && <>, previous: {data.previousX}, Δ {data.delta>0?'+':''}{data.delta?.toFixed(6)}</>} (step threshold ±{data.threshold})</>}
-        {checkKey === 'spindle_gradient_y_sign_flip' && <>current Y: {data.currentY}{data.previousY!=null && <>, previous Y: {data.previousY}</>}</>}
-        {checkKey === 'magazine_offset_base_tool_length_drift' && <>BaseToolLength Δ: {data.baseToolLengthDelta ?? '—'} {data.flaggedAxis && <>· offset axis "{data.flaggedAxis}" moved together</>}</>}
-        {checkKey === 'a_axis_angle_offset_curve' && <>curve: [{(data.curve||[]).join(', ')}] · {data.reversals} direction reversal{data.reversals===1?'':'s'}</>}
+        {(checkKey === 'spindle_gradient_x_collet_wear' || checkKey === 'spindle_gradient_y_collet_wear') && <>{data.axis}: {data.currentValue} (threshold ±{data.threshold})</>}
+        {(checkKey === 'spindle_gradient_x_drift' || checkKey === 'spindle_gradient_y_drift') && <>{data.axis}: {data.currentValue}{data.previousValue!=null && <>, previous: {data.previousValue}, Δ {data.delta>0?'+':''}{data.delta?.toFixed(6)}</>} (step threshold ±{data.threshold})</>}
+        {(checkKey === 'origin_x_drift' || checkKey === 'origin_y_drift' || checkKey === 'origin_z_drift') && <>{data.axis}: {data.currentValue}{data.previousValue!=null && <>, previous: {data.previousValue}, Δ {data.delta>0?'+':''}{data.delta?.toFixed(1)}</>} (step threshold {data.threshold})</>}
+        {checkKey === 'magazine_offset_drift' && <>current: [{(data.currentMagazineOffset||[]).join(', ')}]{data.previousMagazineOffset && <> · previous: [{data.previousMagazineOffset.join(', ')}]</>} {data.flaggedAxes && data.flaggedAxes.length > 0 && <>· axis "{data.flaggedAxes.join(', ')}" bounced</>} (threshold {data.threshold})</>}
+        {checkKey === 'base_tool_length_drift' && <>current: {data.currentValue}{data.previousValue!=null && <>, previous: {data.previousValue}, Δ {data.delta>0?'+':''}{data.delta?.toFixed(3)}</>} (threshold {data.threshold}){data.bounceObservedButZDirty && <> · bounce observed, but Z origin/magazine also moved — not attributed to the switch</>}</>}
+        {(checkKey === 'a_axis_angle_offset' || checkKey === 'b_axis_angle_offset') && <>curve: [{(data.curve||[]).join(', ')}] (index 0 excluded from checks) · range: {data.range?.toFixed(1)} (max {data.rangeThreshold}) · max adjacent Δ: {data.maxAdjacentDiff?.toFixed(1)} (max {data.adjacentThreshold})</>}
         {checkKey === 'a_axis_p1_p2_gap' && <>gap: {data.gap} (threshold {data.threshold})</>}
         {checkKey === 'b_axis_p1_p2_gap' && <>gap: {data.gap} (threshold {data.threshold})</>}
+        {(checkKey === 'a_axis_p1_p2_gap_drift' || checkKey === 'b_axis_p1_p2_gap_drift') && <>gap: {data.gap}{data.previousGap!=null && <>, previous: {data.previousGap}, Δ {data.delta>0?'+':''}{data.delta?.toFixed(1)}</>} (step threshold {data.threshold})</>}
         {checkKey === 'dice_3b_9b_bottom_width' && <>3B: {data.v3}mm · 9B: {data.v9}mm · gap: {data.gap.toFixed(3)}mm (threshold {data.threshold}mm{data.thresholdNotValidated?', not validated':''})</>}
       </div>
     </div>
@@ -1834,12 +2027,13 @@ function extractOrigin(sections, rac) {
 // Range (max - min) of an axis's ANGLE OFFSET (BASE) curve — a single scalar
 // proxy for how much the offset table is spread/drifting this cycle. Works for
 // either axis; returns null if that axis has no offset table (e.g. DWX-51D, or
-// a B-axis that doesn't publish one).
+// a B-axis that doesn't publish one). Index 0 is excluded — it's a fixed
+// baseline point, not a real measured value (see diagnoseAxisAngleOffset).
 function axisOffsetRange(rac, axisKey) {
   const ax = rac && rac[axisKey];
   const curve = ax && ax["ANGLE OFFSET (BASE)"];
   if (!Array.isArray(curve) || curve.length < 2) return null;
-  const nums = curve.filter(v => typeof v === 'number' && !Number.isNaN(v));
+  const nums = curve.slice(1).filter(v => typeof v === 'number' && !Number.isNaN(v));
   if (nums.length < 2) return null;
   return Math.max(...nums) - Math.min(...nums);
 }
@@ -2202,13 +2396,13 @@ function trendPointsFromHistory(history) {
       // whatever section tree we ended up with (stored or live-parsed).
       const diag = row.diagnostics || [];
       const gx = extractCheck(diag, 'spindle_gradient_x_collet_wear');
-      const gy = extractCheck(diag, 'spindle_gradient_y_sign_flip');
+      const gy = extractCheck(diag, 'spindle_gradient_y_collet_wear');
       const ag = extractCheck(diag, 'a_axis_p1_p2_gap');
       const bg = extractCheck(diag, 'b_axis_p1_p2_gap');
 
       const grad = rac["SPINDLE GRADIENT"] || {};
-      const gradientX = gx ? gx.currentX : num(grad.X);
-      const gradientY = gy ? gy.currentY : num(grad.Y);
+      const gradientX = gx ? gx.currentValue : num(grad.X);
+      const gradientY = gy ? gy.currentValue : num(grad.Y);
       const aGap = ag ? ag.gap : (rac["A-AXIS"] ? yGap(rac["A-AXIS"]) : null);
       const bGap = bg ? bg.gap : (rac["B-AXIS"] ? xGap(rac["B-AXIS"]) : null);
 
@@ -2364,9 +2558,9 @@ function buildDrift(points, specs) {
 // unusually fast" should be judged on the RAW deviation (real units), then
 // displayed at the matching normalized Y position so the triangle lands on
 // the actual plotted line.
-function driftOnNormalizedChart(nd, axisKey, color, label) {
+function driftOnNormalizedChart(nd, axisKey, color, label, fixedThreshold) {
   const rawKey = axisKey + 'RawDev', normKey = axisKey + 'Norm';
-  const threshold = relativeDriftThreshold(nd, rawKey);
+  const threshold = fixedThreshold != null ? fixedThreshold : relativeDriftThreshold(nd, rawKey);
   const markers = driftSteps(nd, rawKey, threshold).map(s => {
     const pt = nd.find(p => p.corr === s.corr);
     return pt && pt[normKey] != null ? { corr: s.corr, value: pt[normKey], color } : null;
@@ -2565,7 +2759,7 @@ function TrendCharts({ history, applogText }) {
         ]);
         return (
           <>
-            <DriftBanner latest={latest} note="still inside ±0.001 tolerance — early warning only"/>
+            <DriftBanner latest={latest} note="bounce ≥0.0005 → collet wear, even if still inside ±0.001"/>
             <TrendChart
               title="Spindle Gradient X / Y"
               subtitle={`0 centred · green band = within ±0.001 tolerance · dots = errors · ▲ = single-step change > ${STEP_X}`}
@@ -2592,17 +2786,17 @@ function TrendCharts({ history, applogText }) {
         ]);
         return (
           <>
-            <DriftBanner latest={latest} note="still inside the 40 threshold — early warning only"/>
+            <DriftBanner latest={latest} note="bouncing ≥100 units → ballscrew wear, even if inside the 100-unit stable threshold"/>
             <TrendChart
               title="A/B-Axis P1/P2 Gap"
-              subtitle={`A = Y-gap · B = X-gap · green band = within threshold (40) · dots = errors · ▲ = single-step change > ${STEP_A}`}
+              subtitle={`A = Y-gap · B = X-gap · green band = within threshold (100) · dots = errors · ▲ = single-step change ≥ ${STEP_A}`}
               data={points}
               lines={[
                 {key:'aGap',color:AXIS_COLOR.A,name:'A-axis Y-gap'},
                 {key:'bGap',color:AXIS_COLOR.B,name:'B-axis X-gap'},
               ]}
-              refLines={[{y:40,label:'threshold 40'}]}
-              toleranceBand={[0, 40]}
+              refLines={[{y:100,label:'threshold 100'}]}
+              toleranceBand={[0, 100]}
               errorMarkers={errorMarkers}
               driftMarkers={markers}
             />
@@ -2637,12 +2831,12 @@ function TrendCharts({ history, applogText }) {
       })()}
       {has(['originX','originY','originZ']) && (() => {
         const { data: nd, maxDev } = centerAndNormalize(points, ['originX','originY','originZ'], 10);
-        const results = ['originX','originY','originZ'].map((k,i) => driftOnNormalizedChart(nd, k, [AXIS_COLOR.X,AXIS_COLOR.Y,AXIS_COLOR.Z][i], ['Origin X','Origin Y','Origin Z'][i]));
+        const results = ['originX','originY','originZ'].map((k,i) => driftOnNormalizedChart(nd, k, [AXIS_COLOR.X,AXIS_COLOR.Y,AXIS_COLOR.Z][i], ['Origin X','Origin Y','Origin Z'][i], DWX_THRESHOLDS.originAxisStepMax));
         const markers = results.flatMap(r => r.markers);
         const latest = results.map(r => r.latest).filter(Boolean);
         return (
           <>
-            <DriftBanner latest={latest} note={`▲ = single-step change > ${Math.round(DRIFT_RANGE_PERCENT*100)}% of this axis's own range`}/>
+            <DriftBanner latest={latest} note={`▲ = single-step change ≥ ${DWX_THRESHOLDS.originAxisStepMax} units on that axis`}/>
             <TrendChart
               title="XYZ Origin Drift"
               subtitle={`normalised ±10 scale · 0 = axis average · full scale = ${Math.round(maxDev)} units`}
@@ -2668,12 +2862,12 @@ function TrendCharts({ history, applogText }) {
       })()}
       {has(['magX','magY','magZ']) && (() => {
         const { data: nd, maxDev } = centerAndNormalize(points, ['magX','magY','magZ'], 10);
-        const results = ['magX','magY','magZ'].map((k,i) => driftOnNormalizedChart(nd, k, [AXIS_COLOR.X,AXIS_COLOR.Y,AXIS_COLOR.Z][i], ['Magazine X','Magazine Y','Magazine Z'][i]));
+        const results = ['magX','magY','magZ'].map((k,i) => driftOnNormalizedChart(nd, k, [AXIS_COLOR.X,AXIS_COLOR.Y,AXIS_COLOR.Z][i], ['Magazine X','Magazine Y','Magazine Z'][i], DWX_THRESHOLDS.magazineOffsetStepMax));
         const markers = results.flatMap(r => r.markers);
         const latest = results.map(r => r.latest).filter(Boolean);
         return (
           <>
-            <DriftBanner latest={latest} note={`▲ = single-step change > ${Math.round(DRIFT_RANGE_PERCENT*100)}% of this axis's own range`}/>
+            <DriftBanner latest={latest} note={`▲ = single-step change ≥ ${DWX_THRESHOLDS.magazineOffsetStepMax} units on that axis — axis misalignment or ballscrew wear`}/>
             <TrendChart
               title="Magazine Position Offset Drift"
               subtitle={`normalised ±10 scale · 0 = axis average · full scale = ${Math.round(maxDev)} units`}
@@ -2699,11 +2893,11 @@ function TrendCharts({ history, applogText }) {
       })()}
       {has(['baseToolLength']) && (() => {
         const { markers, latest } = buildDrift(points, [
-          {key:'baseToolLength',color:'#00c8ff',threshold:relativeDriftThreshold(points,'baseToolLength'),label:'Base Tool Length'},
+          {key:'baseToolLength',color:'#00c8ff',threshold:DWX_THRESHOLDS.baseToolLengthStepMax,label:'Base Tool Length'},
         ]);
         return (
           <>
-            <DriftBanner latest={latest} note={`▲ = single-step change > ${Math.round(DRIFT_RANGE_PERCENT*100)}% of this machine's own range`}/>
+            <DriftBanner latest={latest} note={`▲ = single-step change ≥ ${DWX_THRESHOLDS.baseToolLengthStepMax} units — bad tool setter switch if Z origin/magazine-Z stay clean`}/>
             <TrendChart
               title="Base Tool Length"
               data={points}
@@ -2717,14 +2911,14 @@ function TrendCharts({ history, applogText }) {
       })()}
       {has(['angleOffsetRange','bAxisOffsetRange']) && (() => {
         const { markers, latest } = buildDrift(points, [
-          {key:'angleOffsetRange',color:AXIS_COLOR.A,threshold:relativeDriftThreshold(points,'angleOffsetRange'),label:'A-axis offset range'},
-          {key:'bAxisOffsetRange',color:AXIS_COLOR.B,threshold:relativeDriftThreshold(points,'bAxisOffsetRange'),label:'B-axis offset range'},
+          {key:'angleOffsetRange',color:AXIS_COLOR.A,threshold:DWX_THRESHOLDS.angleOffsetRangeMax,label:'A-axis offset range'},
+          {key:'bAxisOffsetRange',color:AXIS_COLOR.B,threshold:DWX_THRESHOLDS.angleOffsetRangeMax,label:'B-axis offset range'},
         ]);
         return (
           <>
-            <DriftBanner latest={latest} note={`▲ = single-step change > ${Math.round(DRIFT_RANGE_PERCENT*100)}% of this axis's own range`}/>
+            <DriftBanner latest={latest} note={`▲ = single-step change ≥ ${DWX_THRESHOLDS.angleOffsetRangeMax} units · index 0 excluded from the underlying curve`}/>
             <TrendChart
-              title="A/B-Axis Angle Offset Range (max − min of BASE curve)"
+              title="A/B-Axis Angle Offset Range (max − min of BASE curve, index 0 excluded)"
               data={points}
               lines={[
                 {key:'angleOffsetRange',color:AXIS_COLOR.A,name:'A-axis offset range'},
@@ -2796,7 +2990,7 @@ function FleetTrendCharts({ history }) {
         ]);
         return (
           <>
-            <DriftBanner latest={latest} note="still inside ±0.001 tolerance — early warning only"/>
+            <DriftBanner latest={latest} note="bounce ≥0.0005 → collet wear, even if still inside ±0.001"/>
             <TrendChart
               title="Spindle Gradient X / Y"
               subtitle={`0 centred · green band = within ±0.001 tolerance · ▲ = single-step change > ${STEP_X}`}
@@ -2822,17 +3016,17 @@ function FleetTrendCharts({ history }) {
         ]);
         return (
           <>
-            <DriftBanner latest={latest} note="still inside the 40 threshold — early warning only"/>
+            <DriftBanner latest={latest} note="bouncing ≥100 units → ballscrew wear, even if inside the 100-unit stable threshold"/>
             <TrendChart
               title="A/B-Axis P1/P2 Gap"
-              subtitle={`A = Y-gap · B = X-gap · green band = within threshold (40) · ▲ = single-step change > ${STEP_A}`}
+              subtitle={`A = Y-gap · B = X-gap · green band = within threshold (100) · ▲ = single-step change ≥ ${STEP_A}`}
               data={points}
               lines={[
                 {key:'aGap',color:AXIS_COLOR.A,name:'A-axis Y-gap'},
                 {key:'bGap',color:AXIS_COLOR.B,name:'B-axis X-gap'},
               ]}
-              refLines={[{y:40,label:'threshold 40'}]}
-              toleranceBand={[0, 40]}
+              refLines={[{y:100,label:'threshold 100'}]}
+              toleranceBand={[0, 100]}
               driftMarkers={markers}
             />
           </>
@@ -2840,11 +3034,11 @@ function FleetTrendCharts({ history }) {
       })()}
       {has(['baseToolLength']) && (() => {
         const { markers, latest } = buildDrift(points, [
-          {key:'baseToolLength',color:'#00c8ff',threshold:relativeDriftThreshold(points,'baseToolLength'),label:'Base Tool Length'},
+          {key:'baseToolLength',color:'#00c8ff',threshold:DWX_THRESHOLDS.baseToolLengthStepMax,label:'Base Tool Length'},
         ]);
         return (
           <>
-            <DriftBanner latest={latest} note={`▲ = single-step change > ${Math.round(DRIFT_RANGE_PERCENT*100)}% of this machine's own range`}/>
+            <DriftBanner latest={latest} note={`▲ = single-step change ≥ ${DWX_THRESHOLDS.baseToolLengthStepMax} units — bad tool setter switch if Z origin/magazine-Z stay clean`}/>
             <TrendChart
               title="Base Tool Length"
               data={points}
@@ -2998,6 +3192,53 @@ function buildMillReportRow(report, rawText) {
     // needs to too, or the insert is rejected outright.
     raw_systemreport: rawText,
   };
+}
+
+// Surfaces the SAME vetted cause/action text Mill Diagnostics shows (via the
+// existing CHECK_INFO / DiagFlagCard), computed from Fleet's own flat
+// mill_reports columns — one source of truth, so the wording can never drift
+// between the two pages. Deliberately limited to the checks Fleet's data can
+// actually support (gradient X/Y, A/B gap — each magnitude + bounce): origin
+// drift, magazine-offset drift, base-tool-length drift, and the A/B
+// angle-offset checks all need raw arrays/triplets (origin, magazine
+// position offset, angle-offset curve) that mill_reports doesn't store, only
+// the full diagnostic_reports tree does — those stay Mill-Diagnostics-only
+// rather than getting approximated here. `prev` is the same shape as
+// `latest` — the previous mill_reports row for this serial.
+function fleetDiagnose(latest, prev) {
+  if (!latest) return [];
+  const profile = getProfile(latest.model);
+  const th = profile.thresholds;
+  const out = [];
+  const gradientAxis = (axis, col, hardKey, stepKey) => {
+    const v = latest[col];
+    if (v == null) return;
+    const hardThreshold = th[hardKey];
+    out.push({ check: `spindle_gradient_${axis.toLowerCase()}_collet_wear`, axis, currentValue: v, threshold: hardThreshold, flagged: Math.abs(v) > hardThreshold, thresholdsValidatedForModel: profile.thresholdsValidated });
+    const pv = prev ? prev[col] : null;
+    const stepThreshold = th[stepKey];
+    const drift = { check: `spindle_gradient_${axis.toLowerCase()}_drift`, axis, currentValue: v, previousValue: pv ?? null, delta: null, threshold: stepThreshold, flagged: false, thresholdsValidatedForModel: profile.thresholdsValidated };
+    if (pv != null) { drift.delta = v - pv; drift.flagged = Math.abs(drift.delta) >= stepThreshold; }
+    out.push(drift);
+  };
+  gradientAxis('X', 'spindle_gradient_x', 'spindleGradientXColletWearMax', 'spindleGradientXStepMax');
+  gradientAxis('Y', 'spindle_gradient_y', 'spindleGradientYColletWearMax', 'spindleGradientYStepMax');
+
+  const gapAxis = (checkPrefix, col, hardKey, stepKey) => {
+    const v = latest[col];
+    if (v == null) return;
+    const hardThreshold = th[hardKey];
+    out.push({ check: `${checkPrefix}_p1_p2_gap`, gap: v, threshold: hardThreshold, flagged: v > hardThreshold, thresholdsValidatedForModel: profile.thresholdsValidated });
+    const pv = prev ? prev[col] : null;
+    const stepThreshold = th[stepKey];
+    const drift = { check: `${checkPrefix}_p1_p2_gap_drift`, gap: v, previousGap: pv ?? null, delta: null, threshold: stepThreshold, flagged: false, thresholdsValidatedForModel: profile.thresholdsValidated };
+    if (pv != null) { drift.delta = v - pv; drift.flagged = Math.abs(drift.delta) >= stepThreshold; }
+    out.push(drift);
+  };
+  gapAxis('a', 'a_y_gap', 'aAxisP1P2YGapMax', 'aAxisP1P2YGapStepMax');
+  gapAxis('b', 'b_x_gap', 'bAxisP1P2XGapMax', 'bAxisP1P2XGapStepMax');
+
+  return annotateDiagnosticPriority(out);
 }
 
 // Optional client-side OCR for "I'm standing at the machine, no laptop, and
@@ -3331,26 +3572,27 @@ function Fleet({ msg }) {
                     <tbody>
                       {history.map((h, i) => {
                         const prev = history[i - 1];
-                        const yflip = prev && h.spindle_gradient_y != null && prev.spindle_gradient_y != null
-                          && (h.spindle_gradient_y > 0) !== (prev.spindle_gradient_y > 0);
-                        const xOver = h.spindle_gradient_x != null && Math.abs(h.spindle_gradient_x) > 0.001;
-                        const xDrift = !xOver && prev && h.spindle_gradient_x != null && prev.spindle_gradient_x != null
-                          && Math.abs(h.spindle_gradient_x - prev.spindle_gradient_x) > DWX_THRESHOLDS.spindleGradientXStepMax;
+                        const xOver = h.spindle_gradient_x != null && Math.abs(h.spindle_gradient_x) > DWX_THRESHOLDS.spindleGradientXColletWearMax;
+                        const xDrift = prev && h.spindle_gradient_x != null && prev.spindle_gradient_x != null
+                          && Math.abs(h.spindle_gradient_x - prev.spindle_gradient_x) >= DWX_THRESHOLDS.spindleGradientXStepMax;
+                        const yOver = h.spindle_gradient_y != null && Math.abs(h.spindle_gradient_y) > DWX_THRESHOLDS.spindleGradientYColletWearMax;
+                        const yDrift = prev && h.spindle_gradient_y != null && prev.spindle_gradient_y != null
+                          && Math.abs(h.spindle_gradient_y - prev.spindle_gradient_y) >= DWX_THRESHOLDS.spindleGradientYStepMax;
                         return (
                           <tr key={h.correction_count} style={{ borderTop: '1px solid var(--bdr)' }}>
                             <td style={{ padding: '4px 8px', color: h.is_latest ? 'var(--ac)' : 'var(--tx)' }}>
                               {h.correction_count}{h.is_latest ? ' •' : ''}
                             </td>
-                            <td style={{ padding: '4px 8px', color: xOver ? 'var(--rd)' : (xDrift ? '#ffb020' : 'var(--tx)') }} title={xDrift ? `Jumped ${(h.spindle_gradient_x - prev.spindle_gradient_x).toFixed(5)} since previous report` : undefined}>
+                            <td style={{ padding: '4px 8px', color: xDrift ? '#ffb020' : (xOver ? 'var(--rd)' : 'var(--tx)') }} title={xDrift ? `Bounced ${(h.spindle_gradient_x - prev.spindle_gradient_x).toFixed(5)} since previous report — collet wear` : (xOver ? 'Stable but over ±0.001 — spindle misalignment' : undefined)}>
                               {fmtNum(h.spindle_gradient_x)}{xDrift ? ' ▲' : ''}
                             </td>
-                            <td style={{ padding: '4px 8px', color: yflip ? 'var(--rd)' : 'var(--tx)' }}>
-                              {fmtNum(h.spindle_gradient_y)}{yflip ? ' ⇄' : ''}
+                            <td style={{ padding: '4px 8px', color: yDrift ? '#ffb020' : (yOver ? 'var(--rd)' : 'var(--tx)') }} title={yDrift ? `Bounced ${(h.spindle_gradient_y - prev.spindle_gradient_y).toFixed(5)} since previous report — collet wear` : (yOver ? 'Stable but over ±0.001 — spindle misalignment' : undefined)}>
+                              {fmtNum(h.spindle_gradient_y)}{yDrift ? ' ▲' : ''}
                             </td>
-                            <td style={{ padding: '4px 8px', color: (h.a_y_gap != null && h.a_y_gap > 40) ? 'var(--rd)' : 'var(--tx)' }}>
+                            <td style={{ padding: '4px 8px', color: (h.a_y_gap != null && h.a_y_gap > DWX_THRESHOLDS.aAxisP1P2YGapMax) ? 'var(--rd)' : 'var(--tx)' }}>
                               {h.a_y_gap ?? '—'}
                             </td>
-                            <td style={{ padding: '4px 8px', color: (h.b_x_gap != null && h.b_x_gap > 40) ? 'var(--rd)' : 'var(--tx)' }}>
+                            <td style={{ padding: '4px 8px', color: (h.b_x_gap != null && h.b_x_gap > DWX_THRESHOLDS.bAxisP1P2XGapMax) ? 'var(--rd)' : 'var(--tx)' }}>
                               {h.b_x_gap ?? '—'}
                             </td>
                             <td style={{ padding: '4px 8px' }}>{h.base_tool_length ?? '—'}</td>
@@ -3588,15 +3830,25 @@ function Diagnostics({ msg }) {
     const perReport = [];
     for (const [, group] of bySerial) {
       group.sort((a, b) => (a.parsed.correctionCount ?? Infinity) - (b.parsed.correctionCount ?? Infinity));
-      let prevGradientX = null, prevGradientY = null, prevMagOffset = null, prevBaseToolLength = null;
+      let prevGradientX = null, prevGradientY = null, prevMagOffset = null, prevBaseToolLength = null, prevAGap = null, prevBGap = null, prevOrigin = null;
       for (const { raw, parsed: r } of group) {
-        const diag = diagnoseReport(r, { gradientX: prevGradientX, gradientY: prevGradientY, magazineOffset: prevMagOffset, baseToolLength: prevBaseToolLength });
+        const diag = diagnoseReport(r, {
+          gradientX: prevGradientX, gradientY: prevGradientY,
+          magazineOffset: prevMagOffset, baseToolLength: prevBaseToolLength,
+          aGap: prevAGap, bGap: prevBGap, origin: prevOrigin,
+        });
         const grad = r.rac["SPINDLE GRADIENT"];
         if (grad && typeof grad.X === "number") prevGradientX = grad.X;
         if (grad && typeof grad.Y === "number") prevGradientY = grad.Y;
         const mo = r.atc["MAGAZINE POSITION OFFSET"];
         if (Array.isArray(mo)) prevMagOffset = mo;
         if (typeof r.rac["BASE TOOL LENGTH"] === "number") prevBaseToolLength = r.rac["BASE TOOL LENGTH"];
+        const aGapNow = r.rac["A-AXIS"] ? yGap(r.rac["A-AXIS"]) : null;
+        if (aGapNow != null) prevAGap = aGapNow;
+        const bGapNow = r.rac["B-AXIS"] ? xGap(r.rac["B-AXIS"]) : null;
+        if (bGapNow != null) prevBGap = bGapNow;
+        const originNow = extractOrigin(r.sections || {}, r.rac);
+        if (originNow.some(v => v != null)) prevOrigin = originNow;
         const diceCheck = raw === diceTargetRaw ? diagnoseDice3B9B(lastDiceEntry) : null;
         perReport.push({ raw, report: r, diagnostics: diag, diceCheck });
       }
