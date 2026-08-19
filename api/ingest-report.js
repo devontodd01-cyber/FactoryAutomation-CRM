@@ -176,8 +176,12 @@ function parseNewFormatTree(rawText) {
 function normalizeNewToLegacy(tree) {
   const rac = tree.RotaryAxisCorrection || {};
   const sections = {};
-  sections.MODEL = tree.Model || null;
-  sections["SERIAL NUMBER"] = tree.SerialNumber || null;
+  // See App.js's copy of this function for why this can't just be `|| null`
+  // -- an empty "SerialNumber:" line parses to {} (object), not undefined,
+  // and {} is truthy, so it was flowing through as a literal object that
+  // got stringified into the two characters "{}" in mill_reports.serial.
+  sections.MODEL = typeof tree.Model === "string" && tree.Model ? tree.Model : null;
+  sections["SERIAL NUMBER"] = typeof tree.SerialNumber === "string" && tree.SerialNumber ? tree.SerialNumber : null;
   const legacyRac = {};
   legacyRac["CORRECTION COUNT"] = typeof rac.CorrectionCount === "number" ? rac.CorrectionCount : null;
   legacyRac["BASE TOOL LENGTH"] = typeof rac.BaseToolLength === "number" ? rac.BaseToolLength : null;
