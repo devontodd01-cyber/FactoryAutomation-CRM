@@ -1536,8 +1536,17 @@ function parseNewFormatTree(rawText) {
 function normalizeNewToLegacy(tree) {
   const rac = tree.RotaryAxisCorrection || {};
   const sections = {};
-  sections.MODEL = tree.Model || null;
-  sections["SERIAL NUMBER"] = tree.SerialNumber || null;
+  // tree.Model / tree.SerialNumber come back as an EMPTY OBJECT ({}), not a
+  // missing value, when the source line has nothing after the colon (e.g.
+  // "SerialNumber:" with no value -- the tree-builder above can't tell that
+  // apart from a real nested section like "FIRMWARE VERSION" and creates an
+  // empty child object either way). `|| null` doesn't catch that, since {}
+  // is truthy -- it was flowing through as a literal object, then getting
+  // stringified into the two characters "{}" wherever it landed (Fleet,
+  // mill_reports.serial), creating a bogus machine card. Only accept an
+  // actual non-empty string.
+  sections.MODEL = typeof tree.Model === "string" && tree.Model ? tree.Model : null;
+  sections["SERIAL NUMBER"] = typeof tree.SerialNumber === "string" && tree.SerialNumber ? tree.SerialNumber : null;
 
   const legacyRac = {};
   legacyRac["CORRECTION COUNT"] = typeof rac.CorrectionCount === "number" ? rac.CorrectionCount : null;
@@ -4369,6 +4378,144 @@ function Pritidenta({ msg }) {
   );
 }
 
+// ── Customer Reports ─────────────────────────────────────────────────────────
+// Simplified, customer-facing monthly status reports — a scaled-down cousin
+// of Fleet/Mill Diagnostics, not a login-gated dashboard. Devon picks a
+// customer + month, previews the generated report (charts + plain-language
+// summary, built server-side in api/send-customer-report.js from the SAME
+// mill_reports data and threshold logic as the rest of the app), then sends
+// it by email. Every send gets logged to `customer_reports` so past reports
+// stay browsable here — nothing about this depends on the customer visiting
+// any link at all.
+function CustomerReports({ msg }) {
+  const [customers, setCustomers] = useState([]);
+  const [archive, setArchive] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [customerId, setCustomerId] = useState('');
+  const [month, setMonth] = useState(() => {
+    // Default to LAST month — "this month" isn't over yet, and a report
+    // covering a still-in-progress month would look incomplete.
+    const d = new Date();
+    d.setMonth(d.getMonth() - 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [previewHtml, setPreviewHtml] = useState('');
+  const [previewMeta, setPreviewMeta] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [viewArchived, setViewArchived] = useState(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [c, a] = await Promise.all([db.get('customers'), db.get('customer_reports')]);
+      setCustomers(Array.isArray(c) ? c : []);
+      setArchive(Array.isArray(a) ? [...a].sort((x, y) => new Date(y.sent_at) - new Date(x.sent_at)) : []);
+    } catch (e) {
+      msg && msg('Failed to load: ' + e.message, 'bad');
+    } finally {
+      setLoading(false);
+    }
+  }, [msg]);
+  useEffect(() => { load(); }, [load]);
+
+  const callApi = async (mode) => {
+    const r = await fetch('/api/send-customer-report', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customerId: Number(customerId), month, mode }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || `${mode} failed`);
+    return data;
+  };
+
+  const runPreview = async () => {
+    if (!customerId) { msg && msg('⚠️ Pick a customer first', 'bad'); return; }
+    setBusy(true);
+    setPreviewHtml('');
+    try {
+      const data = await callApi('preview');
+      setPreviewHtml(data.html);
+      setPreviewMeta(data);
+    } catch (e) {
+      msg && msg('⚠️ ' + e.message, 'bad');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const runSend = async () => {
+    if (!customerId) return;
+    const cust = customers.find(c => c.id === Number(customerId));
+    if (!window.confirm(`Send this report to ${cust?.email || 'this customer'}?`)) return;
+    setBusy(true);
+    try {
+      const data = await callApi('send');
+      msg && msg(`✅ Sent to ${data.sentTo}`);
+      setPreviewHtml('');
+      setPreviewMeta(null);
+      load();
+    } catch (e) {
+      msg && msg('⚠️ ' + e.message, 'bad');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div>
+      <div className="pt">📧 Customer Reports</div>
+      <div style={{ background: 'var(--sur2)', border: '1px solid var(--bdr)', borderRadius: 6, padding: '12px 14px', marginBottom: 16 }}>
+        <div className="cl" style={{ marginBottom: 8 }}>Generate a monthly status report</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+          <select className="fsl" style={{ minWidth: 200, margin: 0 }} value={customerId} onChange={e => { setCustomerId(e.target.value); setPreviewHtml(''); setPreviewMeta(null); }}>
+            <option value="">Select customer…</option>
+            {[...customers].sort((a, b) => (a.company || '').localeCompare(b.company || '')).map(c => <option key={c.id} value={c.id}>{c.company}</option>)}
+          </select>
+          <input type="month" className="fi" style={{ margin: 0, maxWidth: 160 }} value={month} onChange={e => { setMonth(e.target.value); setPreviewHtml(''); setPreviewMeta(null); }} />
+          <button className="btn bs" disabled={busy || !customerId} onClick={runPreview}>{busy ? '⏳' : '👁 Preview'}</button>
+          <button className="btn bp bs" disabled={busy || !customerId || !previewHtml} onClick={runSend}>{busy ? '⏳' : '📤 Send to Customer'}</button>
+        </div>
+        {previewMeta && (
+          <div style={{ fontSize: 10, color: 'var(--txd)', fontFamily: "'IBM Plex Mono',monospace", marginTop: 6 }}>
+            {previewMeta.machineCount} machine(s) for {previewMeta.customer} — review before sending.
+          </div>
+        )}
+      </div>
+
+      {previewHtml && (
+        <div style={{ background: '#fff', borderRadius: 8, padding: 16, marginBottom: 20, overflow: 'auto' }}>
+          <div dangerouslySetInnerHTML={{ __html: previewHtml }} />
+        </div>
+      )}
+
+      <div className="cl" style={{ margin: '20px 0 10px' }}>SENT HISTORY</div>
+      {loading && <div className="diag-meta">loading…</div>}
+      {!loading && archive.length === 0 && <div className="diag-meta">No reports sent yet.</div>}
+      {archive.map(a => {
+        const cust = customers.find(c => c.id === a.customer_id);
+        const open = viewArchived?.id === a.id;
+        return (
+          <div key={a.id} className="diag-report-card">
+            <div className="diag-report-head" style={{ cursor: 'pointer' }} onClick={() => setViewArchived(open ? null : a)}>
+              <div>
+                <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 14 }}>{cust?.company || `Customer #${a.customer_id}`}</div>
+                <div className="diag-meta">{(a.report_month || '').slice(0, 7)} · sent to {a.sent_to || '—'} · {(a.sent_at || '').slice(0, 10)}</div>
+              </div>
+              <span style={{ fontSize: 11, color: a.status === 'sent' ? 'var(--gr)' : 'var(--rd)' }}>{a.status}</span>
+            </div>
+            {open && (
+              <div style={{ background: '#fff', borderRadius: 8, padding: 16, marginTop: 10 }}>
+                <div dangerouslySetInnerHTML={{ __html: a.html_body }} />
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App(){
   const [page,setPage]=useState('Dashboard');
@@ -4440,6 +4587,7 @@ export default function App(){
     { page:'Schedule',  icon:'◎', label:'Schedule' },
     { page:'Diagnostics', icon:'🩺', label:'Diag' },
     { page:'Fleet', icon:'🛠', label:'Fleet' },
+    { page:'CustomerReports', icon:'📧', label:'Reports' },
   ];
 
   return(<>
@@ -4478,6 +4626,7 @@ export default function App(){
           <div className="nl">Diagnostics</div>
           <div className={"ni "+(page==='Diagnostics'?'active':'')} onClick={()=>setPage('Diagnostics')} style={{color:page==='Diagnostics'?undefined:'var(--ac)'}}>🩺 Mill Diagnostics</div>
           <div className={"ni "+(page==='Fleet'?'active':'')} onClick={()=>setPage('Fleet')} style={{color:page==='Fleet'?undefined:'var(--ac)'}}>🛠 Fleet</div>
+          <div className={"ni "+(page==='CustomerReports'?'active':'')} onClick={()=>setPage('CustomerReports')} style={{color:page==='CustomerReports'?undefined:'var(--ac)'}}>📧 Customer Reports</div>
           <div className="nl">Inventory</div>
           <div className={"ni "+(page==='Pritidenta'?'active':'')} onClick={()=>setPage('Pritidenta')}>🦷 Pritidenta</div>
           <div className="nl">History</div>
@@ -4496,6 +4645,7 @@ export default function App(){
           {page==='Files'&&<Files files={files} onUpload={uploadFiles} onDelete={deleteFile} uploading={fileUploading}/>}
           {page==='Diagnostics'&&<Diagnostics msg={msg}/>}
            {page==='Fleet'&&<Fleet msg={msg}/>}
+          {page==='CustomerReports'&&<CustomerReports msg={msg}/>}
           {page==='Pritidenta'&&<Pritidenta msg={msg}/>}
           {page==='Archive'&&<Archive jobs={jobs} onEdit={editJob} onDelete={delJob} loading={loading.jobs}/>}
         </div>
