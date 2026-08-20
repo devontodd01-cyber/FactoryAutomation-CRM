@@ -3215,8 +3215,15 @@ function fleetDiagnose(latest, prev) {
     if (pv != null) { drift.delta = v - pv; drift.flagged = Math.abs(drift.delta) >= stepThreshold; }
     out.push(drift);
   };
-  gapAxis('a', 'a_y_gap', 'aAxisP1P2YGapMax', 'aAxisP1P2YGapStepMax');
-  gapAxis('b', 'b_x_gap', 'bAxisP1P2XGapMax', 'bAxisP1P2XGapStepMax');
+  // checkPrefix must be "a_axis"/"b_axis" (not bare "a"/"b") -- fleetDiagnose's
+  // output keys have to match DWX_THRESHOLDS.priorityOrder / CHECK_INFO's key
+  // names ("a_axis_p1_p2_gap", not "a_p1_p2_gap") or topRecommendation()'s
+  // lookup silently never finds a match and the Fleet card's recommendation
+  // line skips rule 4 (A/B-axis gap) entirely -- even though the badge chip
+  // (computed separately in flags()) correctly shows it flagged. Was
+  // previously passing bare 'a'/'b' here, which produced the wrong keys.
+  gapAxis('a_axis', 'a_y_gap', 'aAxisP1P2YGapMax', 'aAxisP1P2YGapStepMax');
+  gapAxis('b_axis', 'b_x_gap', 'bAxisP1P2XGapMax', 'bAxisP1P2XGapStepMax');
 
   return annotateDiagnosticPriority(out);
 }
