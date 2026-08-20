@@ -1402,13 +1402,13 @@ function parseReportBody(body) {
 //     gradient is computed downstream of the A/B P1/P2 points, so if
 //     gradient is ALSO flagged at the same time the gap is bouncing,
 //     address the ballscrew FIRST, then re-check gradient.
-//  5. Magazine offset bouncing ≥100 units on any axis → axis misalignment or
-//     ballscrew wear (dual-cause — not disambiguated). NOT gated on
-//     gradient: the magazine offset reading is captured as its own
-//     self-contained first step (pick up calibration pin → measure a
-//     cylinder on the magazine → put tool away → re-grab tool to measure the
-//     rest of the machine's positions), fully decoupled from the rotary
-//     positioning gradient is derived from.
+//  5. Magazine offset bouncing ≥100 units, disambiguated by which axis
+//     bounced: X or Y axis → misaligned axis (that axis specifically). Z
+//     axis → ballscrew fault. NOT gated on gradient: the magazine offset
+//     reading is captured as its own self-contained first step (pick up
+//     calibration pin → measure a cylinder on the magazine → put tool away →
+//     re-grab tool to measure the rest of the machine's positions), fully
+//     decoupled from the rotary positioning gradient is derived from.
 //  6. Base tool length bouncing ≥100 units, while BOTH the Z origin axis and
 //     the magazine Z-axis value stay clean → bad tool setter switch (the
 //     switch itself is at fault, not a mechanical Z-axis problem).
@@ -1881,21 +1881,21 @@ function diagnoseDice3B9B(diceEntry) {
 }
 
 const CHECK_INFO = {
-  spindle_gradient_x_collet_wear: { label: "Spindle Gradient X", cause: "Magnitude over ±0.001. If stable report-to-report (see the accompanying rapid-change flag) this points to spindle misalignment.", action: "Re-align the spindle. If it's also bouncing, replace the collet first — see the rapid-change flag." },
-  spindle_gradient_y_collet_wear: { label: "Spindle Gradient Y", cause: "Magnitude over ±0.001. If stable report-to-report (see the accompanying rapid-change flag) this points to spindle misalignment.", action: "Re-align the spindle. If it's also bouncing, replace the collet first — see the rapid-change flag." },
-  spindle_gradient_x_drift: { label: "Spindle Gradient X — Rapid Change", cause: "Moved ≥0.0005 since the previous report — regardless of whether it's inside or outside the ±0.001 tolerance. This is the signature of collet wear, not progressive misalignment.", action: "Replace the collet." },
-  spindle_gradient_y_drift: { label: "Spindle Gradient Y — Rapid Change", cause: "Moved ≥0.0005 since the previous report — regardless of whether it's inside or outside the ±0.001 tolerance. This is the signature of collet wear, not progressive misalignment.", action: "Replace the collet." },
-  a_axis_p1_p2_gap: { label: "A-Axis P1/P2 Y-Gap", cause: "Stable and over 100 units — Y-axis alignment issue.", action: "Inspect/re-align the Y-axis." },
-  b_axis_p1_p2_gap: { label: "B-Axis P1/P2 X-Gap", cause: "Stable and over 100 units — X-axis alignment issue.", action: "Inspect/re-align the X-axis." },
-  a_axis_p1_p2_gap_drift: { label: "A-Axis P1/P2 Gap — Rapid Change", cause: "Bouncing ≥100 units between reports — Y-axis ballscrew wear (not repeating), not alignment.", action: "Inspect the Y-axis ballscrew for wear/backlash." },
-  b_axis_p1_p2_gap_drift: { label: "B-Axis P1/P2 Gap — Rapid Change", cause: "Bouncing ≥100 units between reports — X-axis ballscrew wear (not repeating), not alignment.", action: "Inspect the X-axis ballscrew for wear/backlash." },
-  origin_x_drift: { label: "Origin X Drift", cause: "Origin X moved ≥100 units since the previous report.", action: "Investigate the X-axis for the cause of the shift." },
-  origin_y_drift: { label: "Origin Y Drift", cause: "Origin Y moved ≥100 units since the previous report.", action: "Investigate the Y-axis for the cause of the shift." },
-  origin_z_drift: { label: "Origin Z Drift", cause: "Origin Z moved ≥100 units since the previous report.", action: "Investigate the Z-axis for the cause of the shift." },
-  magazine_offset_drift: { label: "Magazine Position Offset — Rapid Change", cause: "Magazine offset bouncing ≥100 units on at least one axis between reports — axis misalignment or ballscrew wear (not disambiguated from the system report alone).", action: "Inspect the flagged axis for both alignment and ballscrew wear." },
-  base_tool_length_drift: { label: "Base Tool Length — Rapid Change", cause: "Bouncing ≥100 units between reports while the Z origin and magazine Z-axis value both stay clean — isolates the fault to the tool setter switch itself.", action: "Inspect/replace the tool setter switch." },
-  a_axis_angle_offset: { label: "A-Axis Angle Offset", cause: "AngleOffset(Base) curve (excluding the fixed index-0 baseline) has a range over 200 units or an adjacent-value jump over 50 units — bad A-axis.", action: "Inspect the A-axis." },
-  b_axis_angle_offset: { label: "B-Axis Angle Offset", cause: "AngleOffset(Base) curve (excluding the fixed index-0 baseline) has a range over 200 units or an adjacent-value jump over 50 units — bad B-axis.", action: "Inspect the B-axis." },
+  spindle_gradient_x_collet_wear: { label: "Spindle Misalignment X Axis", cause: "Magnitude over ±0.001. If stable report-to-report (see the accompanying rapid-change flag) this points to spindle misalignment.", action: "Re-align the spindle. If it's also bouncing, replace the collet first — see the rapid-change flag." },
+  spindle_gradient_y_collet_wear: { label: "Spindle Misalignment Y Axis", cause: "Magnitude over ±0.001. If stable report-to-report (see the accompanying rapid-change flag) this points to spindle misalignment.", action: "Re-align the spindle. If it's also bouncing, replace the collet first — see the rapid-change flag." },
+  spindle_gradient_x_drift: { label: "Replace Collet", cause: "Moved ≥0.0005 since the previous report — regardless of whether it's inside or outside the ±0.001 tolerance. This is the signature of collet wear, not progressive misalignment.", action: "Replace the collet." },
+  spindle_gradient_y_drift: { label: "Replace Collet", cause: "Moved ≥0.0005 since the previous report — regardless of whether it's inside or outside the ±0.001 tolerance. This is the signature of collet wear, not progressive misalignment.", action: "Replace the collet." },
+  a_axis_p1_p2_gap: { label: "Y Axis Misalignment", cause: "Stable and over 100 units — Y-axis alignment issue.", action: "Inspect/re-align the Y-axis." },
+  b_axis_p1_p2_gap: { label: "X Axis Misalignment", cause: "Stable and over 100 units — X-axis alignment issue.", action: "Inspect/re-align the X-axis." },
+  a_axis_p1_p2_gap_drift: { label: "Y Axis Ballscrew", cause: "Bouncing ≥100 units between reports — Y-axis ballscrew wear (not repeating), not alignment.", action: "Inspect the Y-axis ballscrew for wear/backlash." },
+  b_axis_p1_p2_gap_drift: { label: "X Axis Ballscrew", cause: "Bouncing ≥100 units between reports — X-axis ballscrew wear (not repeating), not alignment.", action: "Inspect the X-axis ballscrew for wear/backlash." },
+  origin_x_drift: { label: "X Axis Ballscrew", cause: "Origin X moved ≥100 units since the previous report.", action: "Inspect the X-axis ballscrew for wear/backlash." },
+  origin_y_drift: { label: "Y Axis Ballscrew", cause: "Origin Y moved ≥100 units since the previous report.", action: "Inspect the Y-axis ballscrew for wear/backlash." },
+  origin_z_drift: { label: "Z Axis Ballscrew", cause: "Origin Z moved ≥100 units since the previous report.", action: "Inspect the Z-axis ballscrew for wear/backlash." },
+  magazine_offset_drift: { label: "Magazine Offset", cause: "Magazine offset bouncing ≥100 units between reports. X or Y axis bouncing points to that axis being misaligned; Z axis bouncing points to a ballscrew fault.", action: "If X or Y is flagged, inspect/re-align that axis. If Z is flagged, inspect the ballscrew for wear/backlash." },
+  base_tool_length_drift: { label: "Tool Sensor", cause: "Bouncing ≥100 units between reports while the Z origin and magazine Z-axis value both stay clean — isolates the fault to the tool setter switch itself.", action: "Inspect/replace the tool setter switch." },
+  a_axis_angle_offset: { label: "Bad A Axis", cause: "AngleOffset(Base) curve (excluding the fixed index-0 baseline) has a range over 200 units or an adjacent-value jump over 50 units — bad A-axis.", action: "Inspect the A-axis." },
+  b_axis_angle_offset: { label: "Bad B Axis", cause: "AngleOffset(Base) curve (excluding the fixed index-0 baseline) has a range over 200 units or an adjacent-value jump over 50 units — bad B-axis.", action: "Inspect the B-axis." },
   dice_3b_9b_bottom_width: { label: "DICE 3B/9B Bottom Width Y-Pair", cause: "Most reliable physical signal for A-axis/Y-axis origin mismatch — the error is only fully expressed at full-depth engagement.", action: "If elevated alongside a flagged A-axis gap, proceed toward an A-axis rebuild." },
 };
 
@@ -3478,15 +3478,19 @@ function Fleet({ msg }) {
     if (!r) return [];
     const out = [];
     if (r.spindle_gradient_x != null && Math.abs(r.spindle_gradient_x) > DWX_THRESHOLDS.spindleGradientXColletWearMax)
-      out.push('Spindle X');
+      out.push('Spindle Misalignment X Axis');
     if (r.spindle_gradient_y != null && Math.abs(r.spindle_gradient_y) > DWX_THRESHOLDS.spindleGradientYColletWearMax)
-      out.push('Spindle Y');
-    if (r.a_y_gap != null && r.a_y_gap > DWX_THRESHOLDS.aAxisP1P2YGapMax) out.push('A-gap');
-    if (r.b_x_gap != null && r.b_x_gap > DWX_THRESHOLDS.bAxisP1P2XGapMax) out.push('B-gap');
+      out.push('Spindle Misalignment Y Axis');
+    if (r.a_y_gap != null && r.a_y_gap > DWX_THRESHOLDS.aAxisP1P2YGapMax) out.push('Y Axis Misalignment');
+    if (r.b_x_gap != null && r.b_x_gap > DWX_THRESHOLDS.bAxisP1P2XGapMax) out.push('X Axis Misalignment');
     if (Array.isArray(hist) && hist.length >= 2) {
       const pts = fleetTrendPoints(hist);
-      if (latestDriftStep(pts, 'gradientX', DWX_THRESHOLDS.spindleGradientXStepMax)) out.push('Spindle X Δ');
-      if (latestDriftStep(pts, 'gradientY', DWX_THRESHOLDS.spindleGradientYStepMax)) out.push('Spindle Y Δ');
+      const xDrift = latestDriftStep(pts, 'gradientX', DWX_THRESHOLDS.spindleGradientXStepMax);
+      const yDrift = latestDriftStep(pts, 'gradientY', DWX_THRESHOLDS.spindleGradientYStepMax);
+      // Rule 2 is the same fix (replace the collet) regardless of which axis'
+      // gradient is bouncing -- there's only one physical collet -- so this
+      // collapses to a single badge instead of separate X/Y ones.
+      if (xDrift || yDrift) out.push('Replace Collet');
     }
     return out;
   };
@@ -3509,7 +3513,21 @@ function Fleet({ msg }) {
       const hit = diag.find(d => d.check === key && d.flagged);
       if (hit) {
         const info = CHECK_INFO[key] || {};
-        return { check: key, label: info.label || key, action: hit.priorityNote || info.action || '', cause: info.cause || '' };
+        // Rule 5 (magazine offset) can bounce on more than one axis at once,
+        // and X/Y vs. Z disambiguate to two different causes -- so unlike
+        // rules 3/4/7 it can't use a single static label. Build it from
+        // whichever axis(es) actually bounced: X or Y -> that axis is
+        // misaligned; Z -> ballscrew fault.
+        let label = info.label || key;
+        let action = hit.priorityNote || info.action || '';
+        if (key === "magazine_offset_drift" && Array.isArray(hit.flaggedAxes) && hit.flaggedAxes.length) {
+          const parts = hit.flaggedAxes.map(axis => axis === "Z"
+            ? { label: "Z Axis Ballscrew", action: "Inspect the ballscrew for wear/backlash." }
+            : { label: `${axis} Axis Misalignment`, action: `Inspect/re-align the ${axis}-axis.` });
+          label = parts.map(p => p.label).join(", ");
+          if (!hit.priorityNote) action = parts.map(p => p.action).join(" ");
+        }
+        return { check: key, label, action, cause: info.cause || '' };
       }
     }
     return null;
