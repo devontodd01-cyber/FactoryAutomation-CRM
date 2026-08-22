@@ -2720,11 +2720,46 @@ function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks
   );
 }
 
+// ── Trend chart windowing — shared by TrendCharts (Mill Diagnostics) and
+// FleetTrendCharts (Fleet). A machine with a lot of calibration history
+// crowds every chart on this page if every point plots at once, so both
+// default to just the most recent 10 and offer a way to zoom out. `points`
+// is always sorted ascending by correction count (every caller already
+// guarantees that), so slicing off the END keeps the N most recent
+// calibrations while preserving ascending order for the chart/drift math.
+const TREND_WINDOW_OPTIONS = [10, 25, 50, 'All'];
+function windowTrendPoints(points, windowSize) {
+  if (windowSize === 'All' || points.length <= windowSize) return points;
+  return points.slice(-windowSize);
+}
+function TrendWindowControl({ windowSize, setWindowSize, total, shown }) {
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',marginBottom:14}}>
+      <span style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5,color:'var(--txd)'}}>
+        Showing last {shown} of {total} calibration{total===1?'':'s'}
+      </span>
+      <div style={{display:'flex',gap:4,marginLeft:'auto'}}>
+        {TREND_WINDOW_OPTIONS.map(opt => (
+          <button
+            key={opt}
+            className={`btn bs ${windowSize===opt?'bp':''}`}
+            onClick={()=>setWindowSize(opt)}
+          >
+            {opt}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function TrendCharts({ history, applogText }) {
-  const points = trendPointsFromHistory(history);
-  if (points.length < 2) {
+  const allPoints = trendPointsFromHistory(history);
+  const [windowSize, setWindowSize] = useState(10);
+  if (allPoints.length < 2) {
     return <div style={{fontSize:11,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",padding:'6px 2px 14px'}}>Need at least 2 saved reports for this serial to plot a trend.</div>;
   }
+  const points = windowTrendPoints(allPoints, windowSize);
   // Parse applog errors and align them to the correction-count axis. finalCorr
   // = the highest corr we have a report for, which anchors the log's tail.
   const finalCorr = points.length ? points[points.length - 1].corr : null;
@@ -2742,6 +2777,9 @@ function TrendCharts({ history, applogText }) {
 
   return (
     <div style={{marginBottom:4}}>
+      {allPoints.length > 10 && (
+        <TrendWindowControl windowSize={windowSize} setWindowSize={setWindowSize} total={allPoints.length} shown={points.length}/>
+      )}
       {errorMarkers.length > 0 && (
         <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:6,padding:'9px 12px',marginBottom:14,fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5}}>
           <span style={{color:'var(--txm)'}}>Error overlay:</span>
@@ -2951,14 +2989,19 @@ function fleetTrendPoints(history) {
 // metrics Fleet actually has on hand (gradient, A/B gap, base tool length —
 // no applog for the error-dot overlay, no origin/magazine/offset-range data).
 function FleetTrendCharts({ history }) {
-  const points = fleetTrendPoints(history);
-  if (points.length < 2) {
+  const allPoints = fleetTrendPoints(history);
+  const [windowSize, setWindowSize] = useState(10);
+  if (allPoints.length < 2) {
     return <div style={{fontSize:11,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",padding:'6px 2px 14px'}}>Need at least 2 saved reports for this serial to plot a trend.</div>;
   }
+  const points = windowTrendPoints(allPoints, windowSize);
   const has = (keys) => points.some(p => keys.some(k => p[k] != null));
 
   return (
     <div style={{marginBottom:4}}>
+      {allPoints.length > 10 && (
+        <TrendWindowControl windowSize={windowSize} setWindowSize={setWindowSize} total={allPoints.length} shown={points.length}/>
+      )}
       {has(['gradientX','gradientY']) && (() => {
         const TOL = 0.001;
         const STEP_X = DWX_THRESHOLDS.spindleGradientXStepMax;
