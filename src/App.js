@@ -2,8 +2,10 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, ReferenceArea, ComposedChart, Scatter, Customized } from "recharts";
 import { unzipSync, strFromU8 } from "fflate";
 
-const SUPABASE_URL = "https://untsjmmqtfasejkwjnlf.supabase.co";
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVudHNqbW1xdGZhc2Vqa3dqbmxmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM3OTc3NDksImV4cCI6MjA4OTM3Mzc0OX0.dqBbwFHC1tsPEtl9KD_qNUvhGW0H33NFj19h6MFeqAo";
+const SUPABASE_URL = "https://nadpfgzpehxwknijccrq.supabase.co";
+// ⬇️ PASTE THE nadpfgzpehxwknijccrq ANON KEY BETWEEN THE QUOTES BELOW.
+// Get it from: Supabase → Project Settings → API → Project API keys → anon public
+const SUPABASE_KEY = "PASTE_NADPFGZ_ANON_KEY_HERE";
 
 const db = {
   async get(table) {
@@ -4704,7 +4706,7 @@ export default function App(){
         </div>
 
         <div className="main">
-          {page==='Dashboard'&&<><Dashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} calNotes={calNotes} onSaveNote={saveCalNote}/><MobileDashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/></>}
+          {page==='Dashboard'&&<><div className="desktop-only"><Dashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} calNotes={calNotes} onSaveNote={saveCalNote}/></div><div className="mobile-only"><MobileDashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/></div></>}
           {page==='Jobs'&&<Jobs jobs={jobs.filter(j=>!isArchived(j))} customers={customers} technicians={technicians} loading={loading.jobs} onAdd={addJob} onEdit={editJob} onDelete={delJob}/>}
           {page==='Follow-ups'&&<Followups jobs={jobs} onEdit={editJob} loading={loading.jobs}/>}
           {page==='Schedule'&&<Schedule jobs={jobs.filter(j=>!isArchived(j))} calNotes={calNotes} onSaveNote={saveCalNote}/>}
