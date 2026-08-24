@@ -5,7 +5,7 @@ import { unzipSync, strFromU8 } from "fflate";
 const SUPABASE_URL = "https://nadpfgzpehxwknijccrq.supabase.co";
 // ⬇️ PASTE THE nadpfgzpehxwknijccrq ANON KEY BETWEEN THE QUOTES BELOW.
 // Get it from: Supabase → Project Settings → API → Project API keys → anon public
-const SUPABASE_KEY = "PASTE_NADPFGZ_ANON_KEY_HERE";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVudHNqbW1xdGZhc2Vqa3dqbmxmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM3OTc3NDksImV4cCI6MjA4OTM3Mzc0OX0.dqBbwFHC1tsPEtl9KD_qNUvhGW0H33NFj19h6MFeqAo";
 
 const db = {
   async get(table) {
