@@ -1002,7 +1002,7 @@ function DashCalendar({ jobs, calNotes }) {
   );
 }
 
-function Dashboard({jobs, onEditJob, calNotes, onSaveNote}){
+function Dashboard({jobs, onEditJob, onNewJob, calNotes, onSaveNote}){
   const [viewJob,setViewJob]=useState(null);
   const boardJobs=jobs.filter(j=>!(['Invoiced','Paid'].includes(j.invoice_status)));
   const groups=[
@@ -1013,6 +1013,7 @@ function Dashboard({jobs, onEditJob, calNotes, onSaveNote}){
   ];
   const {width: calWidth, onMouseDown: onDragStart} = useDragResize(260, 180, 480);
   return(<>
+    {onNewJob&&<div style={{display:'flex',justifyContent:'flex-end',marginBottom:12}}><button className="btn bp" onClick={onNewJob}>+ New Job</button></div>}
     <DailyFocusPanel jobs={jobs} onEditJob={(j)=>{setViewJob(null);onEditJob(j);}} calNotes={calNotes} onSaveNote={onSaveNote}/>
     <div style={{display:'flex',gap:0,alignItems:'flex-start'}}>
       <div style={{flex:1,minWidth:0,paddingRight:10}}>
@@ -4709,7 +4710,7 @@ export default function App(){
         </div>
 
         <div className="main">
-          {page==='Dashboard'&&<><div className="desktop-only"><Dashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} calNotes={calNotes} onSaveNote={saveCalNote}/></div><div className="mobile-only"><MobileDashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/></div></>}
+          {page==='Dashboard'&&<><div className="desktop-only"><Dashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} onNewJob={openMobileJobNew} calNotes={calNotes} onSaveNote={saveCalNote}/></div><div className="mobile-only"><MobileDashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/></div></>}
           {page==='Jobs'&&<Jobs jobs={jobs.filter(j=>!isArchived(j))} customers={customers} technicians={technicians} loading={loading.jobs} onAdd={addJob} onEdit={editJob} onDelete={delJob}/>}
           {page==='Follow-ups'&&<Followups jobs={jobs} onEdit={editJob} loading={loading.jobs}/>}
           {page==='Schedule'&&<Schedule jobs={jobs.filter(j=>!isArchived(j))} calNotes={calNotes} onSaveNote={saveCalNote}/>}
