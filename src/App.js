@@ -2,17 +2,20 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, ReferenceArea, ComposedChart, Scatter, Customized } from "recharts";
 import { unzipSync, strFromU8 } from "fflate";
 
-const SUPABASE_URL = "https://nadpfgzpehxwknijccrq.supabase.co";
-// ⬇️ PASTE THE nadpfgzpehxwknijccrq ANON KEY BETWEEN THE QUOTES BELOW.
-// Get it from: Supabase → Project Settings → API → Project API keys → anon public
-const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5hZHBmZ3pwZWh4d2tuaWpjY3JxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM3OTc3MDEsImV4cCI6MjA4OTM3MzcwMX0.Wde5Kgqz0d8M9ZEBmeb03dwuQmQ1UBNrG7iGd9MZ9XM";
+const SUPABASE_URL = "https://untsjmmqtfasejkwjnlf.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVudHNqbW1xdGZhc2Vqa3dqbmxmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzM3OTc3NDksImV4cCI6MjA4OTM3Mzc0OX0.dqBbwFHC1tsPEtl9KD_qNUvhGW0H33NFj19h6MFeqAo";
 
 const db = {
   async get(table) {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?order=created_at.asc`, {
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
     });
-    return r.json();
+    // On a 401/404/etc PostgREST returns an error OBJECT, not an array. Returning
+    // that as-is makes callers do .filter() on an object → white-screens the app.
+    // Always resolve to an array so a bad key/policy degrades gracefully instead.
+    if (!r.ok) { console.error(`db.get(${table}) failed:`, r.status); return []; }
+    const data = await r.json();
+    return Array.isArray(data) ? data : [];
   },
   async insert(table, data) {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
