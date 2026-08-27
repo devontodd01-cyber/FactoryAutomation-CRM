@@ -2753,8 +2753,11 @@ function TrendWindowControl({ windowSize, setWindowSize, total, shown }) {
   );
 }
 
-function TrendCharts({ history, applogText }) {
-  const allPoints = trendPointsFromHistory(history);
+function TrendCharts({ history, applogText, points: providedPoints }) {
+  // `points`, when passed, is a pre-built points array (e.g. a merge of two
+  // history sources — see mergeTrendPoints) and takes priority over deriving
+  // one from `history` here.
+  const allPoints = providedPoints || trendPointsFromHistory(history);
   const [windowSize, setWindowSize] = useState(10);
   if (allPoints.length < 2) {
     return <div style={{fontSize:11,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",padding:'6px 2px 14px'}}>Need at least 2 saved reports for this serial to plot a trend.</div>;
@@ -3077,14 +3080,46 @@ function FleetTrendCharts({ history }) {
 }
 
 // Fleet cards only have the flat columns synced into `mill_reports` (that's
-// what FleetTrendCharts above reads). Mill Diagnostics keeps a much richer
+// what fleetTrendPoints above builds). Mill Diagnostics keeps a much richer
 // history for the same serial in `diagnostic_reports` — the full parsed
-// report tree that trendPointsFromHistory / TrendCharts were built for. When
-// a Fleet card is switched to Graph view, fetch that richer history and reuse
-// the exact same TrendCharts component Mill Diagnostics shows, so a serial's
-// Fleet graphs and its Mill Diagnostics graphs are identical. Falls back to
-// the lighter Fleet-only chart set if this serial has never been run through
-// Mill Diagnostics (or only has one saved report there — not enough to trend).
+// report tree that trendPointsFromHistory / TrendCharts were built for. A
+// serial can have BOTH: e.g. an old report saved once through Mill
+// Diagnostics years ago, plus the current live Fleet sync. Those are two
+// different corr values from two different tables describing the SAME
+// physical machine's history, so they need to end up on ONE chart, not have
+// one silently hide the other.
+//
+// mergeTrendPoints combines both point arrays keyed by correction count.
+// diagPoints go in first (they're richer — origin/magazine/angle-offset data
+// Fleet's flat columns don't carry), then fleetPoints fill in any field that's
+// still null (including whole corr values Mill Diagnostics never saw). This
+// is what fixes the bug where a machine with 2 old diagnostic_reports rows
+// (e.g. a 2024 factory-default AUTOSAVE at corr 0) showed ONLY those stale
+// points and hid the real, current Fleet-synced corrections (corr 3/363/364)
+// entirely — the old exclusive either/or branch always preferred
+// diagnostic_reports whenever it had >=2 rows, with no way to also plot
+// what Fleet's live sync had.
+function mergeTrendPoints(diagPoints, fleetPoints) {
+  const byCorr = new Map();
+  const put = (p) => {
+    if (!p || p.corr == null) return;
+    const existing = byCorr.get(p.corr);
+    if (!existing) { byCorr.set(p.corr, { ...p }); return; }
+    const merged = { ...existing };
+    for (const k of Object.keys(p)) {
+      if (merged[k] == null && p[k] != null) merged[k] = p[k];
+    }
+    byCorr.set(p.corr, merged);
+  };
+  (diagPoints || []).forEach(put);
+  (fleetPoints || []).forEach(put);
+  return Array.from(byCorr.values()).sort((a, b) => a.corr - b.corr);
+}
+
+// When a Fleet card is switched to Graph view, fetch the richer
+// diagnostic_reports history for this serial and merge it with Fleet's own
+// live-synced mill_reports history into one combined, correctly-scaled
+// trend, rendered with the same TrendCharts component Mill Diagnostics uses.
 function FleetSerialTrendGraphs({ serial, fleetHistory }) {
   const [diagHistory, setDiagHistory] = useState(null); // null = still loading
   const [loadError, setLoadError] = useState(false);
@@ -3169,14 +3204,26 @@ function FleetSerialTrendGraphs({ serial, fleetHistory }) {
     );
   }
 
-  if (diagHistory.length >= 2) {
+  // Build points from BOTH sources and merge — this is the fix. Previously
+  // this branched exclusively on diagHistory.length, so a serial with old
+  // diagnostic_reports rows never saw its live Fleet-synced corrections
+  // plotted at all (and vice versa). Now every corr value either source has
+  // ends up on the one combined trend.
+  const diagPoints = trendPointsFromHistory(diagHistory);
+  const fleetPoints = fleetTrendPoints(fleetHistory);
+  const merged = mergeTrendPoints(diagPoints, fleetPoints);
+
+  if (merged.length >= 2) {
     // Same chart set as the Mill Diagnostics page: gradients, A/B gap, raw
     // A/B P1/P2, XYZ origin drift, magazine offset drift, base tool length,
-    // and A/B angle offset range.
+    // and A/B angle offset range — any chart with no data across the merged
+    // history (e.g. origin drift, when diagHistory is empty) is skipped
+    // automatically by TrendCharts's own has() checks.
     return (
       <div>
         {debugLine}
-        <TrendCharts history={diagHistory} />
+        {diagHistory.length < 2 && fallbackNote(`Only ${diagHistory.length} Mill Diagnostics ${diagHistory.length === 1 ? 'entry' : 'entries'} found for serial "${serial}" (checked for case/spacing differences too) — showing Fleet's live sync data merged in. Run more reports through 🩺 Mill Diagnostics to unlock the full chart set (origin drift, magazine offset, raw P1/P2, angle-offset range).`)}
+        <TrendCharts points={merged} />
       </div>
     );
   }
@@ -3184,8 +3231,7 @@ function FleetSerialTrendGraphs({ serial, fleetHistory }) {
   return (
     <div>
       {debugLine}
-      {fallbackNote(`No Mill Diagnostics history found for serial "${serial}" (checked for case/spacing differences too) — run its reports through 🩺 Mill Diagnostics to unlock the full chart set (origin drift, magazine offset, raw P1/P2, angle-offset range). Showing what Fleet's live sync has in the meantime:`)}
-      <FleetTrendCharts history={fleetHistory} />
+      {fallbackNote(`Not enough saved history for serial "${serial}" yet — need at least 2 reports (Mill Diagnostics and/or Fleet sync, combined) to plot a trend.`)}
     </div>
   );
 }
