@@ -10,12 +10,7 @@ const db = {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?order=created_at.asc`, {
       headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
     });
-    // On a 401/404/etc PostgREST returns an error OBJECT, not an array. Returning
-    // that as-is makes callers do .filter() on an object → white-screens the app.
-    // Always resolve to an array so a bad key/policy degrades gracefully instead.
-    if (!r.ok) { console.error(`db.get(${table}) failed:`, r.status); return []; }
-    const data = await r.json();
-    return Array.isArray(data) ? data : [];
+    return r.json();
   },
   async insert(table, data) {
     const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}`, {
@@ -1002,7 +997,7 @@ function DashCalendar({ jobs, calNotes }) {
   );
 }
 
-function Dashboard({jobs, onEditJob, onNewJob, calNotes, onSaveNote}){
+function Dashboard({jobs, onEditJob, calNotes, onSaveNote}){
   const [viewJob,setViewJob]=useState(null);
   const boardJobs=jobs.filter(j=>!(['Invoiced','Paid'].includes(j.invoice_status)));
   const groups=[
@@ -1013,7 +1008,6 @@ function Dashboard({jobs, onEditJob, onNewJob, calNotes, onSaveNote}){
   ];
   const {width: calWidth, onMouseDown: onDragStart} = useDragResize(260, 180, 480);
   return(<>
-    {onNewJob&&<div style={{display:'flex',justifyContent:'flex-end',marginBottom:12}}><button className="btn bp" onClick={onNewJob}>+ New Job</button></div>}
     <DailyFocusPanel jobs={jobs} onEditJob={(j)=>{setViewJob(null);onEditJob(j);}} calNotes={calNotes} onSaveNote={onSaveNote}/>
     <div style={{display:'flex',gap:0,alignItems:'flex-start'}}>
       <div style={{flex:1,minWidth:0,paddingRight:10}}>
@@ -3350,7 +3344,7 @@ function MachineOwnerEditor({ serial, owner, customers, onSave }) {
       <select
         className="fsl" style={{ maxWidth: 220, margin: 0 }}
         value={customerId}
-        onChange={e => setCustomerId(e.target.value ? Number(e.target.value) : '')}
+        onChange={e => setCustomerId(e.target.value || '')}
       >
         <option value="">— Unassigned —</option>
         {customers.map(c => <option key={c.id} value={c.id}>{c.company}</option>)}
@@ -4710,7 +4704,7 @@ export default function App(){
         </div>
 
         <div className="main">
-          {page==='Dashboard'&&<><div className="desktop-only"><Dashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} onNewJob={openMobileJobNew} calNotes={calNotes} onSaveNote={saveCalNote}/></div><div className="mobile-only"><MobileDashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/></div></>}
+          {page==='Dashboard'&&<><Dashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} calNotes={calNotes} onSaveNote={saveCalNote}/><MobileDashboard jobs={jobs.filter(j=>!isArchived(j))} onEditJob={openMobileJobEdit} onDeleteJob={delJob} onNewJob={openMobileJobNew}/></>}
           {page==='Jobs'&&<Jobs jobs={jobs.filter(j=>!isArchived(j))} customers={customers} technicians={technicians} loading={loading.jobs} onAdd={addJob} onEdit={editJob} onDelete={delJob}/>}
           {page==='Follow-ups'&&<Followups jobs={jobs} onEdit={editJob} loading={loading.jobs}/>}
           {page==='Schedule'&&<Schedule jobs={jobs.filter(j=>!isArchived(j))} calNotes={calNotes} onSaveNote={saveCalNote}/>}
