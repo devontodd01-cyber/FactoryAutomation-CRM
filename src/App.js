@@ -3424,6 +3424,7 @@ function Fleet({ msg }) {
   const [loading, setLoading] = useState(true);
   const [openSerial, setOpenSerial] = useState(null);
   const [trendView, setTrendView] = useState('graph'); // 'graph' | 'table' — shared since only one card opens at a time
+  const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [addText, setAddText] = useState('');
   const [addBusy, setAddBusy] = useState(false);
@@ -3551,19 +3552,35 @@ function Fleet({ msg }) {
   const customerById = {};
   for (const c of customers) customerById[c.id] = c;
 
-  const machines = Object.entries(bySerial).map(([serial, list]) => {
+  // Sort key mirrors exactly what's displayed on each card (customer name,
+  // falling back to a manual nickname, falling back to the raw serial) so
+  // the on-screen alphabetical order always matches what's typed into the
+  // search box below. Previously this sorted on customer.company alone, so
+  // any machine linked only by a nickname (no linked customer) fell back to
+  // serial-number order instead of its displayed name — that's what made
+  // the list look unsorted. `sensitivity:'base'` makes it case-insensitive.
+  const allMachines = Object.entries(bySerial).map(([serial, list]) => {
     const sorted = [...list].sort((a, b) => (a.correction_count || 0) - (b.correction_count || 0));
     const latest = sorted.find(x => x.is_latest) || sorted[sorted.length - 1];
     const owner = ownerBySerial[serial] || null;
     const customer = owner && owner.customer_id != null ? customerById[owner.customer_id] || null : null;
     return { serial, latest, history: sorted, owner, customer };
   }).sort((a, b) => {
-    const an = a.customer?.company, bn = b.customer?.company;
-    if (an && bn) return an.localeCompare(bn) || a.serial.localeCompare(b.serial);
-    if (an && !bn) return -1;
-    if (!an && bn) return 1;
-    return a.serial.localeCompare(b.serial);
+    const aName = a.customer?.company || a.owner?.nickname || a.serial;
+    const bName = b.customer?.company || b.owner?.nickname || b.serial;
+    return aName.localeCompare(bName, undefined, { sensitivity: 'base', numeric: true }) || a.serial.localeCompare(b.serial);
   });
+
+  // Type-to-find: filters on the same displayed name plus the raw serial,
+  // so searching either the customer name or the machine's serial works.
+  const machines = (() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return allMachines;
+    return allMachines.filter(({ serial, owner, customer }) => {
+      const name = (customer?.company || owner?.nickname || serial || '').toLowerCase();
+      return name.includes(q) || (serial || '').toLowerCase().includes(q);
+    });
+  })();
 
   // thresholds mirror the diagnostics engine. Pass the machine's full history
   // (not just latest) so the rate-of-change checks have a previous point to
@@ -3634,9 +3651,16 @@ function Fleet({ msg }) {
   return (
     <div>
       <div className="pt">🛠 Fleet Monitoring</div>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center', margin: '4px 0 16px' }}>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center', margin: '4px 0 16px', flexWrap: 'wrap' }}>
+        <input
+          className="fi"
+          placeholder="🔍 Find customer or serial…"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          style={{ marginBottom: 0, flex: '1 1 220px', minWidth: 160, maxWidth: 320 }}
+        />
         <div className="diag-meta" style={{ margin: 0 }}>
-          {loading ? 'loading…' : `${machines.length} machine(s) · ${fleetFlagged} flagged`}
+          {loading ? 'loading…' : `${machines.length} machine(s)${search.trim() ? ` of ${allMachines.length}` : ''} · ${fleetFlagged} flagged`}
         </div>
         <button className={`btn bs ${showAdd ? 'bp' : ''}`} style={{ marginLeft: 'auto' }} onClick={() => setShowAdd(s => !s)}>
           {showAdd ? '✕ Cancel' : '➕ Add Report'}
@@ -3689,7 +3713,16 @@ function Fleet({ msg }) {
         </div>
       )}
 
-      {!loading && machines.length === 0 && (
+      {!loading && machines.length === 0 && search.trim() && (
+        <div className="diag-flag info">
+          <div className="diag-flag-title">No match for "{search.trim()}"</div>
+          <div className="diag-flag-desc">
+            Try a different spelling, or clear the search to see all {allMachines.length} machine(s).
+          </div>
+        </div>
+      )}
+
+      {!loading && machines.length === 0 && !search.trim() && (
         <div className="diag-flag info">
           <div className="diag-flag-title">No reports yet</div>
           <div className="diag-flag-desc">
