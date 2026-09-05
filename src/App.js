@@ -1440,6 +1440,8 @@ const DWX_THRESHOLDS = {
     "base_tool_length_drift",
     "a_axis_angle_offset",
     "b_axis_angle_offset",
+    // Spindle service-life (wear hours) — independent of calibration signals.
+    "spindle_hours",
   ],
   aAxisP1P2YGapMax: 100,
   bAxisP1P2XGapMax: 100,
@@ -1459,6 +1461,12 @@ const DWX_THRESHOLDS = {
   baseToolLengthStepMax: 100,
   angleOffsetRangeMax: 200,
   angleOffsetAdjacentDiffMax: 50,
+  // Spindle unit service life (SpindleUnit.TotalTime, in whole hours).
+  // Wear-based, identical on every DWX model — NOT gated on
+  // thresholdsValidated: 2000 h is 2000 h regardless of platform.
+  // 1800 = plan replacement soon; 2000 = replace now, quality may fade.
+  spindleHoursWarn: 1800,
+  spindleHoursReplace: 2000,
 };
 
 const MACHINE_PROFILES = {
@@ -1498,6 +1506,18 @@ function parseInlineArrNF(s) {
   const inner = s.trim().replace(/^\[/, "").replace(/\]$/, "");
   if (!inner.trim()) return [];
   return inner.split(",").map((x) => { const n = parseFloat(x.trim()); return Number.isNaN(n) ? x.trim() : n; });
+}
+
+// SpindleUnit.TotalTime is "HH:MM" (e.g. "749:58"). Return the whole-hours
+// integer (749). Guards against decimal-parse bugs — "749.58" as a float would
+// make the 2000 h threshold compare wrong. Accepts a number too (already-hours).
+function parseSpindleHours(v) {
+  if (typeof v === "number" && Number.isFinite(v)) return Math.floor(v);
+  if (typeof v !== "string") return null;
+  const m = v.trim().match(/^(\d+):(\d{1,2})$/);
+  if (m) return parseInt(m[1], 10);
+  const n = parseInt(v.trim(), 10);
+  return Number.isNaN(n) ? null : n;
 }
 
 function parseNewFormatTree(rawText) {
@@ -1552,6 +1572,13 @@ function normalizeNewToLegacy(tree) {
   legacyRac["CORRECTION COUNT"] = typeof rac.CorrectionCount === "number" ? rac.CorrectionCount : null;
   legacyRac["BASE TOOL LENGTH"] = typeof rac.BaseToolLength === "number" ? rac.BaseToolLength : null;
   if (rac.SpindleGradient) legacyRac["SPINDLE GRADIENT"] = { X: rac.SpindleGradient.x, Y: rac.SpindleGradient.y };
+  // SpindleUnit.TotalTime is the service-life clock ("HH:MM", e.g. "749:58").
+  // Store the whole-hours integer under the legacy section for downstream use.
+  {
+    const su = tree.SpindleUnit;
+    const hrs = parseSpindleHours(su && su.TotalTime);
+    if (hrs != null) legacyRac["SPINDLE HOURS"] = hrs;
+  }
 
   const conv = (ax) => {
     if (!ax) return null;
@@ -1604,6 +1631,14 @@ function parseVPanelReport(rawText) {
   const profile = getProfile(model);
   const rac = sections["ROTARY AXIS CORRECTION"] || {};
   const atc = sections["AUTOMATIC TOOL CHANGER"] || {};
+  // Spindle service-life hours live in their own SPINDLE UNIT section in the
+  // legacy format; surface them alongside the rotary-axis metrics so the same
+  // downstream row-builder/check reads one slot regardless of report format.
+  {
+    const su = sections["SPINDLE UNIT"];
+    const hrs = parseSpindleHours(su && (su["TOTAL TIME"] != null ? su["TOTAL TIME"] : su["TOTALTIME"]));
+    if (hrs != null) rac["SPINDLE HOURS"] = hrs;
+  }
   return {
     model, serial, profile, sections, rac, atc,
     correctionCount: typeof rac["CORRECTION COUNT"] === "number" ? rac["CORRECTION COUNT"] : null,
@@ -1635,6 +1670,28 @@ function diagnoseGradientHard(r, axis) {
 }
 function diagnoseSpindleGradientXHard(r) { return diagnoseGradientHard(r, "X"); }
 function diagnoseSpindleGradientYHard(r) { return diagnoseGradientHard(r, "Y"); }
+
+// Spindle service-life (wear hours). Three-state, single-report — no previous
+// value needed. Wear is model-independent, so this is NOT gated on
+// thresholdsValidated (unlike calibration checks): 2000 h means the same on
+// every DWX. status: 'healthy' | 'plan' | 'replace'. flagged only at/over
+// the replace line so it drives an action; 'plan' surfaces as an early note.
+function diagnoseSpindleHours(r) {
+  const hrs = r.rac ? r.rac["SPINDLE HOURS"] : null;
+  const warn = r.profile.thresholds.spindleHoursWarn;
+  const replace = r.profile.thresholds.spindleHoursReplace;
+  if (typeof hrs !== "number") {
+    return { check: "spindle_hours", hours: null, warnThreshold: warn, replaceThreshold: replace, status: "unknown", flagged: false, thresholdsValidatedForModel: true };
+  }
+  let status = "healthy";
+  if (hrs >= replace) status = "replace";
+  else if (hrs >= warn) status = "plan";
+  return {
+    check: "spindle_hours", hours: hrs, warnThreshold: warn, replaceThreshold: replace,
+    status, flagged: status === "replace", planReplacement: status === "plan",
+    thresholdsValidatedForModel: true,
+  };
+}
 
 // Bounce (rate-of-change) check: |value[n] − value[n-1]| ≥ 0.0005 between
 // consecutive reports for the SAME machine, regardless of whether the
@@ -1821,6 +1878,7 @@ const DIAGNOSTIC_CHECKS = {
   base_tool_length_drift: (r, prev) => diagnoseBaseToolLengthDrift(r, prev.baseToolLength, prev.origin, prev.magazineOffset),
   a_axis_angle_offset: (r) => diagnoseAAxisAngleOffset(r),
   b_axis_angle_offset: (r) => diagnoseBAxisAngleOffset(r),
+  spindle_hours: (r) => diagnoseSpindleHours(r),
 };
 
 // Cross-check pass: within the SAME metric, a bounce flag outranks its
@@ -1897,6 +1955,7 @@ const CHECK_INFO = {
   a_axis_angle_offset: { label: "Bad A Axis", cause: "AngleOffset(Base) curve (excluding the fixed index-0 baseline) has a range over 200 units or an adjacent-value jump over 50 units — bad A-axis.", action: "Inspect the A-axis." },
   b_axis_angle_offset: { label: "Bad B Axis", cause: "AngleOffset(Base) curve (excluding the fixed index-0 baseline) has a range over 200 units or an adjacent-value jump over 50 units — bad B-axis.", action: "Inspect the B-axis." },
   dice_3b_9b_bottom_width: { label: "DICE 3B/9B Bottom Width Y-Pair", cause: "Most reliable physical signal for A-axis/Y-axis origin mismatch — the error is only fully expressed at full-depth engagement.", action: "If elevated alongside a flagged A-axis gap, proceed toward an A-axis rebuild." },
+  spindle_hours: { label: "Spindle Service Life", cause: "Spindle unit run-time has reached its service-life limit (2000 h). Beyond this, milling quality may begin to fade.", action: "Replace the spindle unit (customer-installable — procedure and part supplied)." },
 };
 
 const DICE_COLS = {
@@ -1959,7 +2018,9 @@ function DiagFlagCard({ checkKey, data }) {
         {checkKey === 'b_axis_p1_p2_gap' && <>gap: {data.gap} (threshold {data.threshold})</>}
         {(checkKey === 'a_axis_p1_p2_gap_drift' || checkKey === 'b_axis_p1_p2_gap_drift') && <>gap: {data.gap}{data.previousGap!=null && <>, previous: {data.previousGap}, Δ {data.delta>0?'+':''}{data.delta?.toFixed(1)}</>} (step threshold {data.threshold})</>}
         {checkKey === 'dice_3b_9b_bottom_width' && <>3B: {data.v3}mm · 9B: {data.v9}mm · gap: {data.gap.toFixed(3)}mm (threshold {data.threshold}mm{data.thresholdNotValidated?', not validated':''})</>}
+        {checkKey === 'spindle_hours' && <>{data.hours != null ? <>{data.hours} / {data.replaceThreshold} h</> : 'no reading'}{data.status === 'plan' && <> · plan replacement soon (warn at {data.warnThreshold} h)</>}{data.status === 'replace' && <> · at/over service life</>}{data.status === 'healthy' && <> · healthy</>}</>}
       </div>
+      {checkKey === 'spindle_hours' && data.planReplacement && <div className="diag-flag-action" style={{color:'#ffb020'}}>→ Spindle approaching service life ({data.hours} / {data.replaceThreshold} h) — plan replacement. Customer-installable.</div>}
     </div>
   );
 }
@@ -3255,6 +3316,7 @@ function buildMillReportRow(report, rawText) {
     a_y_gap: rac["A-AXIS"] ? yGap(rac["A-AXIS"]) : null,
     b_x_gap: rac["B-AXIS"] ? xGap(rac["B-AXIS"]) : null,
     base_tool_length: typeof rac["BASE TOOL LENGTH"] === 'number' ? rac["BASE TOOL LENGTH"] : null,
+    spindle_hours: typeof rac["SPINDLE HOURS"] === 'number' ? rac["SPINDLE HOURS"] : null,
     report_date: new Date().toISOString(),
     // mill_reports has a NOT NULL raw_systemreport column — the sync agent
     // always stores the original report text there, so a manually-added row
@@ -3313,6 +3375,23 @@ function fleetDiagnose(latest, prev) {
   // previously passing bare 'a'/'b' here, which produced the wrong keys.
   gapAxis('a_axis', 'a_y_gap', 'aAxisP1P2YGapMax', 'aAxisP1P2YGapStepMax');
   gapAxis('b_axis', 'b_x_gap', 'bAxisP1P2XGapMax', 'bAxisP1P2XGapStepMax');
+
+  // Spindle service-life (wear hours) — model-independent, not gated on
+  // thresholdsValidated. Mirrors diagnoseSpindleHours for the Fleet path.
+  {
+    const hrs = latest.spindle_hours;
+    if (typeof hrs === 'number') {
+      let status = 'healthy';
+      if (hrs >= th.spindleHoursReplace) status = 'replace';
+      else if (hrs >= th.spindleHoursWarn) status = 'plan';
+      out.push({
+        check: 'spindle_hours', hours: hrs, warnThreshold: th.spindleHoursWarn,
+        replaceThreshold: th.spindleHoursReplace, status,
+        flagged: status === 'replace', planReplacement: status === 'plan',
+        thresholdsValidatedForModel: true,
+      });
+    }
+  }
 
   return annotateDiagnosticPriority(out);
 }
