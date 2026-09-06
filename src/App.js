@@ -1602,9 +1602,19 @@ function normalizeNewToLegacy(tree) {
     legacyRac["CORRECTION BASE POINT"] = [rac.CorrectionBasePoint.x, rac.CorrectionBasePoint.y, rac.CorrectionBasePoint.z];
   }
   sections["ROTARY AXIS CORRECTION"] = legacyRac;
-  // The new format doesn't expose MAGAZINE POSITION OFFSET in the same place;
-  // leave ATC empty so that check simply no-ops rather than misreading.
-  sections["AUTOMATIC TOOL CHANGER"] = {};
+  // The DMS/53DC format has no single "MAGAZINE POSITION OFFSET" line like the
+  // legacy format. Per the model translation table, the 53DC equivalent is
+  // ToolSensorPositionOffset (the tool-setter reference) — that is the value to
+  // trend for magazine drift on this platform. (StockerPositionOffset is a
+  // separate per-stocker list and is NOT the magazine equivalent here.) This
+  // closes the last cross-format gap: magazine drift now trends on the 53DC.
+  const atc = tree.AutomaticToolChanger || {};
+  const legacyAtc = {};
+  const magObj = atc.ToolSensorPositionOffset;
+  if (magObj && typeof magObj.x === "number") {
+    legacyAtc["MAGAZINE POSITION OFFSET"] = [magObj.x, magObj.y, magObj.z];
+  }
+  sections["AUTOMATIC TOOL CHANGER"] = legacyAtc;
   return sections;
 }
 
@@ -3334,10 +3344,10 @@ function fleetTrendPoints(history) {
       gradientY: num(r.spindle_gradient_y),
       aGap: num(r.a_y_gap),
       bGap: num(r.b_x_gap),
-      originX: null, originY: null, originZ: null,
-      magX: null, magY: null, magZ: null,
+      originX: num(r.origin_x), originY: num(r.origin_y), originZ: num(r.origin_z),
+      magX: num(r.magazine_offset_x), magY: num(r.magazine_offset_y), magZ: num(r.magazine_offset_z),
       baseToolLength: num(r.base_tool_length),
-      angleOffsetRange: null, bAxisOffsetRange: null,
+      angleOffsetRange: num(r.a_angle_offset_range), bAxisOffsetRange: num(r.b_angle_offset_range),
     }))
     .sort((a, b) => a.corr - b.corr);
 }
@@ -3599,7 +3609,18 @@ function FleetSerialTrendGraphs({ serial, fleetHistory }) {
 // table already render '—' for anything null).
 function buildMillReportRow(report, rawText) {
   const rac = report.rac || {};
+  const atc = report.atc || {};
+  const sections = report.sections || {};
   const grad = rac["SPINDLE GRADIENT"] || {};
+  // Origin (XYZ), magazine position offset (XYZ), and A/B angle-offset range
+  // are derivable straight from the parsed report, but mill_reports never had
+  // columns for them — so the Fleet trend charts for these three read null and
+  // rendered flat at zero. Extract them here so the live sync carries them and
+  // Fleet is self-sufficient (no dependency on a separate Mill Diagnostics import).
+  const origin = extractOrigin(sections, rac);          // [x, y, z] or [null,null,null]
+  const mag = triplet(atc["MAGAZINE POSITION OFFSET"]); // [x, y, z] or [null,null,null]
+  const aOffRange = angleOffsetRange(rac);              // scalar or null
+  const bOffRange = bAxisOffsetRange(rac);              // scalar or null
   return {
     serial: report.serial,
     model: report.model,
@@ -3610,6 +3631,10 @@ function buildMillReportRow(report, rawText) {
     b_x_gap: rac["B-AXIS"] ? xGap(rac["B-AXIS"]) : null,
     base_tool_length: typeof rac["BASE TOOL LENGTH"] === 'number' ? rac["BASE TOOL LENGTH"] : null,
     spindle_hours: typeof rac["SPINDLE HOURS"] === 'number' ? rac["SPINDLE HOURS"] : null,
+    origin_x: origin[0], origin_y: origin[1], origin_z: origin[2],
+    magazine_offset_x: mag[0], magazine_offset_y: mag[1], magazine_offset_z: mag[2],
+    a_angle_offset_range: aOffRange,
+    b_angle_offset_range: bOffRange,
     report_date: new Date().toISOString(),
     // mill_reports has a NOT NULL raw_systemreport column — the sync agent
     // always stores the original report text there, so a manually-added row
@@ -3817,7 +3842,7 @@ function Fleet({ msg }) {
       // pull every report, newest first; we group by serial client-side
       const [r, ownersData, customersData] = await Promise.all([
         fetch(
-          `${SUPABASE_URL}/rest/v1/mill_reports?select=serial,model,correction_count,firmware_main,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length,spindle_hours,total_work_time,report_date,recent_errors,is_latest,created_at&order=serial.asc,correction_count.asc`,
+          `${SUPABASE_URL}/rest/v1/mill_reports?select=serial,model,correction_count,firmware_main,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length,spindle_hours,total_work_time,origin_x,origin_y,origin_z,magazine_offset_x,magazine_offset_y,magazine_offset_z,a_angle_offset_range,b_angle_offset_range,report_date,recent_errors,is_latest,created_at&order=serial.asc,correction_count.asc`,
           { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
         ).then(res => res.json()),
         db.get('machines').catch(() => []),
