@@ -1366,11 +1366,19 @@ function parseReportBody(body) {
       continue;
     }
 
-    if (colonIdx === -1 || valuePart === "") {
+    if (colonIdx === -1) {
+      // No colon at all → this is a section header; open a child object.
       const child = {};
       parent.obj[key] = child;
       parent.lastKey = key;
       stack.push({ indent, obj: child, lastKey: null });
+    } else if (valuePart === "") {
+      // Has a colon but nothing after it → an empty FIELD (e.g. "SERIAL
+      // NUMBER: "), not a section. Store an empty string, never an object —
+      // an object here renders as a raw {} child (React error #31) and also
+      // breaks any downstream code expecting a scalar/serial value.
+      parent.obj[key] = "";
+      parent.lastKey = key;
     } else {
       parent.obj[key] = parseFieldValue(valuePart);
       parent.lastKey = key;
@@ -2317,7 +2325,7 @@ function DiagnosticReportCard({ raw, report, diagnostics, diceCheck, index, onCh
     <div className="diag-report-card">
       <div className="diag-report-head">
         <div>
-          <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:14}}>{report.model || 'Unknown model'} · {report.serial || 'Unknown serial'}</div>
+          <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:14}}>{(typeof report.model === 'string' && report.model) || 'Unknown model'} · {(typeof report.serial === 'string' && report.serial) || 'Unknown serial'}</div>
           <div className="diag-meta">
             <span>Correction Count: {report.correctionCount ?? '—'}</span>
             {flaggedCount > 0 ? <span style={{color:'var(--rd)'}}>⚠ {flaggedCount} flagged</span> : <span style={{color:'var(--gr)'}}>✓ clean</span>}
