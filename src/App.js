@@ -1984,6 +1984,291 @@ function DiceRunGrid({ label, cols, values, onChange }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// MillPulse customer report — translation layer + PDF builder (Stage 1)
+//
+// The customer report is a TRANSLATION of the internal diagnostics: it shows
+// plain-language verdicts, a service tier, and an action — never raw metrics.
+// The numbers stay in the Fleet view; the PDF carries judgement, not data.
+//
+// MILLPULSE_VERDICTS maps an internal check key to how it reads to a customer.
+// tier: 'self' | 'guided' | 'tech'. Only checks that a customer report should
+// ever surface appear here; anything not listed is treated as internal-only.
+// ─────────────────────────────────────────────────────────────────────────────
+const MILLPULSE_VERDICTS = {
+  spindle_gradient_x_collet_wear: { verdict: "Collet wear detected", tier: "self",
+    body: "Spindle runout has moved beyond tolerance, which points to a worn collet. Left unaddressed this can affect fit and surface finish.",
+    action: "Replace the collet (customer-installable). We'll supply the procedure and the part.", part: "Roland DWX collet" },
+  spindle_gradient_y_collet_wear: { verdict: "Collet wear detected", tier: "self",
+    body: "The spindle is showing an inconsistent runout pattern, typically caused by a worn collet or calibration-pin seating.",
+    action: "Replace the collet (customer-installable). We'll supply the procedure and the part.", part: "Roland DWX collet" },
+  spindle_gradient_x_drift: { verdict: "Spindle runout trending", tier: "self",
+    body: "Spindle runout is drifting across recent calibrations — an early sign of collet wear.",
+    action: "Plan a collet replacement soon. We'll supply the procedure and the part.", part: "Roland DWX collet" },
+  spindle_gradient_y_drift: { verdict: "Spindle runout trending", tier: "self",
+    body: "Spindle runout is showing an inconsistent trend, an early sign of collet wear.",
+    action: "Plan a collet replacement soon. We'll supply the procedure and the part.", part: "Roland DWX collet" },
+  a_axis_p1_p2_gap: { verdict: "A-axis rotary alignment", tier: "tech",
+    body: "The A-axis rotary alignment is outside the expected range, which can affect milling accuracy on angled work.",
+    action: "This needs a technician — likely an A-axis adjustment or rebuild. We'll arrange it with you." },
+  a_axis_p1_p2_gap_drift: { verdict: "A-axis alignment shifting", tier: "guided",
+    body: "The A-axis rotary alignment is gradually shifting across recent calibrations. Not yet out of tolerance, but trending.",
+    action: "Book a guided remote session so we can assess it live before it affects quality." },
+  b_axis_p1_p2_gap: { verdict: "B-axis rotary geometry", tier: "tech",
+    body: "The B-axis rotary geometry is outside the expected range, which can affect milling accuracy.",
+    action: "This needs a technician to inspect the B-axis rotary assembly. We'll arrange it with you." },
+  b_axis_p1_p2_gap_drift: { verdict: "B-axis rotary geometry drifting", tier: "guided",
+    body: "The B-axis rotary position is gradually shifting across recent calibrations. It is not yet outside tolerance, so milling quality is unaffected today — but the trend is consistent and worth addressing before it grows.",
+    action: "Book a guided remote session. We'll walk your technician through checking the B-axis geometry live — no travel required, usually resolved same day." },
+  magazine_offset_drift: { verdict: "Positioning / ballscrew", tier: "tech",
+    body: "Tool-changer positioning is drifting in a way that points to ballscrew wear or backlash.",
+    action: "This needs a technician to inspect the ballscrew. We'll arrange it with you." },
+  base_tool_length_drift: { verdict: "Positioning / ballscrew", tier: "tech",
+    body: "Base tool-length is drifting alongside positioning — a sign of ballscrew wear or backlash.",
+    action: "This needs a technician to inspect the ballscrew. We'll arrange it with you." },
+  spindle_hours: { verdict: "Spindle at service life", tier: "self",
+    body: "Spindle run-time has reached its service-life limit. Beyond this point, milling quality may gradually begin to fade.",
+    action: "Replace the spindle unit (customer-installable). We'll supply the procedure and the part.", part: "Roland DWX spindle unit" },
+};
+
+// Friendly names for the "what looks good" reassurance list, keyed by system.
+const MILLPULSE_CLEAN_LABELS = {
+  spindle: "Spindle condition — within spec",
+  collet: "Collet — no wear detected",
+  a_axis: "A-axis rotary alignment — stable",
+  b_axis: "B-axis rotary geometry — stable",
+  ballscrew: "Ballscrew / positioning — normal",
+  tool_changer: "Tool changer — normal",
+  disc_changer: "Disc changer — normal",
+};
+
+// Build the customer-facing model from a machine's latest row + its diagnostics.
+// diag is the fleetDiagnose() output array for (latest, prevRow).
+function buildMillPulseReportModel({ latest, diag, customerName, ownerNickname }) {
+  const findings = [];
+  const seenVerdicts = new Set();
+  for (const d of (diag || [])) {
+    // spindle_hours flags only at 'replace'; 'plan' is surfaced separately.
+    const isSpindlePlan = d.check === "spindle_hours" && d.planReplacement;
+    if (!d.flagged && !isSpindlePlan) continue;
+    const v = MILLPULSE_VERDICTS[d.check];
+    if (!v) continue;
+    // collapse duplicate verdicts (e.g. X and Y collet wear -> one card)
+    if (seenVerdicts.has(v.verdict)) continue;
+    seenVerdicts.add(v.verdict);
+    findings.push({ ...v, planOnly: isSpindlePlan });
+  }
+
+  // Overall status: red if any tech/self hard flag, amber if only guided or
+  // plan-replacement trends, green if nothing.
+  let status = "green";
+  if (findings.some(f => !f.planOnly && (f.tier === "tech" || f.tier === "self"))) status = "red";
+  else if (findings.length > 0) status = "amber";
+
+  // Spindle life numbers (always shown).
+  const hrs = typeof latest?.spindle_hours === "number" ? latest.spindle_hours : null;
+  const spindleLife = hrs != null
+    ? { hours: hrs, limit: 2000, pct: Math.min(100, Math.round((hrs / 2000) * 100)),
+        remaining: Math.max(0, 2000 - hrs),
+        state: hrs >= 2000 ? "replace" : hrs >= 1800 ? "plan" : "healthy" }
+    : null;
+
+  // Clean list: everything not flagged. Derive from what DIDN'T fire.
+  const flaggedChecks = new Set((diag || []).filter(d => d.flagged).map(d => d.check));
+  const clean = [];
+  const spindleFlagged = flaggedChecks.has("spindle_gradient_x_collet_wear") || flaggedChecks.has("spindle_gradient_y_collet_wear") || flaggedChecks.has("spindle_gradient_x_drift") || flaggedChecks.has("spindle_gradient_y_drift") || flaggedChecks.has("spindle_hours");
+  if (!spindleFlagged) { clean.push(MILLPULSE_CLEAN_LABELS.spindle); clean.push(MILLPULSE_CLEAN_LABELS.collet); }
+  if (!flaggedChecks.has("a_axis_p1_p2_gap") && !flaggedChecks.has("a_axis_p1_p2_gap_drift")) clean.push(MILLPULSE_CLEAN_LABELS.a_axis);
+  if (!flaggedChecks.has("b_axis_p1_p2_gap") && !flaggedChecks.has("b_axis_p1_p2_gap_drift")) clean.push(MILLPULSE_CLEAN_LABELS.b_axis);
+  if (!flaggedChecks.has("magazine_offset_drift") && !flaggedChecks.has("base_tool_length_drift")) clean.push(MILLPULSE_CLEAN_LABELS.ballscrew);
+  clean.push(MILLPULSE_CLEAN_LABELS.tool_changer);
+  if ((latest?.model || "").includes("53DC")) clean.push(MILLPULSE_CLEAN_LABELS.disc_changer);
+
+  const statusText = {
+    green: { lbl: "Operating within tolerance — keep milling", sub: "Your mill is performing normally across all monitored systems." },
+    amber: { lbl: "Attention soon — plan a fix, no rush", sub: "Your mill is milling within tolerance today. One or more areas are trending and should be looked at before they affect quality." },
+    red: { lbl: "Action needed", sub: "One or more areas are outside tolerance and should be addressed now to protect milling quality." },
+  }[status];
+
+  return {
+    machine: latest?.model || "Roland DWX",
+    serial: latest?.serial || "—",
+    correctionCount: latest?.correction_count ?? "—",
+    reportDate: new Date().toLocaleDateString("en-CA", { day: "numeric", month: "long", year: "numeric" }),
+    customerName: customerName || ownerNickname || null,
+    status, statusText, findings, spindleLife, clean,
+  };
+}
+
+// Draw the report as a vector PDF via jsPDF (dynamically imported so it doesn't
+// bloat the initial bundle). Mirrors the approved light-background mockup:
+// dark header band + blue MillPulse mark + ECG line, machine strip, traffic
+// -light status, spindle bar, finding cards with tier badges, clean list,
+// approval stamp + Roland disclaimer footer. Returns nothing; triggers save().
+async function generateMillPulsePdf(model, approverName) {
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const W = doc.internal.pageSize.getWidth();   // ~595
+  const M = 40;                                  // side margin
+  const blue = [47, 123, 255], ink = [15, 24, 38], muted = [91, 100, 116];
+  const green = [31, 157, 87], amber = [217, 138, 19], red = [210, 59, 59];
+  const line = [227, 232, 240];
+  let y = 0;
+
+  // ── header band ──
+  doc.setFillColor(...ink); doc.rect(0, 0, W, 78, "F");
+  doc.setFont("helvetica", "bold"); doc.setFontSize(22);
+  doc.setTextColor(255, 255, 255); doc.text("Mill", M, 34);
+  const millW = doc.getTextWidth("Mill");
+  doc.setTextColor(...blue); doc.text("Pulse", M + millW, 34);
+  doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+  doc.setTextColor(200, 214, 245); doc.text("Quality You Trust, Insight You Need!", M, 48);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8);
+  doc.setTextColor(159, 176, 207);
+  doc.text("Factory Automation  ·  Independent CNC Services", W - M, 30, { align: "right" });
+  doc.text("support@factory-automation.ca", W - M, 42, { align: "right" });
+  // ECG line
+  doc.setDrawColor(...blue); doc.setLineWidth(1.2);
+  const ey = 68;
+  const seg = [[M,ey],[M+90,ey],[M+100,ey-8],[M+108,ey+10],[M+116,ey],[M+230,ey],[M+240,ey-11],[M+248,ey+12],[M+256,ey],[W-M,ey]];
+  for (let i = 0; i < seg.length - 1; i++) doc.line(seg[i][0], seg[i][1], seg[i+1][0], seg[i+1][1]);
+  y = 78;
+
+  // ── machine strip ──
+  y += 24;
+  const cols = [
+    ["Machine", model.machine], ["Serial", model.serial],
+    ["Correction count", String(model.correctionCount)], ["Report date", model.reportDate],
+  ];
+  const cw = (W - 2 * M) / 4;
+  cols.forEach((c, i) => {
+    const x = M + i * cw;
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(...muted);
+    doc.text(c[0], x, y);
+    doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(...ink);
+    doc.text(String(c[1]), x, y + 14);
+  });
+  y += 24;
+  doc.setDrawColor(...line); doc.setLineWidth(0.5); doc.line(M, y, W - M, y);
+
+  // ── status banner ──
+  y += 18;
+  const sc = model.status === "green" ? green : model.status === "amber" ? amber : red;
+  const bannerBg = model.status === "green" ? [234,247,239] : model.status === "amber" ? [253,246,233] : [251,234,234];
+  const bh = 46;
+  doc.setFillColor(...bannerBg); doc.roundedRect(M, y, W - 2 * M, bh, 8, 8, "F");
+  doc.setFillColor(...sc); doc.circle(M + 18, y + bh / 2, 6, "F");
+  doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(...sc);
+  doc.text(model.statusText.lbl, M + 34, y + 20);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(...muted);
+  doc.text(doc.splitTextToSize(model.statusText.sub, W - 2 * M - 44), M + 34, y + 34);
+  y += bh + 8;
+
+  const sectionTitle = (t) => {
+    y += 16;
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(...blue);
+    doc.text(t.toUpperCase(), M, y);
+    doc.setDrawColor(...line); doc.setLineWidth(0.5);
+    const tw = doc.getTextWidth(t.toUpperCase());
+    doc.line(M + tw + 8, y - 3, W - M, y - 3);
+    y += 8;
+  };
+
+  // ── spindle life ──
+  if (model.spindleLife) {
+    sectionTitle("Spindle service life");
+    const sl = model.spindleLife, boxH = 52;
+    doc.setDrawColor(...line); doc.setLineWidth(0.5);
+    doc.roundedRect(M, y, W - 2 * M, boxH, 8, 8, "S");
+    doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(...ink);
+    doc.text("Spindle run-time", M + 16, y + 18);
+    doc.setFont("helvetica", "bold");
+    doc.text(`${sl.hours} h / ${sl.limit} h`, W - M - 16, y + 18, { align: "right" });
+    // bar
+    const barX = M + 16, barY = y + 26, barW = W - 2 * M - 32, barH = 10;
+    doc.setFillColor(238, 241, 246); doc.roundedRect(barX, barY, barW, barH, 5, 5, "F");
+    const fillC = sl.state === "replace" ? red : sl.state === "plan" ? amber : green;
+    doc.setFillColor(...fillC);
+    doc.roundedRect(barX, barY, Math.max(6, barW * sl.pct / 100), barH, 5, 5, "F");
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(...muted);
+    const cap = sl.state === "replace"
+      ? "At service life — replace the spindle unit. Milling quality may begin to fade."
+      : sl.state === "plan"
+      ? `Approaching service life — approximately ${sl.remaining} hours remaining. Plan a replacement.`
+      : `Healthy — approximately ${sl.remaining} hours of service life remaining. We'll advise you at 1800 hours.`;
+    doc.text(cap, barX, barY + barH + 12);
+    y += boxH + 4;
+  }
+
+  // ── findings ──
+  if (model.findings.length) {
+    sectionTitle("What needs attention");
+    for (const f of model.findings) {
+      const bodyLines = doc.splitTextToSize(f.body, W - 2 * M - 32);
+      const actionLines = doc.splitTextToSize("Recommended: " + f.action, W - 2 * M - 32);
+      const cardH = 30 + bodyLines.length * 12 + 10 + actionLines.length * 12 + 10;
+      doc.setDrawColor(...line); doc.setLineWidth(0.5);
+      doc.roundedRect(M, y, W - 2 * M, cardH, 8, 8, "S");
+      // header row
+      doc.setFillColor(250, 251, 253); doc.roundedRect(M, y, W - 2 * M, 26, 8, 8, "F");
+      doc.rect(M, y + 18, W - 2 * M, 8, "F");
+      doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(...ink);
+      doc.text(f.verdict, M + 16, y + 17);
+      // tier badge
+      const tierMap = { self: ["Self", [234,247,239],[19,101,54]], guided: ["Guided", [238,243,255],[36,86,201]], tech: ["Tech", [251,234,234],[143,31,31]] };
+      const [tlabel, tbg, tfg] = tierMap[f.tier] || tierMap.self;
+      doc.setFontSize(8);
+      const bw = doc.getTextWidth(tlabel.toUpperCase()) + 16;
+      doc.setFillColor(...tbg); doc.roundedRect(W - M - bw - 16, y + 6, bw, 14, 7, 7, "F");
+      doc.setTextColor(...tfg); doc.text(tlabel.toUpperCase(), W - M - bw - 16 + bw / 2, y + 15, { align: "center" });
+      // body
+      let ly = y + 40;
+      doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(51, 64, 79);
+      doc.text(bodyLines, M + 16, ly); ly += bodyLines.length * 12 + 6;
+      doc.setDrawColor(...line); doc.setLineDashPattern([2, 2], 0);
+      doc.line(M + 16, ly - 2, W - M - 16, ly - 2); doc.setLineDashPattern([], 0);
+      ly += 8;
+      doc.setTextColor(...ink); doc.text(actionLines, M + 16, ly);
+      y += cardH + 12;
+    }
+  }
+
+  // ── clean list ──
+  if (model.clean.length) {
+    sectionTitle("What looks good");
+    const rows = Math.ceil(model.clean.length / 2);
+    const boxH = 16 + rows * 16;
+    doc.setDrawColor(...line); doc.setLineWidth(0.5);
+    doc.roundedRect(M, y, W - 2 * M, boxH, 8, 8, "S");
+    doc.setFontSize(9);
+    model.clean.forEach((c, i) => {
+      const col = i % 2, row = Math.floor(i / 2);
+      const x = M + 16 + col * ((W - 2 * M) / 2);
+      const ry = y + 18 + row * 16;
+      doc.setTextColor(...green); doc.setFont("helvetica", "bold"); doc.text("+", x, ry);
+      doc.setTextColor(51, 64, 79); doc.setFont("helvetica", "normal"); doc.text(c, x + 12, ry);
+    });
+    y += boxH + 4;
+  }
+
+  // ── footer ──
+  y += 24;
+  doc.setDrawColor(...line); doc.setLineWidth(0.5); doc.line(M, y, W - M, y);
+  y += 16;
+  doc.setDrawColor(...blue); doc.setLineWidth(1.2);
+  doc.roundedRect(M, y - 10, 128, 20, 5, 5, "S");
+  doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(...blue);
+  doc.text("REVIEWED & APPROVED", M + 64, y + 3, { align: "center" });
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(...muted);
+  doc.text(`Reviewed by ${approverName || "Factory Automation"} — every MillPulse report is personally checked before it reaches you.`, M + 140, y + 3);
+  y += 22;
+  doc.setFontSize(7.5); doc.setTextColor(...muted);
+  const disc = "MillPulse reads diagnostic data written by your machine's own Roland software. It does not modify, control, or connect to the machine directly. Roland and DWX are trademarks of Roland DG Corporation; Factory Automation is an independent service provider and is not affiliated with or endorsed by Roland DG.";
+  doc.text(doc.splitTextToSize(disc, W - 2 * M), M, y);
+
+  doc.save(`MillPulse_${model.serial}_cc${model.correctionCount}.pdf`);
+}
+
 function DiceEntryCard({ entry, onChangeLabel, onChangeCell, onRemove, removable }) {
   return (
     <div className="diag-report-card">
@@ -3859,6 +4144,32 @@ function Fleet({ msg }) {
             {open && (
               <div style={{ marginTop: 12 }}>
                 <MachineOwnerEditor serial={serial} owner={owner} customers={customers} onSave={saveMachineOwner} />
+
+                {/* MillPulse customer report — generate PDF for review/approval */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '10px 0 14px' }}>
+                  <button
+                    className="btn bp bs"
+                    style={{ height: 30, fontSize: 11 }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const sorted = Array.isArray(history) ? history : [];
+                      const idx = sorted.indexOf(latest);
+                      const prevRow = idx > 0 ? sorted[idx - 1] : null;
+                      const diag = fleetDiagnose(latest, prevRow);
+                      const model = buildMillPulseReportModel({
+                        latest, diag,
+                        customerName: customer?.company || null,
+                        ownerNickname: owner?.nickname || null,
+                      });
+                      generateMillPulsePdf(model, 'Devon Todd').catch(err => {
+                        alert('Report generation failed: ' + (err?.message || err));
+                      });
+                    }}
+                  >
+                    📄 Generate MillPulse Report
+                  </button>
+                  <span className="diag-meta" style={{ margin: 0 }}>Review the PDF, then send to the customer.</span>
+                </div>
 
                 {/* trend across correction counts — graph or table */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
