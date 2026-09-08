@@ -3457,7 +3457,7 @@ function Fleet({ msg }) {
       // pull every report, newest first; we group by serial client-side
       const [r, ownersData, customersData, alertsData] = await Promise.all([
         fetch(
-          `${SUPABASE_URL}/rest/v1/mill_reports?select=serial,model,correction_count,firmware_main,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length,spindle_hours,total_work_time,report_date,recent_errors,is_latest,created_at,lab_name&order=serial.asc,correction_count.asc`,
+          `${SUPABASE_URL}/rest/v1/mill_reports?select=serial,model,correction_count,firmware_main,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length,spindle_hours,total_work_time,report_date,recent_errors,is_latest,created_at,lab_name,lab_email&order=serial.asc,correction_count.asc`,
           { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
         ).then(res => res.json()),
         db.get('machines').catch(() => []),
@@ -3486,23 +3486,31 @@ function Fleet({ msg }) {
     }
   };
 
-  // Fires the "📣 Notify Customer" flow: emails the customer the exact issue
-  // + fix shown on this card (api/send-fleet-alert.js builds and sends it,
-  // then logs a fleet_alerts row), and logs it to Fleet's own alerts state
-  // so the badge appears immediately without waiting on a reload. `rec` is
-  // the same {check,label,cause,action} object topRecommendation() already
-  // computed for this card, passed in from the click handler below — so the
-  // email can never say something different from what's on screen.
-  const notifyCustomer = async (serial, customer, correctionCount, rec) => {
+  // Fires the "📣 Notify Customer" flow: emails the exact issue + fix shown
+  // on this card (api/send-fleet-alert.js builds and sends it, then logs a
+  // fleet_alerts row), and logs it to Fleet's own alerts state so the badge
+  // appears immediately without waiting on a reload. `rec` is the same
+  // {check,label,cause,action} object topRecommendation() already computed
+  // for this card, passed in from the click handler below — so the email
+  // can never say something different from what's on screen.
+  //
+  // `toEmail`/`toName` are resolved by the caller (see the button below):
+  // the lab-entered contact email — captured at install time, often the
+  // actual technician rather than whoever's on the customer record — wins
+  // over the linked customer's email when both exist. `customerId` is only
+  // used for logging the alert against a customer when one happens to be
+  // linked; it's fine for it to be null (an unassigned machine can still
+  // get notified straight at its lab-entered contact email).
+  const notifyCustomer = async (serial, toEmail, toName, customerId, correctionCount, rec) => {
     if (!rec) { msg && msg('⚠️ No specific recommendation to send yet for this reading', 'bad'); return; }
-    if (!customer?.email) { msg && msg('⚠️ This machine has no linked customer email — assign one above first', 'bad'); return; }
+    if (!toEmail) { msg && msg('⚠️ No email to notify — add a contact email at install time, or link a customer with an email', 'bad'); return; }
     setNotifyingSerial(serial);
     try {
       const r = await fetch('/api/send-fleet-alert', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          serial, customerId: customer.id, correctionCount,
+          serial, toEmail, toName, customerId: customerId || null, correctionCount,
           checkKey: rec.check, label: rec.label, cause: rec.cause, action: rec.action,
         }),
       });
@@ -3826,6 +3834,15 @@ function Fleet({ msg }) {
         const rec = topRecommendation(latest, history);
         const displayName = customer?.company || (owner?.nickname) || serial;
         const alert = alertBySerial[serial];
+        // The lab-entered contact email (from MillPulse Setup at install
+        // time) wins over the linked customer's email on file -- that
+        // customer record is often a billing/office contact, not
+        // necessarily whoever actually runs this specific machine. Falls
+        // back to the customer's email when no lab email was ever given,
+        // and works even for an unassigned machine (no customer at all) as
+        // long as a lab email came through.
+        const notifyEmail = latest?.lab_email || customer?.email || null;
+        const notifyName = customer?.company || latest?.lab_name || serial;
         return (
           <div key={serial} className="diag-report-card">
             <div
@@ -3848,7 +3865,7 @@ function Fleet({ msg }) {
                     right customer in the OWNER dropdown below, not authoritative. */}
                 {!customer && latest?.lab_name && (
                   <span style={{fontSize:9,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",border:'1px solid var(--bdr)',borderRadius:4,padding:'1px 6px'}}>
-                    reported as "{latest.lab_name}"
+                    reported as "{latest.lab_name}"{latest?.lab_email && ` · ${latest.lab_email}`}
                   </span>
                 )}
                 {alert && (
@@ -3886,12 +3903,17 @@ function Fleet({ msg }) {
             {rec && (
               <div className="diag-flag-action" style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <span>→ {rec.label}: {rec.action}</span>
-                {customer?.email && (
+                {notifyEmail && (
+                  <span style={{ marginLeft: 'auto', fontSize: 9, color: 'var(--txd)', fontFamily: "'IBM Plex Mono',monospace" }}>
+                    to {notifyEmail}{latest?.lab_email && customer?.email && latest.lab_email !== customer.email && ' (lab contact)'}
+                  </span>
+                )}
+                {notifyEmail && (
                   <button
                     className="btn bs"
-                    style={{ height: 24, fontSize: 10, marginLeft: 'auto' }}
+                    style={{ height: 24, fontSize: 10 }}
                     disabled={notifyingSerial === serial}
-                    onClick={(e) => { e.stopPropagation(); notifyCustomer(serial, customer, latest?.correction_count, rec); }}
+                    onClick={(e) => { e.stopPropagation(); notifyCustomer(serial, notifyEmail, notifyName, customer?.id, latest?.correction_count, rec); }}
                   >
                     {notifyingSerial === serial ? '⏳' : (alert && alert.status !== 'resolved') ? '🔁 Re-notify' : '📣 Notify Customer'}
                   </button>
