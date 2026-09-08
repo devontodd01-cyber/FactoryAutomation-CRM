@@ -1366,19 +1366,11 @@ function parseReportBody(body) {
       continue;
     }
 
-    if (colonIdx === -1) {
-      // No colon at all → this is a section header; open a child object.
+    if (colonIdx === -1 || valuePart === "") {
       const child = {};
       parent.obj[key] = child;
       parent.lastKey = key;
       stack.push({ indent, obj: child, lastKey: null });
-    } else if (valuePart === "") {
-      // Has a colon but nothing after it → an empty FIELD (e.g. "SERIAL
-      // NUMBER: "), not a section. Store an empty string, never an object —
-      // an object here renders as a raw {} child (React error #31) and also
-      // breaks any downstream code expecting a scalar/serial value.
-      parent.obj[key] = "";
-      parent.lastKey = key;
     } else {
       parent.obj[key] = parseFieldValue(valuePart);
       parent.lastKey = key;
@@ -1448,8 +1440,6 @@ const DWX_THRESHOLDS = {
     "base_tool_length_drift",
     "a_axis_angle_offset",
     "b_axis_angle_offset",
-    // Spindle service-life (wear hours) — independent of calibration signals.
-    "spindle_hours",
   ],
   aAxisP1P2YGapMax: 100,
   bAxisP1P2XGapMax: 100,
@@ -1469,12 +1459,6 @@ const DWX_THRESHOLDS = {
   baseToolLengthStepMax: 100,
   angleOffsetRangeMax: 200,
   angleOffsetAdjacentDiffMax: 50,
-  // Spindle unit service life (SpindleUnit.TotalTime, in whole hours).
-  // Wear-based, identical on every DWX model — NOT gated on
-  // thresholdsValidated: 2000 h is 2000 h regardless of platform.
-  // 1800 = plan replacement soon; 2000 = replace now, quality may fade.
-  spindleHoursWarn: 1800,
-  spindleHoursReplace: 2000,
 };
 
 const MACHINE_PROFILES = {
@@ -1514,18 +1498,6 @@ function parseInlineArrNF(s) {
   const inner = s.trim().replace(/^\[/, "").replace(/\]$/, "");
   if (!inner.trim()) return [];
   return inner.split(",").map((x) => { const n = parseFloat(x.trim()); return Number.isNaN(n) ? x.trim() : n; });
-}
-
-// SpindleUnit.TotalTime is "HH:MM" (e.g. "749:58"). Return the whole-hours
-// integer (749). Guards against decimal-parse bugs — "749.58" as a float would
-// make the 2000 h threshold compare wrong. Accepts a number too (already-hours).
-function parseSpindleHours(v) {
-  if (typeof v === "number" && Number.isFinite(v)) return Math.floor(v);
-  if (typeof v !== "string") return null;
-  const m = v.trim().match(/^(\d+):(\d{1,2})$/);
-  if (m) return parseInt(m[1], 10);
-  const n = parseInt(v.trim(), 10);
-  return Number.isNaN(n) ? null : n;
 }
 
 function parseNewFormatTree(rawText) {
@@ -1580,13 +1552,6 @@ function normalizeNewToLegacy(tree) {
   legacyRac["CORRECTION COUNT"] = typeof rac.CorrectionCount === "number" ? rac.CorrectionCount : null;
   legacyRac["BASE TOOL LENGTH"] = typeof rac.BaseToolLength === "number" ? rac.BaseToolLength : null;
   if (rac.SpindleGradient) legacyRac["SPINDLE GRADIENT"] = { X: rac.SpindleGradient.x, Y: rac.SpindleGradient.y };
-  // SpindleUnit.TotalTime is the service-life clock ("HH:MM", e.g. "749:58").
-  // Store the whole-hours integer under the legacy section for downstream use.
-  {
-    const su = tree.SpindleUnit;
-    const hrs = parseSpindleHours(su && su.TotalTime);
-    if (hrs != null) legacyRac["SPINDLE HOURS"] = hrs;
-  }
 
   const conv = (ax) => {
     if (!ax) return null;
@@ -1602,19 +1567,9 @@ function normalizeNewToLegacy(tree) {
     legacyRac["CORRECTION BASE POINT"] = [rac.CorrectionBasePoint.x, rac.CorrectionBasePoint.y, rac.CorrectionBasePoint.z];
   }
   sections["ROTARY AXIS CORRECTION"] = legacyRac;
-  // The DMS/53DC format has no single "MAGAZINE POSITION OFFSET" line like the
-  // legacy format. Per the model translation table, the 53DC equivalent is
-  // ToolSensorPositionOffset (the tool-setter reference) — that is the value to
-  // trend for magazine drift on this platform. (StockerPositionOffset is a
-  // separate per-stocker list and is NOT the magazine equivalent here.) This
-  // closes the last cross-format gap: magazine drift now trends on the 53DC.
-  const atc = tree.AutomaticToolChanger || {};
-  const legacyAtc = {};
-  const magObj = atc.ToolSensorPositionOffset;
-  if (magObj && typeof magObj.x === "number") {
-    legacyAtc["MAGAZINE POSITION OFFSET"] = [magObj.x, magObj.y, magObj.z];
-  }
-  sections["AUTOMATIC TOOL CHANGER"] = legacyAtc;
+  // The new format doesn't expose MAGAZINE POSITION OFFSET in the same place;
+  // leave ATC empty so that check simply no-ops rather than misreading.
+  sections["AUTOMATIC TOOL CHANGER"] = {};
   return sections;
 }
 
@@ -1649,14 +1604,6 @@ function parseVPanelReport(rawText) {
   const profile = getProfile(model);
   const rac = sections["ROTARY AXIS CORRECTION"] || {};
   const atc = sections["AUTOMATIC TOOL CHANGER"] || {};
-  // Spindle service-life hours live in their own SPINDLE UNIT section in the
-  // legacy format; surface them alongside the rotary-axis metrics so the same
-  // downstream row-builder/check reads one slot regardless of report format.
-  {
-    const su = sections["SPINDLE UNIT"];
-    const hrs = parseSpindleHours(su && (su["TOTAL TIME"] != null ? su["TOTAL TIME"] : su["TOTALTIME"]));
-    if (hrs != null) rac["SPINDLE HOURS"] = hrs;
-  }
   return {
     model, serial, profile, sections, rac, atc,
     correctionCount: typeof rac["CORRECTION COUNT"] === "number" ? rac["CORRECTION COUNT"] : null,
@@ -1688,28 +1635,6 @@ function diagnoseGradientHard(r, axis) {
 }
 function diagnoseSpindleGradientXHard(r) { return diagnoseGradientHard(r, "X"); }
 function diagnoseSpindleGradientYHard(r) { return diagnoseGradientHard(r, "Y"); }
-
-// Spindle service-life (wear hours). Three-state, single-report — no previous
-// value needed. Wear is model-independent, so this is NOT gated on
-// thresholdsValidated (unlike calibration checks): 2000 h means the same on
-// every DWX. status: 'healthy' | 'plan' | 'replace'. flagged only at/over
-// the replace line so it drives an action; 'plan' surfaces as an early note.
-function diagnoseSpindleHours(r) {
-  const hrs = r.rac ? r.rac["SPINDLE HOURS"] : null;
-  const warn = r.profile.thresholds.spindleHoursWarn;
-  const replace = r.profile.thresholds.spindleHoursReplace;
-  if (typeof hrs !== "number") {
-    return { check: "spindle_hours", hours: null, warnThreshold: warn, replaceThreshold: replace, status: "unknown", flagged: false, thresholdsValidatedForModel: true };
-  }
-  let status = "healthy";
-  if (hrs >= replace) status = "replace";
-  else if (hrs >= warn) status = "plan";
-  return {
-    check: "spindle_hours", hours: hrs, warnThreshold: warn, replaceThreshold: replace,
-    status, flagged: status === "replace", planReplacement: status === "plan",
-    thresholdsValidatedForModel: true,
-  };
-}
 
 // Bounce (rate-of-change) check: |value[n] − value[n-1]| ≥ 0.0005 between
 // consecutive reports for the SAME machine, regardless of whether the
@@ -1896,7 +1821,6 @@ const DIAGNOSTIC_CHECKS = {
   base_tool_length_drift: (r, prev) => diagnoseBaseToolLengthDrift(r, prev.baseToolLength, prev.origin, prev.magazineOffset),
   a_axis_angle_offset: (r) => diagnoseAAxisAngleOffset(r),
   b_axis_angle_offset: (r) => diagnoseBAxisAngleOffset(r),
-  spindle_hours: (r) => diagnoseSpindleHours(r),
 };
 
 // Cross-check pass: within the SAME metric, a bounce flag outranks its
@@ -1973,7 +1897,6 @@ const CHECK_INFO = {
   a_axis_angle_offset: { label: "Bad A Axis", cause: "AngleOffset(Base) curve (excluding the fixed index-0 baseline) has a range over 200 units or an adjacent-value jump over 50 units — bad A-axis.", action: "Inspect the A-axis." },
   b_axis_angle_offset: { label: "Bad B Axis", cause: "AngleOffset(Base) curve (excluding the fixed index-0 baseline) has a range over 200 units or an adjacent-value jump over 50 units — bad B-axis.", action: "Inspect the B-axis." },
   dice_3b_9b_bottom_width: { label: "DICE 3B/9B Bottom Width Y-Pair", cause: "Most reliable physical signal for A-axis/Y-axis origin mismatch — the error is only fully expressed at full-depth engagement.", action: "If elevated alongside a flagged A-axis gap, proceed toward an A-axis rebuild." },
-  spindle_hours: { label: "Spindle Service Life", cause: "Spindle unit run-time has reached its service-life limit (2000 h). Beyond this, milling quality may begin to fade.", action: "Replace the spindle unit (customer-installable — procedure and part supplied)." },
 };
 
 const DICE_COLS = {
@@ -2000,291 +1923,6 @@ function DiceRunGrid({ label, cols, values, onChange }) {
       </div>
     </div>
   );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// MillPulse customer report — translation layer + PDF builder (Stage 1)
-//
-// The customer report is a TRANSLATION of the internal diagnostics: it shows
-// plain-language verdicts, a service tier, and an action — never raw metrics.
-// The numbers stay in the Fleet view; the PDF carries judgement, not data.
-//
-// MILLPULSE_VERDICTS maps an internal check key to how it reads to a customer.
-// tier: 'self' | 'guided' | 'tech'. Only checks that a customer report should
-// ever surface appear here; anything not listed is treated as internal-only.
-// ─────────────────────────────────────────────────────────────────────────────
-const MILLPULSE_VERDICTS = {
-  spindle_gradient_x_collet_wear: { verdict: "Collet wear detected", tier: "self",
-    body: "Spindle runout has moved beyond tolerance, which points to a worn collet. Left unaddressed this can affect fit and surface finish.",
-    action: "Replace the collet (customer-installable). We'll supply the procedure and the part.", part: "Roland DWX collet" },
-  spindle_gradient_y_collet_wear: { verdict: "Collet wear detected", tier: "self",
-    body: "The spindle is showing an inconsistent runout pattern, typically caused by a worn collet or calibration-pin seating.",
-    action: "Replace the collet (customer-installable). We'll supply the procedure and the part.", part: "Roland DWX collet" },
-  spindle_gradient_x_drift: { verdict: "Spindle runout trending", tier: "self",
-    body: "Spindle runout is drifting across recent calibrations — an early sign of collet wear.",
-    action: "Plan a collet replacement soon. We'll supply the procedure and the part.", part: "Roland DWX collet" },
-  spindle_gradient_y_drift: { verdict: "Spindle runout trending", tier: "self",
-    body: "Spindle runout is showing an inconsistent trend, an early sign of collet wear.",
-    action: "Plan a collet replacement soon. We'll supply the procedure and the part.", part: "Roland DWX collet" },
-  a_axis_p1_p2_gap: { verdict: "A-axis rotary alignment", tier: "tech",
-    body: "The A-axis rotary alignment is outside the expected range, which can affect milling accuracy on angled work.",
-    action: "This needs a technician — likely an A-axis adjustment or rebuild. We'll arrange it with you." },
-  a_axis_p1_p2_gap_drift: { verdict: "A-axis alignment shifting", tier: "guided",
-    body: "The A-axis rotary alignment is gradually shifting across recent calibrations. Not yet out of tolerance, but trending.",
-    action: "Book a guided remote session so we can assess it live before it affects quality." },
-  b_axis_p1_p2_gap: { verdict: "B-axis rotary geometry", tier: "tech",
-    body: "The B-axis rotary geometry is outside the expected range, which can affect milling accuracy.",
-    action: "This needs a technician to inspect the B-axis rotary assembly. We'll arrange it with you." },
-  b_axis_p1_p2_gap_drift: { verdict: "B-axis rotary geometry drifting", tier: "guided",
-    body: "The B-axis rotary position is gradually shifting across recent calibrations. It is not yet outside tolerance, so milling quality is unaffected today — but the trend is consistent and worth addressing before it grows.",
-    action: "Book a guided remote session. We'll walk your technician through checking the B-axis geometry live — no travel required, usually resolved same day." },
-  magazine_offset_drift: { verdict: "Positioning / ballscrew", tier: "tech",
-    body: "Tool-changer positioning is drifting in a way that points to ballscrew wear or backlash.",
-    action: "This needs a technician to inspect the ballscrew. We'll arrange it with you." },
-  base_tool_length_drift: { verdict: "Positioning / ballscrew", tier: "tech",
-    body: "Base tool-length is drifting alongside positioning — a sign of ballscrew wear or backlash.",
-    action: "This needs a technician to inspect the ballscrew. We'll arrange it with you." },
-  spindle_hours: { verdict: "Spindle at service life", tier: "self",
-    body: "Spindle run-time has reached its service-life limit. Beyond this point, milling quality may gradually begin to fade.",
-    action: "Replace the spindle unit (customer-installable). We'll supply the procedure and the part.", part: "Roland DWX spindle unit" },
-};
-
-// Friendly names for the "what looks good" reassurance list, keyed by system.
-const MILLPULSE_CLEAN_LABELS = {
-  spindle: "Spindle condition — within spec",
-  collet: "Collet — no wear detected",
-  a_axis: "A-axis rotary alignment — stable",
-  b_axis: "B-axis rotary geometry — stable",
-  ballscrew: "Ballscrew / positioning — normal",
-  tool_changer: "Tool changer — normal",
-  disc_changer: "Disc changer — normal",
-};
-
-// Build the customer-facing model from a machine's latest row + its diagnostics.
-// diag is the fleetDiagnose() output array for (latest, prevRow).
-function buildMillPulseReportModel({ latest, diag, customerName, ownerNickname }) {
-  const findings = [];
-  const seenVerdicts = new Set();
-  for (const d of (diag || [])) {
-    // spindle_hours flags only at 'replace'; 'plan' is surfaced separately.
-    const isSpindlePlan = d.check === "spindle_hours" && d.planReplacement;
-    if (!d.flagged && !isSpindlePlan) continue;
-    const v = MILLPULSE_VERDICTS[d.check];
-    if (!v) continue;
-    // collapse duplicate verdicts (e.g. X and Y collet wear -> one card)
-    if (seenVerdicts.has(v.verdict)) continue;
-    seenVerdicts.add(v.verdict);
-    findings.push({ ...v, planOnly: isSpindlePlan });
-  }
-
-  // Overall status: red if any tech/self hard flag, amber if only guided or
-  // plan-replacement trends, green if nothing.
-  let status = "green";
-  if (findings.some(f => !f.planOnly && (f.tier === "tech" || f.tier === "self"))) status = "red";
-  else if (findings.length > 0) status = "amber";
-
-  // Spindle life numbers (always shown).
-  const hrs = typeof latest?.spindle_hours === "number" ? latest.spindle_hours : null;
-  const spindleLife = hrs != null
-    ? { hours: hrs, limit: 2000, pct: Math.min(100, Math.round((hrs / 2000) * 100)),
-        remaining: Math.max(0, 2000 - hrs),
-        state: hrs >= 2000 ? "replace" : hrs >= 1800 ? "plan" : "healthy" }
-    : null;
-
-  // Clean list: everything not flagged. Derive from what DIDN'T fire.
-  const flaggedChecks = new Set((diag || []).filter(d => d.flagged).map(d => d.check));
-  const clean = [];
-  const spindleFlagged = flaggedChecks.has("spindle_gradient_x_collet_wear") || flaggedChecks.has("spindle_gradient_y_collet_wear") || flaggedChecks.has("spindle_gradient_x_drift") || flaggedChecks.has("spindle_gradient_y_drift") || flaggedChecks.has("spindle_hours");
-  if (!spindleFlagged) { clean.push(MILLPULSE_CLEAN_LABELS.spindle); clean.push(MILLPULSE_CLEAN_LABELS.collet); }
-  if (!flaggedChecks.has("a_axis_p1_p2_gap") && !flaggedChecks.has("a_axis_p1_p2_gap_drift")) clean.push(MILLPULSE_CLEAN_LABELS.a_axis);
-  if (!flaggedChecks.has("b_axis_p1_p2_gap") && !flaggedChecks.has("b_axis_p1_p2_gap_drift")) clean.push(MILLPULSE_CLEAN_LABELS.b_axis);
-  if (!flaggedChecks.has("magazine_offset_drift") && !flaggedChecks.has("base_tool_length_drift")) clean.push(MILLPULSE_CLEAN_LABELS.ballscrew);
-  clean.push(MILLPULSE_CLEAN_LABELS.tool_changer);
-  if ((latest?.model || "").includes("53DC")) clean.push(MILLPULSE_CLEAN_LABELS.disc_changer);
-
-  const statusText = {
-    green: { lbl: "Operating within tolerance — keep milling", sub: "Your mill is performing normally across all monitored systems." },
-    amber: { lbl: "Attention soon — plan a fix, no rush", sub: "Your mill is milling within tolerance today. One or more areas are trending and should be looked at before they affect quality." },
-    red: { lbl: "Action needed", sub: "One or more areas are outside tolerance and should be addressed now to protect milling quality." },
-  }[status];
-
-  return {
-    machine: latest?.model || "Roland DWX",
-    serial: latest?.serial || "—",
-    correctionCount: latest?.correction_count ?? "—",
-    reportDate: new Date().toLocaleDateString("en-CA", { day: "numeric", month: "long", year: "numeric" }),
-    customerName: customerName || ownerNickname || null,
-    status, statusText, findings, spindleLife, clean,
-  };
-}
-
-// Draw the report as a vector PDF via jsPDF (dynamically imported so it doesn't
-// bloat the initial bundle). Mirrors the approved light-background mockup:
-// dark header band + blue MillPulse mark + ECG line, machine strip, traffic
-// -light status, spindle bar, finding cards with tier badges, clean list,
-// approval stamp + Roland disclaimer footer. Returns nothing; triggers save().
-async function generateMillPulsePdf(model, approverName) {
-  const { jsPDF } = await import("jspdf");
-  const doc = new jsPDF({ unit: "pt", format: "a4" });
-  const W = doc.internal.pageSize.getWidth();   // ~595
-  const M = 40;                                  // side margin
-  const blue = [47, 123, 255], ink = [15, 24, 38], muted = [91, 100, 116];
-  const green = [31, 157, 87], amber = [217, 138, 19], red = [210, 59, 59];
-  const line = [227, 232, 240];
-  let y = 0;
-
-  // ── header band ──
-  doc.setFillColor(...ink); doc.rect(0, 0, W, 78, "F");
-  doc.setFont("helvetica", "bold"); doc.setFontSize(22);
-  doc.setTextColor(255, 255, 255); doc.text("Mill", M, 34);
-  const millW = doc.getTextWidth("Mill");
-  doc.setTextColor(...blue); doc.text("Pulse", M + millW, 34);
-  doc.setFont("helvetica", "bold"); doc.setFontSize(9);
-  doc.setTextColor(200, 214, 245); doc.text("Quality You Trust, Insight You Need!", M, 48);
-  doc.setFont("helvetica", "normal"); doc.setFontSize(8);
-  doc.setTextColor(159, 176, 207);
-  doc.text("Factory Automation  ·  Independent CNC Services", W - M, 30, { align: "right" });
-  doc.text("support@factory-automation.ca", W - M, 42, { align: "right" });
-  // ECG line
-  doc.setDrawColor(...blue); doc.setLineWidth(1.2);
-  const ey = 68;
-  const seg = [[M,ey],[M+90,ey],[M+100,ey-8],[M+108,ey+10],[M+116,ey],[M+230,ey],[M+240,ey-11],[M+248,ey+12],[M+256,ey],[W-M,ey]];
-  for (let i = 0; i < seg.length - 1; i++) doc.line(seg[i][0], seg[i][1], seg[i+1][0], seg[i+1][1]);
-  y = 78;
-
-  // ── machine strip ──
-  y += 24;
-  const cols = [
-    ["Machine", model.machine], ["Serial", model.serial],
-    ["Correction count", String(model.correctionCount)], ["Report date", model.reportDate],
-  ];
-  const cw = (W - 2 * M) / 4;
-  cols.forEach((c, i) => {
-    const x = M + i * cw;
-    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(...muted);
-    doc.text(c[0], x, y);
-    doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(...ink);
-    doc.text(String(c[1]), x, y + 14);
-  });
-  y += 24;
-  doc.setDrawColor(...line); doc.setLineWidth(0.5); doc.line(M, y, W - M, y);
-
-  // ── status banner ──
-  y += 18;
-  const sc = model.status === "green" ? green : model.status === "amber" ? amber : red;
-  const bannerBg = model.status === "green" ? [234,247,239] : model.status === "amber" ? [253,246,233] : [251,234,234];
-  const bh = 46;
-  doc.setFillColor(...bannerBg); doc.roundedRect(M, y, W - 2 * M, bh, 8, 8, "F");
-  doc.setFillColor(...sc); doc.circle(M + 18, y + bh / 2, 6, "F");
-  doc.setFont("helvetica", "bold"); doc.setFontSize(12); doc.setTextColor(...sc);
-  doc.text(model.statusText.lbl, M + 34, y + 20);
-  doc.setFont("helvetica", "normal"); doc.setFontSize(8.5); doc.setTextColor(...muted);
-  doc.text(doc.splitTextToSize(model.statusText.sub, W - 2 * M - 44), M + 34, y + 34);
-  y += bh + 8;
-
-  const sectionTitle = (t) => {
-    y += 16;
-    doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(...blue);
-    doc.text(t.toUpperCase(), M, y);
-    doc.setDrawColor(...line); doc.setLineWidth(0.5);
-    const tw = doc.getTextWidth(t.toUpperCase());
-    doc.line(M + tw + 8, y - 3, W - M, y - 3);
-    y += 8;
-  };
-
-  // ── spindle life ──
-  if (model.spindleLife) {
-    sectionTitle("Spindle service life");
-    const sl = model.spindleLife, boxH = 52;
-    doc.setDrawColor(...line); doc.setLineWidth(0.5);
-    doc.roundedRect(M, y, W - 2 * M, boxH, 8, 8, "S");
-    doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(...ink);
-    doc.text("Spindle run-time", M + 16, y + 18);
-    doc.setFont("helvetica", "bold");
-    doc.text(`${sl.hours} h / ${sl.limit} h`, W - M - 16, y + 18, { align: "right" });
-    // bar
-    const barX = M + 16, barY = y + 26, barW = W - 2 * M - 32, barH = 10;
-    doc.setFillColor(238, 241, 246); doc.roundedRect(barX, barY, barW, barH, 5, 5, "F");
-    const fillC = sl.state === "replace" ? red : sl.state === "plan" ? amber : green;
-    doc.setFillColor(...fillC);
-    doc.roundedRect(barX, barY, Math.max(6, barW * sl.pct / 100), barH, 5, 5, "F");
-    doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(...muted);
-    const cap = sl.state === "replace"
-      ? "At service life — replace the spindle unit. Milling quality may begin to fade."
-      : sl.state === "plan"
-      ? `Approaching service life — approximately ${sl.remaining} hours remaining. Plan a replacement.`
-      : `Healthy — approximately ${sl.remaining} hours of service life remaining. We'll advise you at 1800 hours.`;
-    doc.text(cap, barX, barY + barH + 12);
-    y += boxH + 4;
-  }
-
-  // ── findings ──
-  if (model.findings.length) {
-    sectionTitle("What needs attention");
-    for (const f of model.findings) {
-      const bodyLines = doc.splitTextToSize(f.body, W - 2 * M - 32);
-      const actionLines = doc.splitTextToSize("Recommended: " + f.action, W - 2 * M - 32);
-      const cardH = 30 + bodyLines.length * 12 + 10 + actionLines.length * 12 + 10;
-      doc.setDrawColor(...line); doc.setLineWidth(0.5);
-      doc.roundedRect(M, y, W - 2 * M, cardH, 8, 8, "S");
-      // header row
-      doc.setFillColor(250, 251, 253); doc.roundedRect(M, y, W - 2 * M, 26, 8, 8, "F");
-      doc.rect(M, y + 18, W - 2 * M, 8, "F");
-      doc.setFont("helvetica", "bold"); doc.setFontSize(11); doc.setTextColor(...ink);
-      doc.text(f.verdict, M + 16, y + 17);
-      // tier badge
-      const tierMap = { self: ["Self", [234,247,239],[19,101,54]], guided: ["Guided", [238,243,255],[36,86,201]], tech: ["Tech", [251,234,234],[143,31,31]] };
-      const [tlabel, tbg, tfg] = tierMap[f.tier] || tierMap.self;
-      doc.setFontSize(8);
-      const bw = doc.getTextWidth(tlabel.toUpperCase()) + 16;
-      doc.setFillColor(...tbg); doc.roundedRect(W - M - bw - 16, y + 6, bw, 14, 7, 7, "F");
-      doc.setTextColor(...tfg); doc.text(tlabel.toUpperCase(), W - M - bw - 16 + bw / 2, y + 15, { align: "center" });
-      // body
-      let ly = y + 40;
-      doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(51, 64, 79);
-      doc.text(bodyLines, M + 16, ly); ly += bodyLines.length * 12 + 6;
-      doc.setDrawColor(...line); doc.setLineDashPattern([2, 2], 0);
-      doc.line(M + 16, ly - 2, W - M - 16, ly - 2); doc.setLineDashPattern([], 0);
-      ly += 8;
-      doc.setTextColor(...ink); doc.text(actionLines, M + 16, ly);
-      y += cardH + 12;
-    }
-  }
-
-  // ── clean list ──
-  if (model.clean.length) {
-    sectionTitle("What looks good");
-    const rows = Math.ceil(model.clean.length / 2);
-    const boxH = 16 + rows * 16;
-    doc.setDrawColor(...line); doc.setLineWidth(0.5);
-    doc.roundedRect(M, y, W - 2 * M, boxH, 8, 8, "S");
-    doc.setFontSize(9);
-    model.clean.forEach((c, i) => {
-      const col = i % 2, row = Math.floor(i / 2);
-      const x = M + 16 + col * ((W - 2 * M) / 2);
-      const ry = y + 18 + row * 16;
-      doc.setTextColor(...green); doc.setFont("helvetica", "bold"); doc.text("+", x, ry);
-      doc.setTextColor(51, 64, 79); doc.setFont("helvetica", "normal"); doc.text(c, x + 12, ry);
-    });
-    y += boxH + 4;
-  }
-
-  // ── footer ──
-  y += 24;
-  doc.setDrawColor(...line); doc.setLineWidth(0.5); doc.line(M, y, W - M, y);
-  y += 16;
-  doc.setDrawColor(...blue); doc.setLineWidth(1.2);
-  doc.roundedRect(M, y - 10, 128, 20, 5, 5, "S");
-  doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.setTextColor(...blue);
-  doc.text("REVIEWED & APPROVED", M + 64, y + 3, { align: "center" });
-  doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(...muted);
-  doc.text(`Reviewed by ${approverName || "Factory Automation"} — every MillPulse report is personally checked before it reaches you.`, M + 140, y + 3);
-  y += 22;
-  doc.setFontSize(7.5); doc.setTextColor(...muted);
-  const disc = "MillPulse reads diagnostic data written by your machine's own Roland software. It does not modify, control, or connect to the machine directly. Roland and DWX are trademarks of Roland DG Corporation; Factory Automation is an independent service provider and is not affiliated with or endorsed by Roland DG.";
-  doc.text(doc.splitTextToSize(disc, W - 2 * M), M, y);
-
-  doc.save(`MillPulse_${model.serial}_cc${model.correctionCount}.pdf`);
 }
 
 function DiceEntryCard({ entry, onChangeLabel, onChangeCell, onRemove, removable }) {
@@ -2321,9 +1959,7 @@ function DiagFlagCard({ checkKey, data }) {
         {checkKey === 'b_axis_p1_p2_gap' && <>gap: {data.gap} (threshold {data.threshold})</>}
         {(checkKey === 'a_axis_p1_p2_gap_drift' || checkKey === 'b_axis_p1_p2_gap_drift') && <>gap: {data.gap}{data.previousGap!=null && <>, previous: {data.previousGap}, Δ {data.delta>0?'+':''}{data.delta?.toFixed(1)}</>} (step threshold {data.threshold})</>}
         {checkKey === 'dice_3b_9b_bottom_width' && <>3B: {data.v3}mm · 9B: {data.v9}mm · gap: {data.gap.toFixed(3)}mm (threshold {data.threshold}mm{data.thresholdNotValidated?', not validated':''})</>}
-        {checkKey === 'spindle_hours' && <>{data.hours != null ? <>{data.hours} / {data.replaceThreshold} h</> : 'no reading'}{data.status === 'plan' && <> · plan replacement soon (warn at {data.warnThreshold} h)</>}{data.status === 'replace' && <> · at/over service life</>}{data.status === 'healthy' && <> · healthy</>}</>}
       </div>
-      {checkKey === 'spindle_hours' && data.planReplacement && <div className="diag-flag-action" style={{color:'#ffb020'}}>→ Spindle approaching service life ({data.hours} / {data.replaceThreshold} h) — plan replacement. Customer-installable.</div>}
     </div>
   );
 }
@@ -2335,7 +1971,7 @@ function DiagnosticReportCard({ raw, report, diagnostics, diceCheck, index, onCh
     <div className="diag-report-card">
       <div className="diag-report-head">
         <div>
-          <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:14}}>{(typeof report.model === 'string' && report.model) || 'Unknown model'} · {(typeof report.serial === 'string' && report.serial) || 'Unknown serial'}</div>
+          <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:14}}>{report.model || 'Unknown model'} · {report.serial || 'Unknown serial'}</div>
           <div className="diag-meta">
             <span>Correction Count: {report.correctionCount ?? '—'}</span>
             {flaggedCount > 0 ? <span style={{color:'var(--rd)'}}>⚠ {flaggedCount} flagged</span> : <span style={{color:'var(--gr)'}}>✓ clean</span>}
@@ -3344,10 +2980,10 @@ function fleetTrendPoints(history) {
       gradientY: num(r.spindle_gradient_y),
       aGap: num(r.a_y_gap),
       bGap: num(r.b_x_gap),
-      originX: num(r.origin_x), originY: num(r.origin_y), originZ: num(r.origin_z),
-      magX: num(r.magazine_offset_x), magY: num(r.magazine_offset_y), magZ: num(r.magazine_offset_z),
+      originX: null, originY: null, originZ: null,
+      magX: null, magY: null, magZ: null,
       baseToolLength: num(r.base_tool_length),
-      angleOffsetRange: num(r.a_angle_offset_range), bAxisOffsetRange: num(r.b_angle_offset_range),
+      angleOffsetRange: null, bAxisOffsetRange: null,
     }))
     .sort((a, b) => a.corr - b.corr);
 }
@@ -3609,18 +3245,7 @@ function FleetSerialTrendGraphs({ serial, fleetHistory }) {
 // table already render '—' for anything null).
 function buildMillReportRow(report, rawText) {
   const rac = report.rac || {};
-  const atc = report.atc || {};
-  const sections = report.sections || {};
   const grad = rac["SPINDLE GRADIENT"] || {};
-  // Origin (XYZ), magazine position offset (XYZ), and A/B angle-offset range
-  // are derivable straight from the parsed report, but mill_reports never had
-  // columns for them — so the Fleet trend charts for these three read null and
-  // rendered flat at zero. Extract them here so the live sync carries them and
-  // Fleet is self-sufficient (no dependency on a separate Mill Diagnostics import).
-  const origin = extractOrigin(sections, rac);          // [x, y, z] or [null,null,null]
-  const mag = triplet(atc["MAGAZINE POSITION OFFSET"]); // [x, y, z] or [null,null,null]
-  const aOffRange = angleOffsetRange(rac);              // scalar or null
-  const bOffRange = bAxisOffsetRange(rac);              // scalar or null
   return {
     serial: report.serial,
     model: report.model,
@@ -3630,11 +3255,6 @@ function buildMillReportRow(report, rawText) {
     a_y_gap: rac["A-AXIS"] ? yGap(rac["A-AXIS"]) : null,
     b_x_gap: rac["B-AXIS"] ? xGap(rac["B-AXIS"]) : null,
     base_tool_length: typeof rac["BASE TOOL LENGTH"] === 'number' ? rac["BASE TOOL LENGTH"] : null,
-    spindle_hours: typeof rac["SPINDLE HOURS"] === 'number' ? rac["SPINDLE HOURS"] : null,
-    origin_x: origin[0], origin_y: origin[1], origin_z: origin[2],
-    magazine_offset_x: mag[0], magazine_offset_y: mag[1], magazine_offset_z: mag[2],
-    a_angle_offset_range: aOffRange,
-    b_angle_offset_range: bOffRange,
     report_date: new Date().toISOString(),
     // mill_reports has a NOT NULL raw_systemreport column — the sync agent
     // always stores the original report text there, so a manually-added row
@@ -3693,23 +3313,6 @@ function fleetDiagnose(latest, prev) {
   // previously passing bare 'a'/'b' here, which produced the wrong keys.
   gapAxis('a_axis', 'a_y_gap', 'aAxisP1P2YGapMax', 'aAxisP1P2YGapStepMax');
   gapAxis('b_axis', 'b_x_gap', 'bAxisP1P2XGapMax', 'bAxisP1P2XGapStepMax');
-
-  // Spindle service-life (wear hours) — model-independent, not gated on
-  // thresholdsValidated. Mirrors diagnoseSpindleHours for the Fleet path.
-  {
-    const hrs = latest.spindle_hours;
-    if (typeof hrs === 'number') {
-      let status = 'healthy';
-      if (hrs >= th.spindleHoursReplace) status = 'replace';
-      else if (hrs >= th.spindleHoursWarn) status = 'plan';
-      out.push({
-        check: 'spindle_hours', hours: hrs, warnThreshold: th.spindleHoursWarn,
-        replaceThreshold: th.spindleHoursReplace, status,
-        flagged: status === 'replace', planReplacement: status === 'plan',
-        thresholdsValidatedForModel: true,
-      });
-    }
-  }
 
   return annotateDiagnosticPriority(out);
 }
@@ -3781,6 +3384,12 @@ function MachineOwnerEditor({ serial, owner, customers, onSave }) {
     setNickname(owner?.nickname ?? '');
   }, [owner, serial]);
   const dirty = (owner?.customer_id ?? '') !== customerId || (owner?.nickname ?? '') !== nickname;
+  // `customers` arrives in whatever order it loaded from the DB — sort it
+  // here (case-insensitive) so the assign dropdown is always A→Z regardless
+  // of what order the caller's own list happens to be in.
+  const sortedCustomers = [...customers].sort((a, b) =>
+    (a.company || '').localeCompare(b.company || '', undefined, { sensitivity: 'base', numeric: true })
+  );
   return (
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', background: 'var(--sur2)', border: '1px solid var(--bdr)', borderRadius: 6, padding: '8px 10px', marginBottom: 12 }} onClick={e => e.stopPropagation()}>
       <span style={{ fontSize: 10, color: 'var(--txd)', fontFamily: "'IBM Plex Mono',monospace" }}>OWNER</span>
@@ -3790,7 +3399,7 @@ function MachineOwnerEditor({ serial, owner, customers, onSave }) {
         onChange={e => setCustomerId(e.target.value || '')}
       >
         <option value="">— Unassigned —</option>
-        {customers.map(c => <option key={c.id} value={c.id}>{c.company}</option>)}
+        {sortedCustomers.map(c => <option key={c.id} value={c.id}>{c.company}</option>)}
       </select>
       <input
         className="fi" style={{ maxWidth: 180, margin: 0 }}
@@ -3835,22 +3444,30 @@ function Fleet({ msg }) {
   // list) so the two don't collide.
   const [machineOwners, setMachineOwners] = useState([]);
   const [customers, setCustomers] = useState([]);
+  // Fleet-issue notification history — one row per "📣 Notify Customer"
+  // send, from the fleet_alerts table (see fleet_alerts.sql). Absent table
+  // (not yet created in Supabase) just comes back empty via .catch(), so
+  // this is safe to load before that migration has been run.
+  const [alerts, setAlerts] = useState([]);
+  const [notifyingSerial, setNotifyingSerial] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       // pull every report, newest first; we group by serial client-side
-      const [r, ownersData, customersData] = await Promise.all([
+      const [r, ownersData, customersData, alertsData] = await Promise.all([
         fetch(
-          `${SUPABASE_URL}/rest/v1/mill_reports?select=serial,model,correction_count,firmware_main,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length,spindle_hours,total_work_time,origin_x,origin_y,origin_z,magazine_offset_x,magazine_offset_y,magazine_offset_z,a_angle_offset_range,b_angle_offset_range,report_date,recent_errors,is_latest,created_at&order=serial.asc,correction_count.asc`,
+          `${SUPABASE_URL}/rest/v1/mill_reports?select=serial,model,correction_count,firmware_main,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length,spindle_hours,total_work_time,report_date,recent_errors,is_latest,created_at,lab_name&order=serial.asc,correction_count.asc`,
           { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
         ).then(res => res.json()),
         db.get('machines').catch(() => []),
         db.get('customers').catch(() => []),
+        db.get('fleet_alerts').catch(() => []),
       ]);
       setRows(Array.isArray(r) ? r : []);
       setMachineOwners(Array.isArray(ownersData) ? ownersData : []);
       setCustomers(Array.isArray(customersData) ? customersData : []);
+      setAlerts(Array.isArray(alertsData) ? alertsData : []);
     } catch (e) {
       msg && msg('Failed to load fleet: ' + e.message, 'bad');
       setRows([]);
@@ -3866,6 +3483,38 @@ function Fleet({ msg }) {
       msg && msg('✅ Saved');
     } catch (e) {
       msg && msg('⚠️ Could not save owner — ' + e.message, 'bad');
+    }
+  };
+
+  // Fires the "📣 Notify Customer" flow: emails the customer the exact issue
+  // + fix shown on this card (api/send-fleet-alert.js builds and sends it,
+  // then logs a fleet_alerts row), and logs it to Fleet's own alerts state
+  // so the badge appears immediately without waiting on a reload. `rec` is
+  // the same {check,label,cause,action} object topRecommendation() already
+  // computed for this card, passed in from the click handler below — so the
+  // email can never say something different from what's on screen.
+  const notifyCustomer = async (serial, customer, correctionCount, rec) => {
+    if (!rec) { msg && msg('⚠️ No specific recommendation to send yet for this reading', 'bad'); return; }
+    if (!customer?.email) { msg && msg('⚠️ This machine has no linked customer email — assign one above first', 'bad'); return; }
+    setNotifyingSerial(serial);
+    try {
+      const r = await fetch('/api/send-fleet-alert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          serial, customerId: customer.id, correctionCount,
+          checkKey: rec.check, label: rec.label, cause: rec.cause, action: rec.action,
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Send failed');
+      msg && msg(`✅ Notified ${data.sentTo}`);
+      if (data.alert) setAlerts(prev => [...prev, data.alert]);
+      else load();
+    } catch (e) {
+      msg && msg('⚠️ ' + e.message, 'bad');
+    } finally {
+      setNotifyingSerial(null);
     }
   };
 
@@ -3948,6 +3597,16 @@ function Fleet({ msg }) {
   for (const m of machineOwners) ownerBySerial[m.serial] = m;
   const customerById = {};
   for (const c of customers) customerById[c.id] = c;
+  // Most recent notification (any status) per serial, for the badge on each
+  // card. `alerts` isn't guaranteed sorted, so pick by created_at rather
+  // than assuming array order.
+  const alertBySerial = {};
+  for (const a of alerts) {
+    const cur = alertBySerial[a.serial];
+    if (!cur || new Date(a.created_at || a.sent_at || 0) > new Date(cur.created_at || cur.sent_at || 0)) {
+      alertBySerial[a.serial] = a;
+    }
+  }
 
   // Sort key mirrors exactly what's displayed on each card (customer name,
   // falling back to a manual nickname, falling back to the raw serial) so
@@ -3978,6 +3637,39 @@ function Fleet({ msg }) {
       return name.includes(q) || (serial || '').toLowerCase().includes(q);
     });
   })();
+
+  // Auto-close the loop: an alert only ever gets marked 'resolved' here, once
+  // a FRESH mill_reports row (correction_count higher than the one that
+  // triggered the alert) comes in AND that specific check no longer flags —
+  // never just because the customer clicked "I've completed this" (that only
+  // gets it to 'customer_confirmed', from api/confirm-fleet-alert.js). This
+  // is what "how would Fleet know?" actually resolves to: the next real sync
+  // report is the proof, not anyone's say-so.
+  useEffect(() => {
+    if (loading) return;
+    const openAlerts = alerts.filter(a => a.status === 'sent' || a.status === 'customer_confirmed');
+    if (!openAlerts.length) return;
+    let cancelled = false;
+    (async () => {
+      for (const alert of openAlerts) {
+        const m = allMachines.find(x => x.serial === alert.serial);
+        if (!m || !m.latest) continue;
+        if ((m.latest.correction_count ?? -1) <= (alert.correction_count ?? -1)) continue; // no fresher report yet
+        const idx = m.history.indexOf(m.latest);
+        const prevRow = idx > 0 ? m.history[idx - 1] : null;
+        const diag = fleetDiagnose(m.latest, prevRow);
+        const stillFlagged = diag.some(d => d.check === alert.check_key && d.flagged);
+        if (stillFlagged || cancelled) continue;
+        try {
+          const resolvedAt = new Date().toISOString();
+          await db.update('fleet_alerts', alert.id, { status: 'resolved', resolved_at: resolvedAt });
+          if (!cancelled) setAlerts(prev => prev.map(a => (a.id === alert.id ? { ...a, status: 'resolved', resolved_at: resolvedAt } : a)));
+        } catch { /* best-effort — will just retry on the next load */ }
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows, alerts, loading]);
 
   // thresholds mirror the diagnostics engine. Pass the machine's full history
   // (not just latest) so the rate-of-change checks have a previous point to
@@ -4134,6 +3826,7 @@ function Fleet({ msg }) {
         const open = openSerial === serial;
         const rec = topRecommendation(latest, history);
         const displayName = customer?.company || (owner?.nickname) || serial;
+        const alert = alertBySerial[serial];
         return (
           <div key={serial} className="diag-report-card">
             <div
@@ -4149,6 +3842,29 @@ function Fleet({ msg }) {
                   {customer && `${serial} · `}{owner?.nickname && customer && `${owner.nickname} · `}{latest?.model || '—'} · cc {latest?.correction_count ?? '—'} · fw {latest?.firmware_main || '—'}
                 </span>
                 {!customer && <span style={{fontSize:9,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",border:'1px solid var(--bdr)',borderRadius:4,padding:'1px 6px'}}>unassigned</span>}
+                {/* Lab name typed into MillPulse Setup's install GUI (opt-in when
+                    enabling automatic sync) -- only useful before a customer is
+                    linked, since once linked the customer's actual name takes
+                    over as the display name above. Just a hint for picking the
+                    right customer in the OWNER dropdown below, not authoritative. */}
+                {!customer && latest?.lab_name && (
+                  <span style={{fontSize:9,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",border:'1px solid var(--bdr)',borderRadius:4,padding:'1px 6px'}}>
+                    reported as "{latest.lab_name}"
+                  </span>
+                )}
+                {alert && (
+                  <span
+                    title={`${alert.label} · ${(alert.sent_at || '').slice(0, 10)}`}
+                    style={{
+                      fontSize: 9, fontFamily: "'IBM Plex Mono',monospace", border: '1px solid var(--bdr)', borderRadius: 4, padding: '1px 6px',
+                      color: alert.status === 'resolved' ? 'var(--gr)' : alert.status === 'customer_confirmed' ? '#ffb020' : 'var(--txd)',
+                    }}
+                  >
+                    {alert.status === 'sent' && `🔔 notified ${(alert.sent_at || '').slice(0, 10)}`}
+                    {alert.status === 'customer_confirmed' && '⏳ customer says done — awaiting sync'}
+                    {alert.status === 'resolved' && `✔ resolved ${(alert.resolved_at || '').slice(0, 10)}`}
+                  </span>
+                )}
               </div>
               <span
                 className={`diag-flag-title`}
@@ -4169,40 +3885,24 @@ function Fleet({ msg }) {
             </div>
 
             {rec && (
-              <div className="diag-flag-action" style={{ marginTop: 6 }}>
-                → {rec.label}: {rec.action}
+              <div className="diag-flag-action" style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span>→ {rec.label}: {rec.action}</span>
+                {customer?.email && (
+                  <button
+                    className="btn bs"
+                    style={{ height: 24, fontSize: 10, marginLeft: 'auto' }}
+                    disabled={notifyingSerial === serial}
+                    onClick={(e) => { e.stopPropagation(); notifyCustomer(serial, customer, latest?.correction_count, rec); }}
+                  >
+                    {notifyingSerial === serial ? '⏳' : (alert && alert.status !== 'resolved') ? '🔁 Re-notify' : '📣 Notify Customer'}
+                  </button>
+                )}
               </div>
             )}
 
             {open && (
               <div style={{ marginTop: 12 }}>
                 <MachineOwnerEditor serial={serial} owner={owner} customers={customers} onSave={saveMachineOwner} />
-
-                {/* MillPulse customer report — generate PDF for review/approval */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '10px 0 14px' }}>
-                  <button
-                    className="btn bp bs"
-                    style={{ height: 30, fontSize: 11 }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      const sorted = Array.isArray(history) ? history : [];
-                      const idx = sorted.indexOf(latest);
-                      const prevRow = idx > 0 ? sorted[idx - 1] : null;
-                      const diag = fleetDiagnose(latest, prevRow);
-                      const model = buildMillPulseReportModel({
-                        latest, diag,
-                        customerName: customer?.company || null,
-                        ownerNickname: owner?.nickname || null,
-                      });
-                      generateMillPulsePdf(model, 'Devon Todd').catch(err => {
-                        alert('Report generation failed: ' + (err?.message || err));
-                      });
-                    }}
-                  >
-                    📄 Generate MillPulse Report
-                  </button>
-                  <span className="diag-meta" style={{ margin: 0 }}>Review the PDF, then send to the customer.</span>
-                </div>
 
                 {/* trend across correction counts — graph or table */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
