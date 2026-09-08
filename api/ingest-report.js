@@ -248,10 +248,21 @@ function xGap(pointObj) {
 
 // Same shape App.js's buildMillReportRow() writes for a manual paste — see
 // the comment there for why raw_systemreport is required (NOT NULL column).
-function buildMillReportRow(report, rawText) {
+//
+// `labName` is new: the lab/customer name typed into MillPulse Setup's
+// install GUI (see millpulse-sync.ps1's $LabName), passed through here so
+// Fleet has a hint for who this unlinked machine belongs to before Devon
+// manually assigns a customer. Deliberately only added to the row when
+// truthy -- the upsert below uses resolution=merge-duplicates, which
+// PostgREST implements as an UPDATE SET of only the keys present in the
+// JSON body, so omitting lab_name here means an existing value in the
+// column is left alone rather than getting clobbered back to null by a
+// sync that didn't have a lab name configured (e.g. an older install, or a
+// manual paste through the App.js UI which never sends this field at all).
+function buildMillReportRow(report, rawText, labName) {
   const rac = report.rac || {};
   const grad = rac["SPINDLE GRADIENT"] || {};
-  return {
+  const row = {
     serial: report.serial,
     model: report.model,
     correction_count: report.correctionCount,
@@ -263,6 +274,8 @@ function buildMillReportRow(report, rawText) {
     report_date: new Date().toISOString(),
     raw_systemreport: rawText,
   };
+  if (typeof labName === "string" && labName.trim()) row.lab_name = labName.trim();
+  return row;
 }
 
 async function upsertMillReport(row) {
@@ -299,7 +312,7 @@ module.exports = async (req, res) => {
       return res.status(401).json({ error: "Missing or invalid x-ingest-key header." });
     }
 
-    const { rawText, sourcePath } = req.body || {};
+    const { rawText, sourcePath, labName } = req.body || {};
     if (!rawText || typeof rawText !== "string" || !rawText.trim()) {
       return res.status(400).json({ error: "rawText is required (the raw systemreport.txt contents)." });
     }
@@ -312,7 +325,7 @@ module.exports = async (req, res) => {
         const report = parseVPanelReport(chunk);
         if (!report.serial) throw new Error("No serial number found in this report");
         if (report.correctionCount == null) throw new Error("No correction count found in this report");
-        await upsertMillReport(buildMillReportRow(report, chunk));
+        await upsertMillReport(buildMillReportRow(report, chunk, labName));
         touchedSerials.add(report.serial);
         results.push({ serial: report.serial, model: report.model, correctionCount: report.correctionCount, action: "ok" });
       } catch (e) {
