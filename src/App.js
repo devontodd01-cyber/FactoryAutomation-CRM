@@ -3668,7 +3668,6 @@ function Fleet({ msg }) {
       }
     })();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, alerts, loading]);
 
   // thresholds mirror the diagnostics engine. Pass the machine's full history
