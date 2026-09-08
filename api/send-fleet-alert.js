@@ -91,8 +91,18 @@ module.exports = async (req, res) => {
     }
 
     const { serial, toEmail, toName, customerId, correctionCount, checkKey, label, cause, action } = req.body || {};
-    if (!serial || !toEmail || !checkKey || !label) {
-      return res.status(400).json({ error: 'serial, toEmail, checkKey and label are required' });
+    // TEMP DEBUG — logs the exact payload this endpoint received, so a failed
+    // send shows up in Vercel → Deployments → (latest) → Logs with the real
+    // reason instead of a generic 400. Safe to leave in; remove later if it
+    // gets noisy.
+    console.log('send-fleet-alert received:', JSON.stringify({ serial, toEmail, toName, customerId, correctionCount, checkKey, label }));
+    const missing = [];
+    if (!serial) missing.push('serial');
+    if (!toEmail) missing.push('toEmail');
+    if (!checkKey) missing.push('checkKey');
+    if (!label) missing.push('label');
+    if (missing.length) {
+      return res.status(400).json({ error: `Missing required field(s): ${missing.join(', ')}` });
     }
     if (typeof toEmail !== 'string' || !EMAIL_RE.test(toEmail.trim())) {
       return res.status(400).json({ error: `"${toEmail}" doesn't look like a valid email address.` });
