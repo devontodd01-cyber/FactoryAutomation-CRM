@@ -11,6 +11,16 @@
 // upserts into `mill_reports`, the same table manual entry writes to. One
 // parser, three entry paths (paste, OCR, this).
 //
+// It ALSO upserts into `diagnostic_reports` — the richer table Mill
+// Diagnostics' "Run Diagnosis + Save" writes to. Fleet's Graph view only
+// unlocks the full chart set (origin drift, magazine offset drift, raw
+// P1/P2, angle-offset range) once a serial has 2+ diagnostic_reports rows
+// (see FleetSerialTrendGraphs / mergeTrendPoints in App.js) — before this,
+// an auto-synced machine was stuck showing only the 3 flat-column charts
+// (gradient, A/B gap, base tool length) until someone manually pasted its
+// reports into Mill Diagnostics. Now every auto-synced report seeds both
+// tables, so the full graph builds itself with no manual step.
+//
 // Auth: a shared secret, NOT the Supabase service key — this endpoint is a
 // public URL that unattended scripts on customer PCs call unattended, so it
 // gets its own narrow, write-only credential rather than the DB master key.
@@ -200,6 +210,10 @@ function normalizeNewToLegacy(tree) {
     legacyRac["CORRECTION BASE POINT"] = [rac.CorrectionBasePoint.x, rac.CorrectionBasePoint.y, rac.CorrectionBasePoint.z];
   }
   sections["ROTARY AXIS CORRECTION"] = legacyRac;
+  // The new format doesn't expose MAGAZINE POSITION OFFSET in the same
+  // place as the legacy format -- leave ATC empty so magOffset below
+  // simply comes through null (a gap in that one line) rather than
+  // misreading something else as the magazine offset.
   sections["AUTOMATIC TOOL CHANGER"] = {};
   return sections;
 }
@@ -246,6 +260,58 @@ function xGap(pointObj) {
   return Math.abs(p2[0] - p1[0]);
 }
 
+// ── Raw-metric extractors, ported 1:1 from App.js (used by buildRawMetrics
+// below, the same helper Mill Diagnostics' "Save All" calls) ───────────────
+function num(v) { return typeof v === "number" && !Number.isNaN(v) ? v : null; }
+function triplet(v) { return Array.isArray(v) && v.length >= 3 ? [num(v[0]), num(v[1]), num(v[2])] : [null, null, null]; }
+
+function extractOrigin(sections, rac) {
+  const candidates = [
+    rac && rac["CORRECTION BASE POINT"],
+    rac && rac["BASE POINT"],
+    rac && rac["ORIGIN"],
+    sections && sections["CORRECTION BASE POINT"],
+    sections && sections["BASE POINT"],
+    sections && sections["ORIGIN"],
+    sections && sections["WORK ORIGIN"],
+  ];
+  for (const c of candidates) {
+    if (Array.isArray(c)) return triplet(c);
+    if (c && typeof c === "object" && ("X" in c || "Y" in c || "Z" in c)) {
+      return [num(c.X), num(c.Y), num(c.Z)];
+    }
+  }
+  return [null, null, null];
+}
+
+function axisOffsetRange(rac, axisKey) {
+  const ax = rac && rac[axisKey];
+  const curve = ax && ax["ANGLE OFFSET (BASE)"];
+  if (!Array.isArray(curve) || curve.length < 2) return null;
+  const nums = curve.slice(1).filter((v) => typeof v === "number" && !Number.isNaN(v));
+  if (nums.length < 2) return null;
+  return Math.max(...nums) - Math.min(...nums);
+}
+function angleOffsetRange(rac) { return axisOffsetRange(rac, "A-AXIS"); }
+function bAxisOffsetRange(rac) { return axisOffsetRange(rac, "B-AXIS"); }
+
+// Same helper App.js's Mill Diagnostics "Save All" button calls before
+// writing to diagnostic_reports -- keeping this identical means an
+// auto-synced row and a manually-saved row store raw_metrics in exactly the
+// same shape, so TrendCharts can't tell (and doesn't need to care) which
+// path a given correction count came in through.
+function buildRawMetrics(report) {
+  const rac = report.rac || {};
+  const atc = (report.sections && report.sections["AUTOMATIC TOOL CHANGER"]) || {};
+  return {
+    origin: extractOrigin(report.sections || {}, rac),
+    magOffset: triplet(atc["MAGAZINE POSITION OFFSET"]),
+    baseToolLength: num(rac["BASE TOOL LENGTH"]),
+    angleOffsetRange: angleOffsetRange(rac),
+    bAxisOffsetRange: bAxisOffsetRange(rac),
+  };
+}
+
 // Same shape App.js's buildMillReportRow() writes for a manual paste — see
 // the comment there for why raw_systemreport is required (NOT NULL column).
 //
@@ -259,7 +325,9 @@ function xGap(pointObj) {
 // column is left alone rather than getting clobbered back to null by a
 // sync that didn't have a lab name configured (e.g. an older install, or a
 // manual paste through the App.js UI which never sends this field at all).
-function buildMillReportRow(report, rawText, labName) {
+// `labEmail` follows the identical reasoning -- the optional contact email
+// captured at install time, only set on the row when actually provided.
+function buildMillReportRow(report, rawText, labName, labEmail) {
   const rac = report.rac || {};
   const grad = rac["SPINDLE GRADIENT"] || {};
   const row = {
@@ -275,11 +343,49 @@ function buildMillReportRow(report, rawText, labName) {
     raw_systemreport: rawText,
   };
   if (typeof labName === "string" && labName.trim()) row.lab_name = labName.trim();
+  if (typeof labEmail === "string" && labEmail.trim()) row.lab_email = labEmail.trim();
   return row;
+}
+
+// Mirrors App.js's Diagnostics.saveAll() write to diagnostic_reports for a
+// manual "Run Diagnosis + Save" -- same table, same on_conflict target, same
+// column shapes, just triggered by an automatic sync instead of Devon
+// pasting into Mill Diagnostics.
+//
+// `diagnostics` (the per-check flagged/clean array Mill Diagnostics computes
+// when a report goes through Run Diagnosis) is deliberately left as `[]`
+// here rather than re-implementing that whole rule engine server-side: every
+// chart that reads a diagnostic_reports row already falls back to computing
+// the same raw value straight from `rac`/`parsed` whenever a matching check
+// isn't found in `diagnostics` (see trendPointsFromHistory in App.js), so an
+// empty array costs nothing for the trend charts -- only the historical
+// "flagged" badge in Mill Diagnostics' own report browser won't show for a
+// row that came in this way.
+function buildDiagnosticReportRow(report, rawText) {
+  return {
+    serial: report.serial,
+    model: report.model,
+    correction_count: report.correctionCount,
+    raw_text: rawText,
+    parsed: report.sections || {},
+    raw_metrics: buildRawMetrics(report),
+    diagnostics: [],
+  };
 }
 
 async function upsertMillReport(row) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/mill_reports?on_conflict=serial,correction_count`, {
+    method: "POST",
+    headers: { ...HEADERS, Prefer: "return=representation,resolution=merge-duplicates" },
+    body: JSON.stringify(row),
+  });
+  const data = await r.json().catch(() => null);
+  if (!r.ok) throw new Error((data && (data.message || data.hint)) || `Supabase insert failed (${r.status})`);
+  return data;
+}
+
+async function upsertDiagnosticReport(row) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/diagnostic_reports?on_conflict=serial,correction_count`, {
     method: "POST",
     headers: { ...HEADERS, Prefer: "return=representation,resolution=merge-duplicates" },
     body: JSON.stringify(row),
@@ -312,7 +418,7 @@ module.exports = async (req, res) => {
       return res.status(401).json({ error: "Missing or invalid x-ingest-key header." });
     }
 
-    const { rawText, sourcePath, labName } = req.body || {};
+    const { rawText, sourcePath, labName, labEmail } = req.body || {};
     if (!rawText || typeof rawText !== "string" || !rawText.trim()) {
       return res.status(400).json({ error: "rawText is required (the raw systemreport.txt contents)." });
     }
@@ -325,8 +431,17 @@ module.exports = async (req, res) => {
         const report = parseVPanelReport(chunk);
         if (!report.serial) throw new Error("No serial number found in this report");
         if (report.correctionCount == null) throw new Error("No correction count found in this report");
-        await upsertMillReport(buildMillReportRow(report, chunk, labName));
+        await upsertMillReport(buildMillReportRow(report, chunk, labName, labEmail));
         touchedSerials.add(report.serial);
+        // Best-effort: mill_reports (Fleet's live view) is the well-tested
+        // path and must never fail because of this. If diagnostic_reports
+        // has drifted from what's expected here (e.g. a schema change), log
+        // it and move on rather than failing the whole ingest.
+        try {
+          await upsertDiagnosticReport(buildDiagnosticReportRow(report, chunk));
+        } catch (diagErr) {
+          console.error(`diagnostic_reports save failed for ${report.serial} corr ${report.correctionCount}:`, diagErr.message || diagErr);
+        }
         results.push({ serial: report.serial, model: report.model, correctionCount: report.correctionCount, action: "ok" });
       } catch (e) {
         results.push({ error: e.message || String(e) });
