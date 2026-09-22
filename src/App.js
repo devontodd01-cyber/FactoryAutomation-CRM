@@ -4710,10 +4710,17 @@ function CustomerReports({ msg }) {
   useEffect(() => { load(); }, [load]);
 
   const callApi = async (mode) => {
+    // customers.id is a uuid in this database (see fleet_alerts.sql's notes
+    // on the same column) -- Number(uuidString) is NaN, and JSON.stringify
+    // silently turns NaN into null, so this was sending customerId: null on
+    // every single request no matter what was selected. That's why Preview
+    // and Send always 400'd with "customerId and month are required" --
+    // the server was right, it just never actually received one. Pass the
+    // uuid straight through as a string instead of coercing it.
     const r = await fetch('/api/send-customer-report', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ customerId: Number(customerId), month, mode }),
+      body: JSON.stringify({ customerId, month, mode }),
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || `${mode} failed`);
@@ -4737,7 +4744,7 @@ function CustomerReports({ msg }) {
 
   const runSend = async () => {
     if (!customerId) return;
-    const cust = customers.find(c => c.id === Number(customerId));
+    const cust = customers.find(c => c.id === customerId);
     if (!window.confirm(`Send this report to ${cust?.email || 'this customer'}?`)) return;
     setBusy(true);
     try {
