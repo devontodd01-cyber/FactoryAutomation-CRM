@@ -412,6 +412,17 @@ async function upsertDiagnosticReport(row) {
   return data;
 }
 
+// Highest correction_count already saved in diagnostic_reports for this
+// serial (null if none). Used to tell a genuinely NEW calibration apart from
+// the sync agent re-sending the same unchanged systemreport.txt (it re-POSTs
+// every 3am / every boot whether or not anything changed).
+async function maxSavedCorrectionCount(serial) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/diagnostic_reports?serial=eq.${encodeURIComponent(serial)}&select=correction_count&order=correction_count.desc&limit=1`, { headers: HEADERS });
+  if (!r.ok) throw new Error(`Supabase select failed (${r.status}): diagnostic_reports max correction_count`);
+  const rows = await r.json().catch(() => []);
+  return Array.isArray(rows) && rows.length && typeof rows[0].correction_count === "number" ? rows[0].correction_count : null;
+}
+
 async function reconcileLatestFlag(serial) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/mill_reports?serial=eq.${encodeURIComponent(serial)}&select=correction_count`, { headers: HEADERS });
   const rows = await r.json().catch(() => []);
@@ -443,11 +454,25 @@ module.exports = async (req, res) => {
     const chunks = splitReports(rawText);
     const results = [];
     const touchedSerials = new Set();
+    // Serials that got a NEW calibration in this POST (correction_count higher
+    // than anything already saved). Only these are checked for auto-notify --
+    // an unchanged re-send never emails anyone. (Set 2026-09-23 per Devon:
+    // "going forward, only new reports notify".)
+    const newReportSerials = new Set();
     for (const chunk of chunks) {
       try {
         const report = parseVPanelReport(chunk);
         if (!report.serial) throw new Error("No serial number found in this report");
         if (report.correctionCount == null) throw new Error("No correction count found in this report");
+        let isNewCalibration = false;
+        try {
+          const maxCC = await maxSavedCorrectionCount(report.serial);
+          isNewCalibration = maxCC == null || report.correctionCount > maxCC;
+        } catch (lookupErr) {
+          // Can't tell -> treat as NOT new. Missing one auto-notify is safer
+          // than emailing a customer about an old report.
+          console.error(`new-report check failed for ${report.serial}:`, lookupErr.message || lookupErr);
+        }
         await upsertMillReport(buildMillReportRow(report, chunk, labName, labEmail));
         touchedSerials.add(report.serial);
         // Best-effort: mill_reports (Fleet's live view) is the well-tested
@@ -456,6 +481,9 @@ module.exports = async (req, res) => {
         // it and move on rather than failing the whole ingest.
         try {
           await upsertDiagnosticReport(buildDiagnosticReportRow(report, chunk));
+          // Only once it's actually in diagnostic_reports -- that's what
+          // check-and-notify re-parses, so a failed save must not trigger it.
+          if (isNewCalibration) newReportSerials.add(report.serial);
         } catch (diagErr) {
           console.error(`diagnostic_reports save failed for ${report.serial} corr ${report.correctionCount}:`, diagErr.message || diagErr);
         }
@@ -476,7 +504,7 @@ module.exports = async (req, res) => {
     // email problem would be worse than skipping the auto-notify check this
     // one time and letting the next scheduled sync retry it naturally.
     const proto = req.headers["x-forwarded-proto"] || "https";
-    for (const serial of touchedSerials) {
+    for (const serial of newReportSerials) {
       try {
         await checkAndNotifySerial(serial, { host: req.headers.host, proto });
       } catch (notifyErr) {
@@ -484,7 +512,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    return res.status(200).json({ ok: true, sourcePath: sourcePath || null, results });
+    return res.status(200).json({ ok: true, sourcePath: sourcePath || null, results, newCalibrations: [...newReportSerials] });
   } catch (e) {
     return res.status(500).json({ error: e.message || String(e) });
   }
