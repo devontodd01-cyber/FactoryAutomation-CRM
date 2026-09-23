@@ -1438,6 +1438,10 @@ const DWX_THRESHOLDS = {
     "origin_z_drift",
     "magazine_offset_drift",
     "base_tool_length_drift",
+    // Angle-offset bounce (new, 2026-09-23) outranks the same-metric
+    // single-report range check, same convention as gradient/gap above.
+    "a_axis_angle_offset_drift",
+    "b_axis_angle_offset_drift",
     "a_axis_angle_offset",
     "b_axis_angle_offset",
   ],
@@ -1450,15 +1454,27 @@ const DWX_THRESHOLDS = {
   // which is itself the diagnostic signal (see rule 2 above). Threshold =
   // max allowed |value[n] − value[n-1]| between two consecutive saved
   // reports for the same machine.
+  //
+  // Tightened 2026-09-23 per Devon (shop owner): A/B-axis gap, origin,
+  // magazine offset, and base tool length bounce tolerances all dropped
+  // 100 -> 50 units. (The A/B-axis gap STABLE/magnitude tolerance above --
+  // aAxisP1P2YGapMax / bAxisP1P2XGapMax -- is unchanged at 100; only the
+  // report-to-report jump tolerance got tighter.)
   spindleGradientXStepMax: 0.0005,
   spindleGradientYStepMax: 0.0005,
-  aAxisP1P2YGapStepMax: 100,
-  bAxisP1P2XGapStepMax: 100,
-  originAxisStepMax: 100,
-  magazineOffsetStepMax: 100,
-  baseToolLengthStepMax: 100,
+  aAxisP1P2YGapStepMax: 50,
+  bAxisP1P2XGapStepMax: 50,
+  originAxisStepMax: 50,
+  magazineOffsetStepMax: 50,
+  baseToolLengthStepMax: 50,
   angleOffsetRangeMax: 200,
   angleOffsetAdjacentDiffMax: 50,
+  // NEW 2026-09-23: AngleOffset(Base) RANGE moving >=100 units between
+  // consecutive reports signals that axis is wearing and not repeating.
+  // Separate from angleOffsetRangeMax above (that's "is this ONE report's
+  // curve too spread out"; this is "did the spread change a lot since last
+  // time").
+  angleOffsetRangeStepMax: 100,
 };
 
 const MACHINE_PROFILES = {
@@ -1567,9 +1583,18 @@ function normalizeNewToLegacy(tree) {
     legacyRac["CORRECTION BASE POINT"] = [rac.CorrectionBasePoint.x, rac.CorrectionBasePoint.y, rac.CorrectionBasePoint.z];
   }
   sections["ROTARY AXIS CORRECTION"] = legacyRac;
-  // The new format doesn't expose MAGAZINE POSITION OFFSET in the same place;
-  // leave ATC empty so that check simply no-ops rather than misreading.
-  sections["AUTOMATIC TOOL CHANGER"] = {};
+  // The new format exposes the same touch-off/magazine calibration point as
+  // AutomaticToolChanger.ToolSensorPositionOffset instead of a top-level
+  // "MAGAZINE POSITION OFFSET" field -- confirmed it's the same physical
+  // value by comparing captured reports (it matches RotaryAxisCorrection's
+  // RotaryUnitOffset exactly in every sample seen). Map it across so
+  // magazine_offset_drift (and the Z-clean gate on base_tool_length_drift)
+  // work on DMS-format machines too, instead of silently no-op'ing.
+  const atcSrc = tree.AutomaticToolChanger || {};
+  const tsOffset = atcSrc.ToolSensorPositionOffset;
+  sections["AUTOMATIC TOOL CHANGER"] = tsOffset
+    ? { "MAGAZINE POSITION OFFSET": [tsOffset.x, tsOffset.y, tsOffset.z] }
+    : {};
   return sections;
 }
 
@@ -1805,6 +1830,39 @@ function diagnoseAxisAngleOffset(r, axisKey, axisLabel, checkKey) {
 function diagnoseAAxisAngleOffset(r) { return diagnoseAxisAngleOffset(r, "A-AXIS", "A", "a_axis_angle_offset"); }
 function diagnoseBAxisAngleOffset(r) { return diagnoseAxisAngleOffset(r, "B-AXIS", "B", "b_axis_angle_offset"); }
 
+// Reads just the current report's own angle-offset range for a given axis
+// (same trim/range math as diagnoseAxisAngleOffset above, without the
+// adjacent-diff part) -- used both by the drift check below and by the
+// prev-state tracking in runDiagnosis()/diagnoseFleetHistory() so each
+// report's range gets carried forward as "previous" for the next one.
+function currentAngleOffsetRange(r, axisKey) {
+  const ax = r.rac[axisKey];
+  const rawCurve = ax && ax["ANGLE OFFSET (BASE)"];
+  if (!Array.isArray(rawCurve) || rawCurve.length < 2) return null;
+  const trimmed = rawCurve.slice(1).filter(v => typeof v === "number" && !Number.isNaN(v));
+  return trimmed.length >= 2 ? Math.max(...trimmed) - Math.min(...trimmed) : null;
+}
+
+// NEW (Devon, 2026-09-23) — report-to-report bounce on the angle-offset
+// RANGE itself: if the curve's range moved >=100 units since the previous
+// report, that axis is wearing and not repeating position-to-position.
+// Separate from the single-report range/adjacent-diff check above (that one
+// asks "is THIS report's curve too spread out"; this one asks "did the
+// spread change a lot since last time"). Not gated on gradient.
+function diagnoseAxisAngleOffsetDrift(r, axisKey, axisLabel, checkKey, previousRange) {
+  const range = currentAngleOffsetRange(r, axisKey);
+  if (range == null) return null;
+  const threshold = r.profile.thresholds.angleOffsetRangeStepMax;
+  const result = { check: checkKey, axis: axisLabel, currentRange: range, previousRange: previousRange ?? null, delta: null, threshold, flagged: false, thresholdsValidatedForModel: r.profile.thresholdsValidated };
+  if (previousRange != null) {
+    result.delta = range - previousRange;
+    result.flagged = Math.abs(result.delta) >= threshold;
+  }
+  return result;
+}
+function diagnoseAAxisAngleOffsetDrift(r, previousRange) { return diagnoseAxisAngleOffsetDrift(r, "A-AXIS", "A", "a_axis_angle_offset_drift", previousRange); }
+function diagnoseBAxisAngleOffsetDrift(r, previousRange) { return diagnoseAxisAngleOffsetDrift(r, "B-AXIS", "B", "b_axis_angle_offset_drift", previousRange); }
+
 const DIAGNOSTIC_CHECKS = {
   spindle_gradient_x_drift: (r, prev) => diagnoseSpindleGradientXDrift(r, prev.gradientX),
   spindle_gradient_y_drift: (r, prev) => diagnoseSpindleGradientYDrift(r, prev.gradientY),
@@ -1821,6 +1879,8 @@ const DIAGNOSTIC_CHECKS = {
   base_tool_length_drift: (r, prev) => diagnoseBaseToolLengthDrift(r, prev.baseToolLength, prev.origin, prev.magazineOffset),
   a_axis_angle_offset: (r) => diagnoseAAxisAngleOffset(r),
   b_axis_angle_offset: (r) => diagnoseBAxisAngleOffset(r),
+  a_axis_angle_offset_drift: (r, prev) => diagnoseAAxisAngleOffsetDrift(r, prev.aAngleOffsetRange),
+  b_axis_angle_offset_drift: (r, prev) => diagnoseBAxisAngleOffsetDrift(r, prev.bAngleOffsetRange),
 };
 
 // Cross-check pass: within the SAME metric, a bounce flag outranks its
@@ -1843,6 +1903,8 @@ function annotateDiagnosticPriority(results) {
   pair("spindle_gradient_y_collet_wear", "spindle_gradient_y_drift", "spindle misalignment", "collet wear");
   pair("a_axis_p1_p2_gap", "a_axis_p1_p2_gap_drift", "a Y-axis alignment issue", "Y-axis ballscrew wear");
   pair("b_axis_p1_p2_gap", "b_axis_p1_p2_gap_drift", "an X-axis alignment issue", "X-axis ballscrew wear");
+  pair("a_axis_angle_offset", "a_axis_angle_offset_drift", "a bad A-axis (curve spread)", "the A-axis wearing and not repeating");
+  pair("b_axis_angle_offset", "b_axis_angle_offset_drift", "a bad B-axis (curve spread)", "the B-axis wearing and not repeating");
 
   const gradientFlagged = ["spindle_gradient_x_collet_wear", "spindle_gradient_y_collet_wear", "spindle_gradient_x_drift", "spindle_gradient_y_drift"]
     .some(k => byKey[k] && byKey[k].flagged);
@@ -1887,15 +1949,17 @@ const CHECK_INFO = {
   spindle_gradient_y_drift: { label: "Replace Collet", cause: "Moved ≥0.0005 since the previous report — regardless of whether it's inside or outside the ±0.001 tolerance. This is the signature of collet wear, not progressive misalignment.", action: "Replace the collet." },
   a_axis_p1_p2_gap: { label: "Y Axis Misalignment", cause: "Stable and over 100 units — Y-axis alignment issue.", action: "Inspect/re-align the Y-axis." },
   b_axis_p1_p2_gap: { label: "X Axis Misalignment", cause: "Stable and over 100 units — X-axis alignment issue.", action: "Inspect/re-align the X-axis." },
-  a_axis_p1_p2_gap_drift: { label: "Y Axis Ballscrew", cause: "Bouncing ≥100 units between reports — Y-axis ballscrew wear (not repeating), not alignment.", action: "Inspect the Y-axis ballscrew for wear/backlash." },
-  b_axis_p1_p2_gap_drift: { label: "X Axis Ballscrew", cause: "Bouncing ≥100 units between reports — X-axis ballscrew wear (not repeating), not alignment.", action: "Inspect the X-axis ballscrew for wear/backlash." },
-  origin_x_drift: { label: "X Axis Ballscrew", cause: "Origin X moved ≥100 units since the previous report.", action: "Inspect the X-axis ballscrew for wear/backlash." },
-  origin_y_drift: { label: "Y Axis Ballscrew", cause: "Origin Y moved ≥100 units since the previous report.", action: "Inspect the Y-axis ballscrew for wear/backlash." },
-  origin_z_drift: { label: "Z Axis Ballscrew", cause: "Origin Z moved ≥100 units since the previous report.", action: "Inspect the Z-axis ballscrew for wear/backlash." },
-  magazine_offset_drift: { label: "Magazine Offset", cause: "Magazine offset bouncing ≥100 units between reports. X or Y axis bouncing points to that axis being misaligned; Z axis bouncing points to a ballscrew fault.", action: "If X or Y is flagged, inspect/re-align that axis. If Z is flagged, inspect the ballscrew for wear/backlash." },
-  base_tool_length_drift: { label: "Tool Sensor", cause: "Bouncing ≥100 units between reports while the Z origin and magazine Z-axis value both stay clean — isolates the fault to the tool setter switch itself.", action: "Inspect/replace the tool setter switch." },
+  a_axis_p1_p2_gap_drift: { label: "Y Axis Ballscrew", cause: "Bouncing ≥50 units between reports — Y-axis ballscrew wear (not repeating), not alignment.", action: "Inspect the Y-axis ballscrew for wear/backlash." },
+  b_axis_p1_p2_gap_drift: { label: "X Axis Ballscrew", cause: "Bouncing ≥50 units between reports — X-axis ballscrew wear (not repeating), not alignment.", action: "Inspect the X-axis ballscrew for wear/backlash." },
+  origin_x_drift: { label: "X Axis Ballscrew", cause: "Origin X moved ≥50 units since the previous report.", action: "Inspect the X-axis ballscrew for wear/backlash." },
+  origin_y_drift: { label: "Y Axis Ballscrew", cause: "Origin Y moved ≥50 units since the previous report.", action: "Inspect the Y-axis ballscrew for wear/backlash." },
+  origin_z_drift: { label: "Z Axis Ballscrew", cause: "Origin Z moved ≥50 units since the previous report.", action: "Inspect the Z-axis ballscrew for wear/backlash." },
+  magazine_offset_drift: { label: "Magazine Offset", cause: "Magazine offset bouncing ≥50 units between reports. X or Y axis bouncing points to that axis being misaligned; Z axis bouncing points to a ballscrew fault.", action: "If X or Y is flagged, inspect/re-align that axis. If Z is flagged, inspect the ballscrew for wear/backlash." },
+  base_tool_length_drift: { label: "Tool Sensor", cause: "Bouncing ≥50 units between reports while the Z origin and magazine Z-axis value both stay clean — isolates the fault to the tool setter switch itself.", action: "Inspect/replace the tool setter switch." },
   a_axis_angle_offset: { label: "Bad A Axis", cause: "AngleOffset(Base) curve (excluding the fixed index-0 baseline) has a range over 200 units or an adjacent-value jump over 50 units — bad A-axis.", action: "Inspect the A-axis." },
   b_axis_angle_offset: { label: "Bad B Axis", cause: "AngleOffset(Base) curve (excluding the fixed index-0 baseline) has a range over 200 units or an adjacent-value jump over 50 units — bad B-axis.", action: "Inspect the B-axis." },
+  a_axis_angle_offset_drift: { label: "A Axis Wear (Not Repeating)", cause: "AngleOffset(Base) range moved ≥100 units since the previous report — the A-axis is wearing and not repeating position-to-position.", action: "Inspect the A-axis for wear." },
+  b_axis_angle_offset_drift: { label: "B Axis Wear (Not Repeating)", cause: "AngleOffset(Base) range moved ≥100 units since the previous report — the B-axis is wearing and not repeating position-to-position.", action: "Inspect the B-axis for wear." },
   dice_3b_9b_bottom_width: { label: "DICE 3B/9B Bottom Width Y-Pair", cause: "Most reliable physical signal for A-axis/Y-axis origin mismatch — the error is only fully expressed at full-depth engagement.", action: "If elevated alongside a flagged A-axis gap, proceed toward an A-axis rebuild." },
 };
 
@@ -3263,60 +3327,6 @@ function buildMillReportRow(report, rawText) {
   };
 }
 
-// Surfaces the SAME vetted cause/action text Mill Diagnostics shows (via the
-// existing CHECK_INFO / DiagFlagCard), computed from Fleet's own flat
-// mill_reports columns — one source of truth, so the wording can never drift
-// between the two pages. Deliberately limited to the checks Fleet's data can
-// actually support (gradient X/Y, A/B gap — each magnitude + bounce): origin
-// drift, magazine-offset drift, base-tool-length drift, and the A/B
-// angle-offset checks all need raw arrays/triplets (origin, magazine
-// position offset, angle-offset curve) that mill_reports doesn't store, only
-// the full diagnostic_reports tree does — those stay Mill-Diagnostics-only
-// rather than getting approximated here. `prev` is the same shape as
-// `latest` — the previous mill_reports row for this serial.
-function fleetDiagnose(latest, prev) {
-  if (!latest) return [];
-  const profile = getProfile(latest.model);
-  const th = profile.thresholds;
-  const out = [];
-  const gradientAxis = (axis, col, hardKey, stepKey) => {
-    const v = latest[col];
-    if (v == null) return;
-    const hardThreshold = th[hardKey];
-    out.push({ check: `spindle_gradient_${axis.toLowerCase()}_collet_wear`, axis, currentValue: v, threshold: hardThreshold, flagged: Math.abs(v) > hardThreshold, thresholdsValidatedForModel: profile.thresholdsValidated });
-    const pv = prev ? prev[col] : null;
-    const stepThreshold = th[stepKey];
-    const drift = { check: `spindle_gradient_${axis.toLowerCase()}_drift`, axis, currentValue: v, previousValue: pv ?? null, delta: null, threshold: stepThreshold, flagged: false, thresholdsValidatedForModel: profile.thresholdsValidated };
-    if (pv != null) { drift.delta = v - pv; drift.flagged = Math.abs(drift.delta) >= stepThreshold; }
-    out.push(drift);
-  };
-  gradientAxis('X', 'spindle_gradient_x', 'spindleGradientXColletWearMax', 'spindleGradientXStepMax');
-  gradientAxis('Y', 'spindle_gradient_y', 'spindleGradientYColletWearMax', 'spindleGradientYStepMax');
-
-  const gapAxis = (checkPrefix, col, hardKey, stepKey) => {
-    const v = latest[col];
-    if (v == null) return;
-    const hardThreshold = th[hardKey];
-    out.push({ check: `${checkPrefix}_p1_p2_gap`, gap: v, threshold: hardThreshold, flagged: v > hardThreshold, thresholdsValidatedForModel: profile.thresholdsValidated });
-    const pv = prev ? prev[col] : null;
-    const stepThreshold = th[stepKey];
-    const drift = { check: `${checkPrefix}_p1_p2_gap_drift`, gap: v, previousGap: pv ?? null, delta: null, threshold: stepThreshold, flagged: false, thresholdsValidatedForModel: profile.thresholdsValidated };
-    if (pv != null) { drift.delta = v - pv; drift.flagged = Math.abs(drift.delta) >= stepThreshold; }
-    out.push(drift);
-  };
-  // checkPrefix must be "a_axis"/"b_axis" (not bare "a"/"b") -- fleetDiagnose's
-  // output keys have to match DWX_THRESHOLDS.priorityOrder / CHECK_INFO's key
-  // names ("a_axis_p1_p2_gap", not "a_p1_p2_gap") or topRecommendation()'s
-  // lookup silently never finds a match and the Fleet card's recommendation
-  // line skips rule 4 (A/B-axis gap) entirely -- even though the badge chip
-  // (computed separately in flags()) correctly shows it flagged. Was
-  // previously passing bare 'a'/'b' here, which produced the wrong keys.
-  gapAxis('a_axis', 'a_y_gap', 'aAxisP1P2YGapMax', 'aAxisP1P2YGapStepMax');
-  gapAxis('b_axis', 'b_x_gap', 'bAxisP1P2XGapMax', 'bAxisP1P2XGapStepMax');
-
-  return annotateDiagnosticPriority(out);
-}
-
 // Optional client-side OCR for "I'm standing at the machine, no laptop, and
 // MillPulse isn't installed yet — let me just photograph the screen." Loaded
 // from a CDN at RUNTIME rather than as an npm dependency, on purpose: this
@@ -3429,7 +3439,7 @@ function Fleet({ msg }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [openSerial, setOpenSerial] = useState(null);
-  const [trendView, setTrendView] = useState('graph'); // 'graph' | 'table' — shared since only one card opens at a time
+  const [trendView, setTrendView] = useState('graph'); // 'graph' | 'table' | 'report' — shared since only one card opens at a time
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [addText, setAddText] = useState('');
@@ -3450,12 +3460,27 @@ function Fleet({ msg }) {
   // this is safe to load before that migration has been run.
   const [alerts, setAlerts] = useState([]);
   const [notifyingSerial, setNotifyingSerial] = useState(null);
+  // Full diagnostic_reports history for the WHOLE fleet (raw_text only --
+  // re-parsed client-side through the exact same diagnoseReport() engine
+  // Mill Diagnostics uses, so Fleet's card can never disagree with Mill
+  // Diagnostics about what's flagged for the same two reports). Replaces
+  // the old mill_reports-only fleetDiagnose()/topRecommendation() pair,
+  // which could only see gradient + A/B gap -- origin drift, magazine
+  // offset, base tool length, and angle-offset all need the raw report
+  // text, not the flat mill_reports columns. Fetched eagerly here (not
+  // lazily per-card like FleetSerialTrendGraphs) so the collapsed card's
+  // badge/recommendation -- visible without expanding anything -- is
+  // always current. Only the last 2 rows per serial actually get used (see
+  // diagBySerial/diagnoseFleetHistory below), but Supabase can't do "last 2
+  // per group" in one request, so this pulls full history; if a very large
+  // fleet ever makes this slow, that's the place to add a server-side view.
+  const [diagReportRows, setDiagReportRows] = useState([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       // pull every report, newest first; we group by serial client-side
-      const [r, ownersData, customersData, alertsData] = await Promise.all([
+      const [r, ownersData, customersData, alertsData, diagData] = await Promise.all([
         fetch(
           `${SUPABASE_URL}/rest/v1/mill_reports?select=serial,model,correction_count,firmware_main,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length,spindle_hours,total_work_time,report_date,recent_errors,is_latest,created_at,lab_name,lab_email&order=serial.asc,correction_count.asc`,
           { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
@@ -3463,11 +3488,16 @@ function Fleet({ msg }) {
         db.get('machines').catch(() => []),
         db.get('customers').catch(() => []),
         db.get('fleet_alerts').catch(() => []),
+        fetch(
+          `${SUPABASE_URL}/rest/v1/diagnostic_reports?select=serial,correction_count,raw_text&order=serial.asc,correction_count.asc`,
+          { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+        ).then(res => res.json()).catch(() => []),
       ]);
       setRows(Array.isArray(r) ? r : []);
       setMachineOwners(Array.isArray(ownersData) ? ownersData : []);
       setCustomers(Array.isArray(customersData) ? customersData : []);
       setAlerts(Array.isArray(alertsData) ? alertsData : []);
+      setDiagReportRows(Array.isArray(diagData) ? diagData : []);
     } catch (e) {
       msg && msg('Failed to load fleet: ' + e.message, 'bad');
       setRows([]);
@@ -3545,6 +3575,29 @@ function Fleet({ msg }) {
         if (!report.serial) throw new Error('No serial number found in this report');
         if (report.correctionCount == null) throw new Error('No correction count found in this report');
         await db.upsert('mill_reports', buildMillReportRow(report, chunk), 'serial,correction_count');
+        // Also seed diagnostic_reports (same table/shape Mill Diagnostics'
+        // "Save All" writes, and every auto-synced report gets via
+        // api/ingest-report.js) -- Fleet's card now runs the FULL
+        // diagnostic engine (origin drift, magazine offset, base tool
+        // length, angle offset, not just gradient/gap), which needs a
+        // report's raw text to re-parse, not just mill_reports' flat
+        // columns. Without this, a manually-pasted machine would show as
+        // "clean" on Fleet no matter what it actually reads. Best-effort,
+        // same reasoning as ingest-report.js: the well-tested mill_reports
+        // write must never fail because of this one.
+        try {
+          await db.upsert('diagnostic_reports', {
+            model: report.model,
+            serial: report.serial,
+            correction_count: report.correctionCount,
+            raw_text: chunk,
+            parsed: report.sections,
+            raw_metrics: buildRawMetrics(report),
+            diagnostics: [],
+          }, 'serial,correction_count');
+        } catch (diagErr) {
+          console.error(`diagnostic_reports save failed for ${report.serial} corr ${report.correctionCount}:`, diagErr.message || diagErr);
+        }
         touchedSerials.add(report.serial);
         ok++;
       } catch (e) {
@@ -3553,6 +3606,19 @@ function Fleet({ msg }) {
     }
     for (const serial of touchedSerials) {
       try { await reconcileLatestFlag(serial); } catch { /* non-fatal — Fleet still falls back to max correction_count */ }
+      // Manually-pasted reports never go through api/ingest-report.js (that
+      // only sees the sync agent's POSTs), so the automatic-notify check
+      // has to be fired from here too, or a machine backfilled/added by
+      // hand would never get auto-notified even after 2 flagged reports in
+      // a row. Best-effort -- this never blocks the "✅ Added" message
+      // below, and if it fails, the next real sync still catches it.
+      try {
+        await fetch('/api/check-and-notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ serial }),
+        });
+      } catch { /* best-effort — see comment above */ }
     }
     setAddBusy(false);
     if (ok) {
@@ -3646,6 +3712,88 @@ function Fleet({ msg }) {
     });
   })();
 
+  // Per-serial diagnostic_reports history (the whole fleet's raw_text rows,
+  // fetched in load() above), grouped + sorted ascending by
+  // correction_count -- same grouping pattern as bySerial/mill_reports
+  // above. Only the last 2 rows per serial actually get used (see
+  // diagnoseFleetHistory/latestDiagFor below).
+  const diagBySerial = {};
+  for (const row of diagReportRows) {
+    (diagBySerial[row.serial] = diagBySerial[row.serial] || []).push(row);
+  }
+  for (const serial of Object.keys(diagBySerial)) {
+    diagBySerial[serial].sort((a, b) => (a.correction_count || 0) - (b.correction_count || 0));
+  }
+
+  // Runs the FULL diagnostic engine (diagnoseReport/DIAGNOSTIC_CHECKS --
+  // the same one Mill Diagnostics uses) across an ascending run of
+  // diagnostic_reports rows for one serial, re-parsing each row's raw_text
+  // and tracking prev-state between consecutive reports exactly like Mill
+  // Diagnostics' own runDiagnosis() loop does. This is what replaced the
+  // old, mill_reports-only fleetDiagnose() -- that one could only ever see
+  // gradient + A/B gap (the only checks the flat mill_reports columns
+  // support); this sees everything, including origin drift, magazine
+  // offset, base tool length, and angle offset, because it has the actual
+  // report text to re-parse instead of 4 flat columns. Returns one entry
+  // per row, same ascending order: [{ correctionCount, model, diagnostics }].
+  const diagnoseFleetHistory = (rowsForSerial) => {
+    const out = [];
+    let prevGradientX = null, prevGradientY = null, prevMagOffset = null, prevBaseToolLength = null,
+      prevAGap = null, prevBGap = null, prevOrigin = null, prevAAngleOffsetRange = null, prevBAngleOffsetRange = null;
+    for (const row of rowsForSerial) {
+      let r;
+      try { r = parseVPanelReport(row.raw_text); } catch { continue; }
+      const diag = diagnoseReport(r, {
+        gradientX: prevGradientX, gradientY: prevGradientY,
+        magazineOffset: prevMagOffset, baseToolLength: prevBaseToolLength,
+        aGap: prevAGap, bGap: prevBGap, origin: prevOrigin,
+        aAngleOffsetRange: prevAAngleOffsetRange, bAngleOffsetRange: prevBAngleOffsetRange,
+      });
+      out.push({ correctionCount: r.correctionCount, model: r.model, diagnostics: diag });
+      const grad = r.rac["SPINDLE GRADIENT"];
+      if (grad && typeof grad.X === "number") prevGradientX = grad.X;
+      if (grad && typeof grad.Y === "number") prevGradientY = grad.Y;
+      const mo = r.atc["MAGAZINE POSITION OFFSET"];
+      if (Array.isArray(mo)) prevMagOffset = mo;
+      if (typeof r.rac["BASE TOOL LENGTH"] === "number") prevBaseToolLength = r.rac["BASE TOOL LENGTH"];
+      const aGapNow = r.rac["A-AXIS"] ? yGap(r.rac["A-AXIS"]) : null;
+      if (aGapNow != null) prevAGap = aGapNow;
+      const bGapNow = r.rac["B-AXIS"] ? xGap(r.rac["B-AXIS"]) : null;
+      if (bGapNow != null) prevBGap = bGapNow;
+      const originNow = extractOrigin(r.sections || {}, r.rac);
+      if (originNow.some(v => v != null)) prevOrigin = originNow;
+      const aRangeNow = currentAngleOffsetRange(r, "A-AXIS");
+      if (aRangeNow != null) prevAAngleOffsetRange = aRangeNow;
+      const bRangeNow = currentAngleOffsetRange(r, "B-AXIS");
+      if (bRangeNow != null) prevBAngleOffsetRange = bRangeNow;
+    }
+    return out;
+  };
+
+  // Latest full-engine diagnostics for a serial, from its last 2
+  // diagnostic_reports rows (this report vs. the one before it -- deeper
+  // history isn't needed for "what's flagged right now"). Returns null if
+  // this serial has no diagnostic_reports rows yet (e.g. a fresh sync that
+  // hasn't landed, or -- before this change shipped -- a manually-pasted
+  // report with no matching diagnostic_reports row; see saveManualReports).
+  const latestDiagFor = (serial) => {
+    const hist = (diagBySerial[serial] || []).slice(-2);
+    if (!hist.length) return null;
+    const computed = diagnoseFleetHistory(hist);
+    return computed.length ? computed[computed.length - 1] : null;
+  };
+
+  // Raw text of the most recent report pulled off this machine, exactly as
+  // it came off the mill (highest correction_count row in diagBySerial) --
+  // powers the 📄 Report view below. Same source diagnoseFleetHistory reads,
+  // so "what you can read" and "what got diagnosed" are always the same
+  // report. Returns null before any report has synced for this serial.
+  const latestRawReportFor = (serial) => {
+    const hist = diagBySerial[serial] || [];
+    if (!hist.length) return null;
+    return hist[hist.length - 1];
+  };
+
   // Auto-close the loop: an alert only ever gets marked 'resolved' here, once
   // a FRESH mill_reports row (correction_count higher than the one that
   // triggered the alert) comes in AND that specific check no longer flags —
@@ -3663,10 +3811,8 @@ function Fleet({ msg }) {
         const m = allMachines.find(x => x.serial === alert.serial);
         if (!m || !m.latest) continue;
         if ((m.latest.correction_count ?? -1) <= (alert.correction_count ?? -1)) continue; // no fresher report yet
-        const idx = m.history.indexOf(m.latest);
-        const prevRow = idx > 0 ? m.history[idx - 1] : null;
-        const diag = fleetDiagnose(m.latest, prevRow);
-        const stillFlagged = diag.some(d => d.check === alert.check_key && d.flagged);
+        const latestDiag = latestDiagFor(alert.serial);
+        const stillFlagged = latestDiag ? latestDiag.diagnostics.some(d => d.check === alert.check_key && d.flagged) : false;
         if (stillFlagged || cancelled) continue;
         try {
           const resolvedAt = new Date().toISOString();
@@ -3676,55 +3822,32 @@ function Fleet({ msg }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [rows, alerts, loading]);
+  }, [rows, diagReportRows, alerts, loading]);
 
-  // thresholds mirror the diagnostics engine. Pass the machine's full history
-  // (not just latest) so the rate-of-change checks have a previous point to
-  // compare against — same idea as the diag-flag drift check on Mill
-  // Diagnostics, just computed client-side from what Fleet already has in
-  // memory instead of needing another DB round trip.
-  const flags = (r, hist) => {
-    if (!r) return [];
-    const out = [];
-    if (r.spindle_gradient_x != null && Math.abs(r.spindle_gradient_x) > DWX_THRESHOLDS.spindleGradientXColletWearMax)
-      out.push('Spindle Misalignment X Axis');
-    if (r.spindle_gradient_y != null && Math.abs(r.spindle_gradient_y) > DWX_THRESHOLDS.spindleGradientYColletWearMax)
-      out.push('Spindle Misalignment Y Axis');
-    if (r.a_y_gap != null && r.a_y_gap > DWX_THRESHOLDS.aAxisP1P2YGapMax) out.push('Y Axis Misalignment');
-    if (r.b_x_gap != null && r.b_x_gap > DWX_THRESHOLDS.bAxisP1P2XGapMax) out.push('X Axis Misalignment');
-    if (Array.isArray(hist) && hist.length >= 2) {
-      const pts = fleetTrendPoints(hist);
-      const xDrift = latestDriftStep(pts, 'gradientX', DWX_THRESHOLDS.spindleGradientXStepMax);
-      const yDrift = latestDriftStep(pts, 'gradientY', DWX_THRESHOLDS.spindleGradientYStepMax);
-      // Rule 2 is the same fix (replace the collet) regardless of which axis'
-      // gradient is bouncing -- there's only one physical collet -- so this
-      // collapses to a single badge instead of separate X/Y ones.
-      if (xDrift || yDrift) out.push('Replace Collet');
-    }
-    return out;
+  // Badge chip list for a serial's card, from the full engine (was:
+  // mill_reports-only, gradient/gap only).
+  const flags = (serial) => {
+    const latestDiag = latestDiagFor(serial);
+    if (!latestDiag) return [];
+    return latestDiag.diagnostics.filter(d => d.flagged).map(d => (CHECK_INFO[d.check] || {}).label || d.check);
   };
 
-  // Highest-priority ACTIONABLE flag for a machine, computed from the exact
-  // same rule engine (fleetDiagnose → DIAGNOSTIC_CHECKS priorityOrder) Mill
-  // Diagnostics uses — so the "recommended fix" shown on the collapsed Fleet
-  // card can never say something different from what the expanded diagnostic
-  // card would say for the same reading. `prevRow` is the report immediately
-  // before `latest` in this machine's own sorted history (bounce checks need
-  // it; magnitude-only checks work fine without it).
-  const topRecommendation = (latest, hist) => {
-    if (!latest) return null;
-    const sorted = Array.isArray(hist) ? hist : [];
-    const idx = sorted.indexOf(latest);
-    const prevRow = idx > 0 ? sorted[idx - 1] : null;
-    const diag = fleetDiagnose(latest, prevRow);
-    const order = getProfile(latest.model).thresholds.priorityOrder;
+  // Highest-priority ACTIONABLE flag for a machine, from the exact same
+  // rule engine (diagnoseReport → DIAGNOSTIC_CHECKS priorityOrder) Mill
+  // Diagnostics uses — so the "recommended fix" shown on the collapsed
+  // Fleet card can never say something different from what the expanded
+  // Mill Diagnostics view would say for the same two reports.
+  const topRecommendation = (serial) => {
+    const latestDiag = latestDiagFor(serial);
+    if (!latestDiag) return null;
+    const order = getProfile(latestDiag.model).thresholds.priorityOrder;
     for (const key of order) {
-      const hit = diag.find(d => d.check === key && d.flagged);
+      const hit = latestDiag.diagnostics.find(d => d.check === key && d.flagged);
       if (hit) {
         const info = CHECK_INFO[key] || {};
-        // Rule 5 (magazine offset) can bounce on more than one axis at once,
-        // and X/Y vs. Z disambiguate to two different causes -- so unlike
-        // rules 3/4/7 it can't use a single static label. Build it from
+        // Magazine offset can bounce on more than one axis at once, and
+        // X/Y vs. Z disambiguate to two different causes -- so unlike most
+        // other checks it can't use a single static label. Build it from
         // whichever axis(es) actually bounced: X or Y -> that axis is
         // misaligned; Z -> ballscrew fault.
         let label = info.label || key;
@@ -3742,7 +3865,7 @@ function Fleet({ msg }) {
     return null;
   };
 
-  const fleetFlagged = machines.filter(m => flags(m.latest, m.history).length > 0).length;
+  const fleetFlagged = machines.filter(m => flags(m.serial).length > 0).length;
 
   return (
     <div>
@@ -3828,10 +3951,10 @@ function Fleet({ msg }) {
       )}
 
       {machines.map(({ serial, latest, history, owner, customer }) => {
-        const f = flags(latest, history);
+        const f = flags(serial);
         const isBad = f.length > 0;
         const open = openSerial === serial;
-        const rec = topRecommendation(latest, history);
+        const rec = topRecommendation(serial);
         const displayName = customer?.company || (owner?.nickname) || serial;
         const alert = alertBySerial[serial];
         // The lab-entered contact email (from MillPulse Setup at install
@@ -3945,6 +4068,13 @@ function Fleet({ msg }) {
                     >
                       📋 Table
                     </button>
+                    <button
+                      className={`btn bs ${trendView === 'report' ? 'bp' : 'bg'}`}
+                      style={{ height: 26, fontSize: 10 }}
+                      onClick={(e) => { e.stopPropagation(); setTrendView('report'); }}
+                    >
+                      📄 Report
+                    </button>
                   </div>
                 </div>
 
@@ -4001,6 +4131,44 @@ function Fleet({ msg }) {
                   </table>
                 </div>
                 )}
+
+                {trendView === 'report' && (() => {
+                  const rawRow = latestRawReportFor(serial);
+                  if (!rawRow) {
+                    return (
+                      <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 11, color: 'var(--txd)', padding: '8px 0' }}>
+                        No saved report text for this machine yet — the next sync (or a paste into Fleet's ➕ Add Report) will populate this view.
+                      </div>
+                    );
+                  }
+                  return (
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                        <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: 'var(--txd)' }}>
+                          Last pulled report · correction count {rawRow.correction_count}
+                        </span>
+                        <button
+                          className="btn bg bs"
+                          style={{ height: 24, fontSize: 10 }}
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            try { await navigator.clipboard.writeText(rawRow.raw_text || ''); } catch { /* clipboard unavailable — no-op */ }
+                          }}
+                        >
+                          📋 Copy
+                        </button>
+                      </div>
+                      <pre style={{
+                        margin: 0, padding: 10, maxHeight: 420, overflow: 'auto',
+                        background: 'var(--bg)', border: '1px solid var(--bdr)',
+                        borderRadius: 6, fontFamily: "'IBM Plex Mono',monospace", fontSize: 10.5,
+                        lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--tx)',
+                      }}>
+                        {rawRow.raw_text}
+                      </pre>
+                    </div>
+                  );
+                })()}
 
                 {/* recent error codes from the latest report */}
                 {Array.isArray(latest?.recent_errors) && latest.recent_errors.length > 0 && (
@@ -4225,12 +4393,14 @@ function Diagnostics({ msg }) {
     const perReport = [];
     for (const [, group] of bySerial) {
       group.sort((a, b) => (a.parsed.correctionCount ?? Infinity) - (b.parsed.correctionCount ?? Infinity));
-      let prevGradientX = null, prevGradientY = null, prevMagOffset = null, prevBaseToolLength = null, prevAGap = null, prevBGap = null, prevOrigin = null;
+      let prevGradientX = null, prevGradientY = null, prevMagOffset = null, prevBaseToolLength = null, prevAGap = null, prevBGap = null, prevOrigin = null,
+        prevAAngleOffsetRange = null, prevBAngleOffsetRange = null;
       for (const { raw, parsed: r } of group) {
         const diag = diagnoseReport(r, {
           gradientX: prevGradientX, gradientY: prevGradientY,
           magazineOffset: prevMagOffset, baseToolLength: prevBaseToolLength,
           aGap: prevAGap, bGap: prevBGap, origin: prevOrigin,
+          aAngleOffsetRange: prevAAngleOffsetRange, bAngleOffsetRange: prevBAngleOffsetRange,
         });
         const grad = r.rac["SPINDLE GRADIENT"];
         if (grad && typeof grad.X === "number") prevGradientX = grad.X;
@@ -4244,6 +4414,10 @@ function Diagnostics({ msg }) {
         if (bGapNow != null) prevBGap = bGapNow;
         const originNow = extractOrigin(r.sections || {}, r.rac);
         if (originNow.some(v => v != null)) prevOrigin = originNow;
+        const aRangeNow = currentAngleOffsetRange(r, "A-AXIS");
+        if (aRangeNow != null) prevAAngleOffsetRange = aRangeNow;
+        const bRangeNow = currentAngleOffsetRange(r, "B-AXIS");
+        if (bRangeNow != null) prevBAngleOffsetRange = bRangeNow;
         const diceCheck = raw === diceTargetRaw ? diagnoseDice3B9B(lastDiceEntry) : null;
         perReport.push({ raw, report: r, diagnostics: diag, diceCheck });
       }
