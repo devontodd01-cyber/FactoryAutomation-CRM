@@ -28,10 +28,13 @@
 //     the identical engine too — "what a customer gets emailed about, you
 //     also see flagged in the app" holds for the full rule set now, not
 //     just gradient/gap).
-//   - NO DUPLICATE SENDS: if there's already an open (status 'sent' or
-//     'customer_confirmed') fleet_alerts row for this exact serial+check,
-//     this is a no-op. Re-notifying an already-open issue stays a manual
-//     decision — the existing 🔁 Re-notify button on the Fleet card.
+//   - NEW REPORTS ONLY (2026-09-23): ingest-report.js only calls this when a
+//     correction_count higher than anything saved arrives. Unchanged nightly
+//     re-sends never trigger it.
+//   - ONE EMAIL PER CHECK PER CALIBRATION (2026-09-23): skipped if a
+//     fleet_alerts row already exists for this serial+check+correction_count.
+//     If the customer recalibrates and the same check STILL flags (new
+//     correction_count), they get notified again automatically.
 //   - DEVON'S OVERSIGHT: he gets his own heads-up email the instant an
 //     automatic send goes out (on top of the DEVON_EMAIL bcc
 //     send-fleet-alert.js already puts on every alert email), so he's never
@@ -96,7 +99,7 @@ async function notifyDevonOfAutoSend({ serial, name, toEmail, label, cause, acti
 // yet (returns false: pending, will get re-checked on the next sync).
 function isConfirmedTwice(history, checkKey) {
   const n = history.length;
-  if (n < 3) return false;
+  if (n < 2) return false;
   const flaggedNow = history[n - 1].diagnostics.some((d) => d.check === checkKey && d.flagged);
   const flaggedPrev = history[n - 2].diagnostics.some((d) => d.check === checkKey && d.flagged);
   return flaggedNow && flaggedPrev;
@@ -107,24 +110,37 @@ async function checkAndNotifySerial(serial, opts = {}) {
 
   // Last 3 diagnostic_reports rows (raw_text needed to re-parse through the
   // full engine) — descending, then reversed to ascending for diagnoseHistory.
+  // 2 reports is enough to confirm a check that flags on its own (magnitude
+  // checks); change/drift checks naturally need 3, since the first report has
+  // nothing to compare against.
   const diagRowsDesc = await sbSelect(
     `diagnostic_reports?serial=eq.${encodeURIComponent(serial)}&select=correction_count,raw_text&order=correction_count.desc&limit=3`
   );
   const diagRows = Array.isArray(diagRowsDesc) ? [...diagRowsDesc].reverse() : [];
-  if (diagRows.length < 3) return { skipped: 'not enough history yet (need 3+ synced reports)' };
+  if (diagRows.length < 2) return { skipped: 'not enough history yet (need 2+ reports)' };
 
   const history = diagnoseHistory(diagRows);
-  if (history.length < 3) return { skipped: 'not enough parseable history yet' };
+  if (history.length < 2) return { skipped: 'not enough parseable history yet' };
 
   const latestEntry = history[history.length - 1];
   const rec = topFlagged(latestEntry.diagnostics, latestEntry.model);
   if (!rec) return { skipped: 'nothing flagged' };
   if (!isConfirmedTwice(history, rec.check)) return { skipped: 'flagged, but not yet confirmed on a 2nd consecutive sync', check: rec.check };
 
-  const openAlerts = await sbSelect(
-    `fleet_alerts?serial=eq.${encodeURIComponent(serial)}&check_key=eq.${encodeURIComponent(rec.check)}&status=in.(sent,customer_confirmed)`
+  // One notification per check PER CALIBRATION (correction_count), any
+  // status, manual or auto. Same report re-sent / re-pasted -> no repeat.
+  // Customer calibrates again and it STILL flags -> new correction_count ->
+  // notify again. (Set 2026-09-23 per Devon; replaces the old "any open
+  // alert blocks it" rule.)
+  const cc = latestEntry.correctionCount;
+  const alreadyForThisReport = await sbSelect(
+    `fleet_alerts?serial=eq.${encodeURIComponent(serial)}&check_key=eq.${encodeURIComponent(rec.check)}&correction_count=eq.${encodeURIComponent(cc)}&select=id`
   );
-  if (Array.isArray(openAlerts) && openAlerts.length) return { skipped: 'already has an open alert for this check', check: rec.check };
+  if (Array.isArray(alreadyForThisReport) && alreadyForThisReport.length) return { skipped: 'already notified for this check on this correction count', check: rec.check };
+  const earlierAlerts = await sbSelect(
+    `fleet_alerts?serial=eq.${encodeURIComponent(serial)}&check_key=eq.${encodeURIComponent(rec.check)}&select=correction_count&order=correction_count.desc&limit=1`
+  );
+  const repeatOf = Array.isArray(earlierAlerts) && earlierAlerts.length ? earlierAlerts[0].correction_count : null;
 
   // Contact info + correction_count for the alert row still come from
   // mill_reports (lab_email/lab_name aren't stored on diagnostic_reports).
@@ -144,6 +160,8 @@ async function checkAndNotifySerial(serial, opts = {}) {
   const notifyName = (customer && customer.company) || (owner && owner.nickname) || latestMill.lab_name || serial;
 
   if (!notifyEmail) {
+    // Called only on new calibrations from the sync agent, so this heads-up
+    // goes out at most once per correction_count via that path.
     // Confirmed twice, nothing to send to — still worth telling Devon so a
     // real issue doesn't just sit there unnoticed for lack of a contact.
     await notifyDevonOfAutoSend({
@@ -157,12 +175,14 @@ async function checkAndNotifySerial(serial, opts = {}) {
 
   const result = await sendFleetAlert({
     serial, toEmail: notifyEmail, toName: notifyName, customerId: (customer && customer.id) || null,
-    correctionCount: latestMill.correction_count != null ? latestMill.correction_count : latestEntry.correctionCount,
+    correctionCount: cc,
     checkKey: rec.check, label: rec.label, cause: rec.cause, action: rec.action,
     host: opts.host, proto: opts.proto, triggeredBy: 'auto',
   });
 
-  await notifyDevonOfAutoSend({ serial, name: notifyName, toEmail: notifyEmail, label: rec.label, cause: rec.cause, action: rec.action });
+  await notifyDevonOfAutoSend({ serial, name: notifyName, toEmail: notifyEmail, label: rec.label,
+    cause: (repeatOf != null ? `REPEAT: customer was already notified at correction #${repeatOf}, recalibrated (now #${cc}), and it still flags. ` : '') + rec.cause,
+    action: rec.action });
 
   return { sent: true, sentTo: notifyEmail, check: rec.check, alert: result.alert };
 }
