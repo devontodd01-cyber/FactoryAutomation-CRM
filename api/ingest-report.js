@@ -44,6 +44,12 @@ const HEADERS = {
   "Content-Type": "application/json",
 };
 
+// Automatic ("no-click") fleet notification -- see check-and-notify.js for
+// the full rules. Required here (not just called over HTTP) so the daily
+// 3am / on-startup sync agent run is what actually drives it, in-process,
+// with nothing extra to schedule.
+const { checkAndNotifySerial } = require("./check-and-notify");
+
 // ── Parser, ported 1:1 from App.js (extractSystemReportBlock through xGap) ──
 
 function extractSystemReportBlock(rawText) {
@@ -210,11 +216,22 @@ function normalizeNewToLegacy(tree) {
     legacyRac["CORRECTION BASE POINT"] = [rac.CorrectionBasePoint.x, rac.CorrectionBasePoint.y, rac.CorrectionBasePoint.z];
   }
   sections["ROTARY AXIS CORRECTION"] = legacyRac;
-  // The new format doesn't expose MAGAZINE POSITION OFFSET in the same
-  // place as the legacy format -- leave ATC empty so magOffset below
-  // simply comes through null (a gap in that one line) rather than
-  // misreading something else as the magazine offset.
-  sections["AUTOMATIC TOOL CHANGER"] = {};
+  // The new format exposes the same touch-off/magazine calibration point as
+  // AutomaticToolChanger.ToolSensorPositionOffset instead of a top-level
+  // "MAGAZINE POSITION OFFSET" field -- confirmed it's the same physical
+  // value by comparing captured reports (it matches RotaryAxisCorrection's
+  // RotaryUnitOffset exactly in every sample seen). Map it across so
+  // magOffset below (and Fleet's magazine trend chart) populate correctly
+  // for DMS-format machines synced through this endpoint, instead of
+  // silently baking in nulls. Keep in sync by hand with the matching fix in
+  // src/App.js and api/_fleetDiagnose.js -- this file has its own standalone
+  // copy of the parser (no shared import between the CRA frontend and these
+  // serverless functions).
+  const atcSrc = tree.AutomaticToolChanger || {};
+  const tsOffset = atcSrc.ToolSensorPositionOffset;
+  sections["AUTOMATIC TOOL CHANGER"] = tsOffset
+    ? { "MAGAZINE POSITION OFFSET": [tsOffset.x, tsOffset.y, tsOffset.z] }
+    : {};
   return sections;
 }
 
@@ -449,6 +466,22 @@ module.exports = async (req, res) => {
     }
     for (const serial of touchedSerials) {
       try { await reconcileLatestFlag(serial); } catch { /* non-fatal */ }
+    }
+
+    // Automatic customer notification (see api/check-and-notify.js for what
+    // "automatic" means: 2 consecutive flagged syncs, same checks Fleet's
+    // card already flags today, no duplicate sends, Devon gets his own
+    // heads-up email). Deliberately best-effort and never allowed to fail
+    // the ingest itself -- a sync agent retrying on a 500 because of an
+    // email problem would be worse than skipping the auto-notify check this
+    // one time and letting the next scheduled sync retry it naturally.
+    const proto = req.headers["x-forwarded-proto"] || "https";
+    for (const serial of touchedSerials) {
+      try {
+        await checkAndNotifySerial(serial, { host: req.headers.host, proto });
+      } catch (notifyErr) {
+        console.error(`auto-notify check failed for ${serial}:`, notifyErr.message || notifyErr);
+      }
     }
 
     return res.status(200).json({ ok: true, sourcePath: sourcePath || null, results });
