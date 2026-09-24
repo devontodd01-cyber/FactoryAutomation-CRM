@@ -73,6 +73,22 @@ async function sbSelect(path) {
   return r.json();
 }
 
+// Checks that still show on Fleet / Mill Diagnostics but NEVER email a
+// customer automatically, per model. (Devon, 2026-09-24: DWX-53DC Y-axis
+// spindle alignment always reads out of tolerance on this model — a known
+// platform trait, not a fault — so every 53DC customer would get the same
+// email. X-axis alignment still emails. The X and Y gradient BOUNCE checks
+// (spindle_gradient_*_drift, same ≥0.0005 tolerance as before) still email
+// on every model, 53DC included.)
+const EMAIL_SUPPRESSED_CHECKS = {
+  DWX53DC: ['spindle_gradient_y_collet_wear'],
+};
+const modelKey = (model) => String(model || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+function emailableDiagnostics(diagnostics, model) {
+  const blocked = EMAIL_SUPPRESSED_CHECKS[modelKey(model)] || [];
+  return blocked.length ? diagnostics.filter((d) => !blocked.includes(d.check)) : diagnostics;
+}
+
 async function notifyDevonOfAutoSend({ serial, model, correctionCount, name, toEmail, label, cause, action }) {
   const machineLine = `${model ? model + ' ' : ''}SN ${serial}`;
   if (!process.env.RESEND_API_KEY || !process.env.DEVON_EMAIL) return;
@@ -125,7 +141,9 @@ async function checkAndNotifySerial(serial, opts = {}) {
   if (history.length < 2) return { skipped: 'not enough parseable history yet' };
 
   const latestEntry = history[history.length - 1];
-  const rec = topFlagged(latestEntry.diagnostics, latestEntry.model);
+  // Highest-priority flag that's allowed to email for this model (a
+  // suppressed check is skipped, so the next real issue can still go out).
+  const rec = topFlagged(emailableDiagnostics(latestEntry.diagnostics, latestEntry.model), latestEntry.model);
   if (!rec) return { skipped: 'nothing flagged' };
   if (!isConfirmedTwice(history, rec.check)) return { skipped: 'flagged, but not yet confirmed on a 2nd consecutive sync', check: rec.check };
 
@@ -204,3 +222,4 @@ module.exports = async (req, res) => {
 };
 
 module.exports.checkAndNotifySerial = checkAndNotifySerial;
+module.exports.emailableDiagnostics = emailableDiagnostics;
