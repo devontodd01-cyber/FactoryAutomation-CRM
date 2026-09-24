@@ -69,10 +69,23 @@ async function sendEmail({ to, bcc, subject, html }) {
   return data;
 }
 
-function buildEmailHtml({ toName, name, label, cause, action, confirmUrl }) {
+// Machine ID block — model + serial on every alert, since many labs run
+// several machines (Devon, 2026-09-24).
+function machineBlock({ model, serial, nickname, correctionCount }) {
+  const row = (k, v) => v == null || v === '' ? '' : `<tr><td style="font-family:Arial,sans-serif;font-size:13px;color:#777;padding:2px 12px 2px 0;">${k}</td><td style="font-family:Arial,sans-serif;font-size:13px;color:#111;font-weight:bold;">${v}</td></tr>`;
+  return `<table style="margin:12px 0;border-collapse:collapse;">
+    ${row('Machine', model || 'Unknown model')}
+    ${row('Serial #', serial)}
+    ${row('Name', nickname)}
+    ${row('Calibration #', correctionCount)}
+  </table>`;
+}
+
+function buildEmailHtml({ toName, machineLine, label, cause, action, confirmUrl, model, serial, nickname, correctionCount }) {
   return `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
-      <h2 style="font-family:Arial,sans-serif;">${toName} — Action Needed on ${name}</h2>
+      <h2 style="font-family:Arial,sans-serif;">${toName} — Action Needed on ${machineLine}</h2>
+      ${machineBlock({ model, serial, nickname, correctionCount })}
       <p style="font-family:Arial,sans-serif;font-size:13px;color:#555;">
         MillPulse picked up something on this machine's latest reading that's worth addressing.
       </p>
@@ -112,7 +125,7 @@ async function insertAlert(row) {
 // send Devon his separate auto-send heads-up email — check-and-notify.js
 // does that itself, since only it knows *why* the send happened (confirmed
 // on 2 syncs) and what to say about it.
-async function sendFleetAlert({ serial, toEmail, toName, customerId, correctionCount, checkKey, label, cause, action, host, proto, triggeredBy }) {
+async function sendFleetAlert({ serial, model, toEmail, toName, customerId, correctionCount, checkKey, label, cause, action, host, proto, triggeredBy }) {
   if (!SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
     throw new Error('SUPABASE_URL and/or SUPABASE_SERVICE_KEY are not configured on the server — check Vercel → Project Settings → Environment Variables.');
   }
@@ -132,17 +145,28 @@ async function sendFleetAlert({ serial, toEmail, toName, customerId, correctionC
   const machineRows = await sbSelect(`machines?serial=eq.${encodeURIComponent(serial)}`);
   const nickname = machineRows[0] && machineRows[0].nickname;
   const name = nickname ? `${nickname} (${serial})` : serial;
+  // Model: caller's value if given (auto path passes it), else the latest
+  // report's model from mill_reports (covers the manual Notify button).
+  let machineModel = model || (machineRows[0] && machineRows[0].model) || null;
+  if (!machineModel) {
+    try {
+      const m = await sbSelect(`mill_reports?serial=eq.${encodeURIComponent(serial)}&select=model&order=correction_count.desc&limit=1`);
+      machineModel = (m[0] && m[0].model) || null;
+    } catch { /* best-effort — email still goes out with the serial */ }
+  }
+  const machineLine = `${machineModel ? machineModel + ' ' : ''}SN ${serial}${nickname ? ` (${nickname})` : ''}`;
 
   const confirmToken = crypto.randomBytes(24).toString('hex');
   const base = `${proto || 'https'}://${host || 'axiscrm.vercel.app'}`;
   const confirmUrl = `${base}/api/confirm-fleet-alert?token=${confirmToken}`;
 
-  const html = buildEmailHtml({ toName: toName || name, name, label, cause, action, confirmUrl });
+  const html = buildEmailHtml({ toName: toName || name, machineLine, label, cause, action, confirmUrl,
+    model: machineModel, serial, nickname, correctionCount });
 
   await sendEmail({
     to: toEmail.trim(),
     bcc: process.env.DEVON_EMAIL || undefined,
-    subject: `${toName || name} — Action Needed: ${label} (${name})`,
+    subject: `Action Needed: ${label} — ${machineLine}`,
     html,
   });
 
@@ -169,13 +193,13 @@ async function sendFleetAlert({ serial, toEmail, toName, customerId, correctionC
     inserted = await insertAlert(row);
   }
 
-  return { ok: true, sentTo: toEmail.trim(), alert: inserted, name };
+  return { ok: true, sentTo: toEmail.trim(), alert: inserted, name, model: machineModel, machineLine };
 }
 
 module.exports = async (req, res) => {
   if (req.method !== 'POST') return res.status(405).json({ error: 'POST only' });
   try {
-    const { serial, toEmail, toName, customerId, correctionCount, checkKey, label, cause, action } = req.body || {};
+    const { serial, model, toEmail, toName, customerId, correctionCount, checkKey, label, cause, action } = req.body || {};
     // TEMP DEBUG — logs the exact payload this endpoint received, so a failed
     // send shows up in Vercel → Deployments → (latest) → Logs with the real
     // reason instead of a generic 400. Safe to leave in; remove later if it
@@ -183,7 +207,7 @@ module.exports = async (req, res) => {
     console.log('send-fleet-alert received:', JSON.stringify({ serial, toEmail, toName, customerId, correctionCount, checkKey, label }));
     const proto = req.headers['x-forwarded-proto'] || 'https';
     const result = await sendFleetAlert({
-      serial, toEmail, toName, customerId, correctionCount, checkKey, label, cause, action,
+      serial, model, toEmail, toName, customerId, correctionCount, checkKey, label, cause, action,
       host: req.headers.host, proto, triggeredBy: 'manual',
     });
     return res.status(200).json(result);
