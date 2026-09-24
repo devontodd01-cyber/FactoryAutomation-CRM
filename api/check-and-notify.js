@@ -73,7 +73,8 @@ async function sbSelect(path) {
   return r.json();
 }
 
-async function notifyDevonOfAutoSend({ serial, name, toEmail, label, cause, action }) {
+async function notifyDevonOfAutoSend({ serial, model, correctionCount, name, toEmail, label, cause, action }) {
+  const machineLine = `${model ? model + ' ' : ''}SN ${serial}`;
   if (!process.env.RESEND_API_KEY || !process.env.DEVON_EMAIL) return;
   try {
     await fetch('https://api.resend.com/emails', {
@@ -82,8 +83,9 @@ async function notifyDevonOfAutoSend({ serial, name, toEmail, label, cause, acti
       body: JSON.stringify({
         from: process.env.FROM_EMAIL || 'AXISCRM Reports <onboarding@resend.dev>',
         to: process.env.DEVON_EMAIL,
-        subject: `🤖 Auto-notified ${toEmail} — ${label} (${name})`,
+        subject: `🤖 Auto-notified ${name} — ${label} — ${machineLine}`,
         text: `MillPulse automatically emailed ${toEmail} about ${name}.\n\n`
+          + `Machine: ${model || 'Unknown model'}\nSerial #: ${serial}\nCalibration #: ${correctionCount != null ? correctionCount : '—'}\n\n`
           + `Why: "${label}" flagged on two syncs in a row, so it cleared the auto-notify bar without anyone clicking anything.\n\n`
           + `${cause || ''}\n\nWhat was sent as the fix: ${action || ''}\n\n`
           + `This is already logged in Fleet like any other alert — it'll auto-resolve once a clean sync comes back in, same as a manual notify. No action needed from you unless you want to follow up directly.`,
@@ -165,7 +167,7 @@ async function checkAndNotifySerial(serial, opts = {}) {
     // Confirmed twice, nothing to send to — still worth telling Devon so a
     // real issue doesn't just sit there unnoticed for lack of a contact.
     await notifyDevonOfAutoSend({
-      serial, name: notifyName, toEmail: '(no contact email on file)',
+      serial, model: latestEntry.model, correctionCount: cc, name: notifyName, toEmail: '(no contact email on file)',
       label: rec.label,
       cause: `Confirmed on 2 consecutive syncs, but there's no lab-entered contact email and no linked customer email to send it to. ${rec.cause}`,
       action: 'Add a contact email at install time, or link a customer with an email, then use 🔁 Re-notify on the Fleet card.',
@@ -174,13 +176,13 @@ async function checkAndNotifySerial(serial, opts = {}) {
   }
 
   const result = await sendFleetAlert({
-    serial, toEmail: notifyEmail, toName: notifyName, customerId: (customer && customer.id) || null,
+    serial, model: latestEntry.model, toEmail: notifyEmail, toName: notifyName, customerId: (customer && customer.id) || null,
     correctionCount: cc,
     checkKey: rec.check, label: rec.label, cause: rec.cause, action: rec.action,
     host: opts.host, proto: opts.proto, triggeredBy: 'auto',
   });
 
-  await notifyDevonOfAutoSend({ serial, name: notifyName, toEmail: notifyEmail, label: rec.label,
+  await notifyDevonOfAutoSend({ serial, model: latestEntry.model, correctionCount: cc, name: notifyName, toEmail: notifyEmail, label: rec.label,
     cause: (repeatOf != null ? `REPEAT: customer was already notified at correction #${repeatOf}, recalibrated (now #${cc}), and it still flags. ` : '') + rec.cause,
     action: rec.action });
 
