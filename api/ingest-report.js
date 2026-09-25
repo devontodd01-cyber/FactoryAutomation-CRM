@@ -32,7 +32,8 @@
 //
 // Request:  POST /api/ingest-report
 //           header  x-ingest-key: <INGEST_API_KEY>
-//           body    { "rawText": "<< SYSTEM REPORT >> ... << END >>", "sourcePath": "C:\\...\\systemreport.txt" (optional, logging only) }
+//           body    { "rawText": "<< SYSTEM REPORT >> ... << END >>", "sourcePath": "C:\\...\\systemreport.txt" (optional, logging only),
+//                     "applogText": "<applog.txt from the same folder>" (optional, 2026-09-24) }
 // Response: { ok: true, results: [ { serial, model, correctionCount, action: "inserted"|"duplicate"|"error", error? } ] }
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -49,6 +50,32 @@ const HEADERS = {
 // 3am / on-startup sync agent run is what actually drives it, in-process,
 // with nothing extra to schedule.
 const { checkAndNotifySerial } = require("./check-and-notify");
+
+// VPanel applog.txt (optional, sent by the sync agent when one sits in the
+// same folder as systemreport.txt). Parsed into a compact event summary
+// for Fleet's "crash / spindle overcurrent between calibrations" warnings,
+// and stored raw for the 🧾 App Log pane. Never emails anyone.
+const applog = require("./_applog");
+const APPLOG_MAX_CHARS = 1500000; // keep the newest ~1.5 MB of text
+
+async function saveApplog(serial, text, anchor, sourcePath) {
+  const trimmed = text.length > APPLOG_MAX_CHARS ? text.slice(text.length - APPLOG_MAX_CHARS).replace(/^[^\n]*\n/, "") : text;
+  const prevRes = await fetch(`${SUPABASE_URL}/rest/v1/mill_applogs?serial=eq.${encodeURIComponent(serial)}&select=summary`, { headers: HEADERS });
+  if (!prevRes.ok) throw new Error(`mill_applogs read failed (${prevRes.status}) -- has mill_applogs.sql been run?`);
+  const prevRows = await prevRes.json().catch(() => []);
+  const previous = prevRows[0] && prevRows[0].summary ? prevRows[0].summary : null;
+  const summary = applog.buildSummary(trimmed, previous, anchor);
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/mill_applogs?on_conflict=serial`, {
+    method: "POST",
+    headers: { ...HEADERS, Prefer: "return=minimal,resolution=merge-duplicates" },
+    body: JSON.stringify({ serial, raw_text: trimmed, summary, source_path: sourcePath || null, updated_at: new Date().toISOString() }),
+  });
+  if (!r.ok) {
+    const data = await r.json().catch(() => null);
+    throw new Error((data && (data.message || data.hint)) || `mill_applogs upsert failed (${r.status})`);
+  }
+  return { events: summary.events.length, calibrations: summary.calibrations.length };
+}
 
 // ── Parser, ported 1:1 from App.js (extractSystemReportBlock through xGap) ──
 
@@ -446,7 +473,7 @@ module.exports = async (req, res) => {
       return res.status(401).json({ error: "Missing or invalid x-ingest-key header." });
     }
 
-    const { rawText, sourcePath, labName, labEmail } = req.body || {};
+    const { rawText, sourcePath, labName, labEmail, applogText } = req.body || {};
     if (!rawText || typeof rawText !== "string" || !rawText.trim()) {
       return res.status(400).json({ error: "rawText is required (the raw systemreport.txt contents)." });
     }
@@ -459,6 +486,9 @@ module.exports = async (req, res) => {
     // an unchanged re-send never emails anyone. (Set 2026-09-23 per Devon:
     // "going forward, only new reports notify".)
     const newReportSerials = new Set();
+    // Newest report per serial in this POST -- its CorrectionCount + Date
+    // anchor the applog's calibration numbering.
+    const anchorBySerial = {};
     for (const chunk of chunks) {
       try {
         const report = parseVPanelReport(chunk);
@@ -475,6 +505,10 @@ module.exports = async (req, res) => {
         }
         await upsertMillReport(buildMillReportRow(report, chunk, labName, labEmail));
         touchedSerials.add(report.serial);
+        const prevAnchor = anchorBySerial[report.serial];
+        if (!prevAnchor || report.correctionCount > prevAnchor.cc) {
+          anchorBySerial[report.serial] = { cc: report.correctionCount, date: applog.reportDate(chunk) };
+        }
         // Best-effort: mill_reports (Fleet's live view) is the well-tested
         // path and must never fail because of this. If diagnostic_reports
         // has drifted from what's expected here (e.g. a schema change), log
@@ -496,6 +530,25 @@ module.exports = async (req, res) => {
       try { await reconcileLatestFlag(serial); } catch { /* non-fatal */ }
     }
 
+    // App log: only attached when this POST was for exactly one machine
+    // (the applog has no serial of its own -- it belongs to whichever
+    // machine's systemreport.txt sits in the same folder). Best-effort:
+    // a bad/missing applog never fails the report ingest.
+    let applogResult = null;
+    if (typeof applogText === "string" && applogText.trim()) {
+      if (touchedSerials.size === 1) {
+        const serial = [...touchedSerials][0];
+        try {
+          applogResult = { serial, ...(await saveApplog(serial, applogText, anchorBySerial[serial], sourcePath)) };
+        } catch (appErr) {
+          console.error(`applog save failed for ${serial}:`, appErr.message || appErr);
+          applogResult = { serial, error: appErr.message || String(appErr) };
+        }
+      } else {
+        applogResult = { skipped: `applog ignored: report covered ${touchedSerials.size} serials, can't tell which machine it belongs to` };
+      }
+    }
+
     // Automatic customer notification (see api/check-and-notify.js for what
     // "automatic" means: 2 consecutive flagged syncs, same checks Fleet's
     // card already flags today, no duplicate sends, Devon gets his own
@@ -512,7 +565,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    return res.status(200).json({ ok: true, sourcePath: sourcePath || null, results, newCalibrations: [...newReportSerials] });
+    return res.status(200).json({ ok: true, sourcePath: sourcePath || null, results, newCalibrations: [...newReportSerials], applog: applogResult });
   } catch (e) {
     return res.status(500).json({ error: e.message || String(e) });
   }
