@@ -3435,6 +3435,55 @@ function MachineOwnerEditor({ serial, owner, customers, onSave }) {
   );
 }
 
+// ── App log (VPanel applog.txt) events — parsed server-side by
+// api/_applog.js during sync, stored in mill_applogs.summary. Kinds with
+// alert:true raise the Fleet card badge when they happen between the last
+// two calibrations (or since the latest one). Keep in sync with KIND_INFO
+// in api/_applog.js.
+const APPLOG_KIND_INFO = {
+  collision:           { icon: '💥', label: 'Crash (mechanical collision)', alert: true },
+  spindle_overcurrent: { icon: '⚡', label: 'Spindle overcurrent',          alert: true },
+  axis_error:          { icon: '⚠',  label: 'Axis error',                   alert: true },
+  tool_break:          { icon: '🔨', label: 'Tool break',                   alert: true },
+  tool_not_detected:   { icon: '❔', label: 'Tool not detected',            alert: false },
+  correction_failed:   { icon: '✖',  label: 'Calibration failed',           alert: false },
+  spindle_replacement: { icon: '🔧', label: 'Spindle replacement',          alert: false },
+  spindle_run_in:      { icon: '🔄', label: 'Spindle run-in',               alert: false },
+};
+const applogKind = (k) => APPLOG_KIND_INFO[k] || { icon: '•', label: k, alert: false };
+const calLabel = (cc, ts) => (cc != null ? `cal #${cc}` : `cal ${String(ts || '').slice(0, 10)}`);
+
+// Group a machine's app-log events into calibration windows, newest first:
+// [{ fromCc, fromTs, toCc, toTs, events, isOpen }] — isOpen = after the
+// latest calibration (not recalibrated yet).
+function applogWindows(summary) {
+  if (!summary || !Array.isArray(summary.events)) return [];
+  const cals = Array.isArray(summary.calibrations) ? summary.calibrations : [];
+  const groups = new Map();
+  for (const e of summary.events) {
+    const key = e.after_ts || 'before';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(e);
+  }
+  const out = [];
+  for (const [key, events] of groups) {
+    const i = cals.findIndex(c => c.ts === key);
+    const from = i >= 0 ? cals[i] : null;
+    const to = i >= 0 ? cals[i + 1] || null : cals[0] || null;
+    out.push({ fromCc: from?.cc ?? null, fromTs: from?.ts ?? null, toCc: to?.cc ?? null, toTs: to?.ts ?? null, events, isOpen: i >= 0 && !to });
+  }
+  return out.sort((a, b) => String(b.fromTs || '').localeCompare(String(a.fromTs || '')));
+}
+
+// Alert-worthy events between the last two calibrations or since the
+// latest one — what the collapsed Fleet card badges.
+function recentApplogAlerts(summary) {
+  if (!summary || !Array.isArray(summary.events)) return [];
+  const cals = Array.isArray(summary.calibrations) ? summary.calibrations : [];
+  const since = cals.length >= 2 ? cals[cals.length - 2].ts : (cals[0]?.ts || '');
+  return summary.events.filter(e => applogKind(e.kind).alert && e.ts > since);
+}
+
 function Fleet({ msg }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -3475,12 +3524,18 @@ function Fleet({ msg }) {
   // per group" in one request, so this pulls full history; if a very large
   // fleet ever makes this slow, that's the place to add a server-side view.
   const [diagReportRows, setDiagReportRows] = useState([]);
+  // App log summaries (mill_applogs.summary) for the whole fleet — small
+  // JSON, loaded eagerly for the card badges. Raw log text is fetched
+  // lazily per machine when the 📄 Report view opens (can be ~1.5 MB).
+  const [applogBySerial, setApplogBySerial] = useState({});
+  const [applogRaw, setApplogRaw] = useState({}); // serial -> { text, updated_at } | { error }
+  const [applogErrorsOnly, setApplogErrorsOnly] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       // pull every report, newest first; we group by serial client-side
-      const [r, ownersData, customersData, alertsData, diagData] = await Promise.all([
+      const [r, ownersData, customersData, alertsData, diagData, applogData] = await Promise.all([
         fetch(
           `${SUPABASE_URL}/rest/v1/mill_reports?select=serial,model,correction_count,firmware_main,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length,spindle_hours,total_work_time,report_date,recent_errors,is_latest,created_at,lab_name,lab_email&order=serial.asc,correction_count.asc`,
           { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
@@ -3492,7 +3547,14 @@ function Fleet({ msg }) {
           `${SUPABASE_URL}/rest/v1/diagnostic_reports?select=serial,correction_count,raw_text&order=serial.asc,correction_count.asc`,
           { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
         ).then(res => res.json()).catch(() => []),
+        fetch(
+          `${SUPABASE_URL}/rest/v1/mill_applogs?select=serial,summary,updated_at`,
+          { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+        ).then(res => (res.ok ? res.json() : [])).catch(() => []),
       ]);
+      const applogMap = {};
+      for (const a of (Array.isArray(applogData) ? applogData : [])) applogMap[a.serial] = a;
+      setApplogBySerial(applogMap);
       setRows(Array.isArray(r) ? r : []);
       setMachineOwners(Array.isArray(ownersData) ? ownersData : []);
       setCustomers(Array.isArray(customersData) ? customersData : []);
@@ -3794,6 +3856,24 @@ function Fleet({ msg }) {
     return hist[hist.length - 1];
   };
 
+  // Raw applog.txt for one machine, fetched the first time its 📄 Report
+  // view opens (kept out of load() — it can be ~1.5 MB per machine).
+  const loadApplogRaw = useCallback(async (serial) => {
+    try {
+      const res = await fetch(
+        `${SUPABASE_URL}/rest/v1/mill_applogs?serial=eq.${encodeURIComponent(serial)}&select=raw_text,updated_at`,
+        { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+      );
+      const data = res.ok ? await res.json() : [];
+      setApplogRaw(prev => ({ ...prev, [serial]: data[0] ? { text: data[0].raw_text || '', updated_at: data[0].updated_at } : { text: null } }));
+    } catch (e) {
+      setApplogRaw(prev => ({ ...prev, [serial]: { error: e.message || String(e) } }));
+    }
+  }, []);
+  useEffect(() => {
+    if (openSerial && trendView === 'report' && !applogRaw[openSerial]) loadApplogRaw(openSerial);
+  }, [openSerial, trendView, applogRaw, loadApplogRaw]);
+
   // Auto-close the loop: an alert only ever gets marked 'resolved' here, once
   // a FRESH mill_reports row (correction_count higher than the one that
   // triggered the alert) comes in AND that specific check no longer flags —
@@ -4004,6 +4084,29 @@ function Fleet({ msg }) {
                     {alert.status === 'resolved' && `✔ resolved ${(alert.resolved_at || '').slice(0, 10)}`}
                   </span>
                 )}
+                {/* App-log warning: crash / spindle overcurrent / axis error /
+                    tool break between the last two calibrations (or since the
+                    latest one). Fleet-only -- never emails a customer. */}
+                {(() => {
+                  const recent = recentApplogAlerts(applogBySerial[serial]?.summary);
+                  if (!recent.length) return null;
+                  const counts = {};
+                  recent.forEach(e => { counts[e.kind] = (counts[e.kind] || 0) + 1; });
+                  const w = recent[recent.length - 1];
+                  const cals = applogBySerial[serial]?.summary?.calibrations || [];
+                  const next = cals.find(c => c.ts > w.ts);
+                  const where = next
+                    ? `between ${calLabel(w.after_cc, w.after_ts)} → ${calLabel(next.cc, next.ts)}`
+                    : `since ${calLabel(w.after_cc, w.after_ts)} (not recalibrated yet)`;
+                  return (
+                    <span
+                      title={recent.map(e => `${e.ts} ${applogKind(e.kind).label}${e.code ? ' ' + e.code : ''}`).join('\n')}
+                      style={{ fontSize: 9, fontFamily: "'IBM Plex Mono',monospace", border: '1px solid var(--rd)', borderRadius: 4, padding: '1px 6px', color: 'var(--rd)' }}
+                    >
+                      {Object.entries(counts).map(([k, n]) => `${applogKind(k).icon} ${n > 1 ? n + '× ' : ''}${applogKind(k).label}`).join(' · ')} {where}
+                    </span>
+                  );
+                })()}
               </div>
               <span
                 className={`diag-flag-title`}
@@ -4134,38 +4237,117 @@ function Fleet({ msg }) {
 
                 {trendView === 'report' && (() => {
                   const rawRow = latestRawReportFor(serial);
-                  if (!rawRow) {
-                    return (
-                      <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 11, color: 'var(--txd)', padding: '8px 0' }}>
-                        No saved report text for this machine yet — the next sync (or a paste into Fleet's ➕ Add Report) will populate this view.
-                      </div>
-                    );
-                  }
+                  const logState = applogRaw[serial];
+                  const paneStyle = {
+                    margin: 0, padding: 10, height: 420, overflow: 'auto',
+                    background: 'var(--bg)', border: '1px solid var(--bdr)',
+                    borderRadius: 6, fontFamily: "'IBM Plex Mono',monospace", fontSize: 10.5,
+                    lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--tx)',
+                  };
+                  const paneHead = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, marginBottom: 6, minHeight: 24 };
+                  const headTxt = { fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: 'var(--txd)' };
+                  const copyBtn = (text) => (
+                    <button
+                      className="btn bg bs"
+                      style={{ height: 24, fontSize: 10 }}
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        try { await navigator.clipboard.writeText(text || ''); } catch { /* clipboard unavailable — no-op */ }
+                      }}
+                    >
+                      📋 Copy
+                    </button>
+                  );
+                  const isBadLine = (ln) => /ERROR|MECHANICAL COLLISION|SEQ_RESULT_(?!SUCCESS)/.test(ln);
+                  const logLines = logState?.text ? logState.text.split(/\r?\n/) : [];
+                  const shownLines = applogErrorsOnly ? logLines.filter(isBadLine) : logLines;
                   return (
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                        <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: 'var(--txd)' }}>
-                          Last pulled report · correction count {rawRow.correction_count}
-                        </span>
-                        <button
-                          className="btn bg bs"
-                          style={{ height: 24, fontSize: 10 }}
-                          onClick={async (e) => {
-                            e.stopPropagation();
-                            try { await navigator.clipboard.writeText(rawRow.raw_text || ''); } catch { /* clipboard unavailable — no-op */ }
-                          }}
-                        >
-                          📋 Copy
-                        </button>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                      {/* System report pane */}
+                      <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+                        <div style={paneHead}>
+                          <span style={headTxt}>📄 System report{rawRow ? ` · cc ${rawRow.correction_count}` : ''}</span>
+                          {rawRow && copyBtn(rawRow.raw_text)}
+                        </div>
+                        {rawRow ? (
+                          <pre style={paneStyle}>{rawRow.raw_text}</pre>
+                        ) : (
+                          <div style={{ ...headTxt, fontSize: 11, padding: '8px 0' }}>
+                            No saved report text for this machine yet — the next sync (or a paste into Fleet's ➕ Add Report) will populate this view.
+                          </div>
+                        )}
                       </div>
-                      <pre style={{
-                        margin: 0, padding: 10, maxHeight: 420, overflow: 'auto',
-                        background: 'var(--bg)', border: '1px solid var(--bdr)',
-                        borderRadius: 6, fontFamily: "'IBM Plex Mono',monospace", fontSize: 10.5,
-                        lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--tx)',
-                      }}>
-                        {rawRow.raw_text}
-                      </pre>
+                      {/* App log pane */}
+                      <div style={{ flex: '1 1 320px', minWidth: 0 }}>
+                        <div style={paneHead}>
+                          <span style={headTxt}>
+                            🧾 App log{logState?.updated_at ? ` · synced ${String(logState.updated_at).slice(0, 10)}` : ''}
+                          </span>
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            {logState?.text && (
+                              <button
+                                className={`btn bs ${applogErrorsOnly ? 'bp' : 'bg'}`}
+                                style={{ height: 24, fontSize: 10 }}
+                                onClick={(e) => { e.stopPropagation(); setApplogErrorsOnly(v => !v); }}
+                              >
+                                ⚠ Errors only
+                              </button>
+                            )}
+                            {logState?.text && copyBtn(logState.text)}
+                          </div>
+                        </div>
+                        {!logState && <div style={{ ...headTxt, fontSize: 11, padding: '8px 0' }}>⏳ Loading app log…</div>}
+                        {logState?.error && <div style={{ ...headTxt, fontSize: 11, padding: '8px 0', color: 'var(--rd)' }}>Couldn't load app log: {logState.error}</div>}
+                        {logState && !logState.error && !logState.text && (
+                          <div style={{ ...headTxt, fontSize: 11, padding: '8px 0' }}>
+                            No app log for this machine yet — it arrives with the next sync from a PC running the updated MillPulse agent.
+                          </div>
+                        )}
+                        {logState?.text && (
+                          <pre
+                            style={paneStyle}
+                            ref={(el) => { if (el && !el.dataset.scrolled) { el.scrollTop = el.scrollHeight; el.dataset.scrolled = '1'; } }}
+                          >
+                            {shownLines.map((ln, i) => (
+                              <div key={i} style={isBadLine(ln) ? { color: 'var(--rd)', fontWeight: 600 } : undefined}>{ln || ' '}</div>
+                            ))}
+                          </pre>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* App log events grouped by calibration window (newest first). */}
+                {(() => {
+                  const windows = applogWindows(applogBySerial[serial]?.summary);
+                  if (!windows.length) return null;
+                  return (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 12, letterSpacing: '.5px', marginBottom: 6, color: 'var(--txm)' }}>
+                        APP LOG EVENTS BETWEEN CALIBRATIONS
+                      </div>
+                      {windows.slice(0, 8).map((w, wi) => {
+                        const hasAlert = w.events.some(e => applogKind(e.kind).alert);
+                        return (
+                          <div key={wi} style={{ borderLeft: `3px solid ${hasAlert ? 'var(--rd)' : 'var(--bdr)'}`, padding: '4px 10px', marginBottom: 8 }}>
+                            <div style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10.5, color: 'var(--txm)', marginBottom: 3 }}>
+                              {w.fromTs
+                                ? (w.isOpen
+                                    ? `Since ${calLabel(w.fromCc, w.fromTs)} (${String(w.fromTs).slice(0, 10)}) — not recalibrated yet`
+                                    : `${calLabel(w.fromCc, w.fromTs)} → ${calLabel(w.toCc, w.toTs)} (${String(w.fromTs).slice(0, 10)} → ${String(w.toTs).slice(0, 10)})`)
+                                : `Before first logged calibration`}
+                            </div>
+                            <div className="diag-meta" style={{ flexDirection: 'column', gap: 2 }}>
+                              {w.events.map((e, i) => (
+                                <span key={i} style={applogKind(e.kind).alert ? { color: 'var(--rd)' } : undefined}>
+                                  {e.ts} — {applogKind(e.kind).icon} {applogKind(e.kind).label}{e.code ? ` (${e.code})` : ''}{e.tool != null ? ` · tool ${e.tool}` : ''}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   );
                 })()}
