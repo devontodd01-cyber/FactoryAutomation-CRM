@@ -58,6 +58,109 @@ const { checkAndNotifySerial } = require("./check-and-notify");
 const applog = require("./_applog");
 const APPLOG_MAX_CHARS = 1500000; // keep the newest ~1.5 MB of text
 
+// ── New-machine heads-up (2026-09-25) ────────────────────────────────────
+// First time a serial ever reaches mill_reports through the sync agent,
+// email Devon so new installs don't slip by unnoticed.
+async function serialAlreadyKnown(serial) {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/mill_reports?serial=eq.${encodeURIComponent(serial)}&select=serial&limit=1`, { headers: HEADERS });
+  if (!r.ok) throw new Error(`mill_reports lookup failed (${r.status})`);
+  const rows = await r.json().catch(() => []);
+  return Array.isArray(rows) && rows.length > 0;
+}
+
+async function notifyDevonNewMachine({ serial, model, correctionCount, labName, labEmail, computerName, sourcePath, host, proto, hasApplog, assignment }) {
+  if (!process.env.RESEND_API_KEY || !process.env.DEVON_EMAIL) return;
+  const machineLine = `${model ? model + " " : ""}SN ${serial}`;
+  const who = (labName && labName.trim()) || "unnamed lab";
+  const fleetUrl = host ? `${proto || "https"}://${host}/` : null;
+  const text =
+    `A machine synced to MillPulse for the first time.\n\n`
+    + `Machine: ${model || "Unknown model"}\n`
+    + `Serial #: ${serial}\n`
+    + `Lab (typed at install): ${who}\n`
+    + `Contact email: ${(labEmail && labEmail.trim()) || "none given"}\n`
+    + `PC name: ${(computerName && computerName.trim()) || "unknown (older MillPulse agent)"}\n`
+    + `Calibration #: ${correctionCount != null ? correctionCount : "—"}\n`
+    + `App log: ${hasApplog ? "received" : "not found next to systemreport.txt"}\n`
+    + `Report file: ${sourcePath || "—"}\n\n`
+    + (assignment && assignment.action === "created"
+        ? `Customer: NEW customer "${assignment.company}" was created automatically and this machine is assigned to it. Check the contact details in Customers.\n\n`
+        : assignment && assignment.action === "linked"
+          ? `Customer: assigned to your existing customer "${assignment.company}" (matched by lab name).\n\n`
+          : `Customer: not assigned (${(assignment && (assignment.skipped || assignment.error)) || "unknown"}). Assign it in Fleet.\n\n`)
+    + `It's at the top of Fleet under 🆕 NEW / NEEDS SETUP for its first week.`
+    + (fleetUrl ? `\n\n${fleetUrl}` : "");
+  await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from: process.env.FROM_EMAIL || "AXISCRM Reports <onboarding@resend.dev>",
+      to: process.env.DEVON_EMAIL,
+      subject: `🆕 New machine synced — ${machineLine} — ${who}`,
+      text,
+    }),
+  });
+}
+
+// ── Auto-assign a customer (2026-09-27) ──────────────────────────────────
+// A synced machine with no customer gets linked to one, using the lab name
+// typed into MillPulse Setup: an existing customer with the same name
+// (ignoring case/punctuation/spacing) is reused, otherwise a new customer
+// is created. A machine that already has a customer is never touched, so a
+// manual assignment in Fleet always wins.
+const normCompany = (x) => String(x || "").toLowerCase().replace(/&/g, "and").replace(/[^a-z0-9]+/g, "");
+
+async function autoAssignCustomer(serial, labName, labEmail, computerName) {
+  const name = typeof labName === "string" ? labName.trim() : "";
+  if (!name) return { skipped: "no lab name entered at install" };
+
+  const mRes = await fetch(`${SUPABASE_URL}/rest/v1/machines?serial=eq.${encodeURIComponent(serial)}&select=serial,customer_id`, { headers: HEADERS });
+  if (!mRes.ok) throw new Error(`machines lookup failed (${mRes.status})`);
+  const mRows = await mRes.json().catch(() => []);
+  if (mRows[0] && mRows[0].customer_id != null) return { skipped: "already assigned" };
+
+  const cRes = await fetch(`${SUPABASE_URL}/rest/v1/customers?select=id,company`, { headers: HEADERS });
+  if (!cRes.ok) throw new Error(`customers lookup failed (${cRes.status})`);
+  const customers = await cRes.json().catch(() => []);
+  const key = normCompany(name);
+  let customer = key ? customers.find((c) => normCompany(c.company) === key) : null;
+  let action = "linked";
+
+  if (!customer) {
+    const email = typeof labEmail === "string" && labEmail.trim() ? labEmail.trim() : null;
+    const today = new Date().toISOString().slice(0, 10);
+    const ins = await fetch(`${SUPABASE_URL}/rest/v1/customers`, {
+      method: "POST",
+      headers: { ...HEADERS, Prefer: "return=representation" },
+      body: JSON.stringify({
+        company: name,
+        email,
+        notes: `Added automatically by MillPulse on ${today} (machine ${serial}${computerName ? `, PC ${computerName}` : ""}). Name/email as typed at install; check contact details.`,
+      }),
+    });
+    if (!ins.ok) {
+      const data = await ins.json().catch(() => null);
+      throw new Error((data && (data.message || data.hint)) || `customer create failed (${ins.status})`);
+    }
+    const created = await ins.json().catch(() => []);
+    customer = Array.isArray(created) ? created[0] : created;
+    if (!customer || customer.id == null) throw new Error("customer create returned no id");
+    action = "created";
+  }
+
+  // Upsert on serial: only customer_id is sent, so an existing nickname stays.
+  const up = await fetch(`${SUPABASE_URL}/rest/v1/machines?on_conflict=serial`, {
+    method: "POST",
+    headers: { ...HEADERS, Prefer: "return=minimal,resolution=merge-duplicates" },
+    body: JSON.stringify({ serial, customer_id: customer.id }),
+  });
+  if (!up.ok) {
+    const data = await up.json().catch(() => null);
+    throw new Error((data && (data.message || data.hint)) || `machine assign failed (${up.status})`);
+  }
+  return { action, customerId: customer.id, company: customer.company || name };
+}
+
 async function saveApplog(serial, text, anchor, sourcePath) {
   const trimmed = text.length > APPLOG_MAX_CHARS ? text.slice(text.length - APPLOG_MAX_CHARS).replace(/^[^\n]*\n/, "") : text;
   const prevRes = await fetch(`${SUPABASE_URL}/rest/v1/mill_applogs?serial=eq.${encodeURIComponent(serial)}&select=summary`, { headers: HEADERS });
@@ -371,7 +474,7 @@ function buildRawMetrics(report) {
 // manual paste through the App.js UI which never sends this field at all).
 // `labEmail` follows the identical reasoning -- the optional contact email
 // captured at install time, only set on the row when actually provided.
-function buildMillReportRow(report, rawText, labName, labEmail) {
+function buildMillReportRow(report, rawText, labName, labEmail, computerName) {
   const rac = report.rac || {};
   const grad = rac["SPINDLE GRADIENT"] || {};
   const row = {
@@ -388,6 +491,11 @@ function buildMillReportRow(report, rawText, labName, labEmail) {
   };
   if (typeof labName === "string" && labName.trim()) row.lab_name = labName.trim();
   if (typeof labEmail === "string" && labEmail.trim()) row.lab_email = labEmail.trim();
+  // Sync tracking (2026-09-25): only this endpoint (the sync agent) sets
+  // these, so Fleet can tell auto-synced machines apart from manually
+  // pasted ones and flag a PC that has stopped syncing.
+  row.last_synced_at = new Date().toISOString();
+  if (typeof computerName === "string" && computerName.trim()) row.pc_name = computerName.trim();
   return row;
 }
 
@@ -417,7 +525,20 @@ function buildDiagnosticReportRow(report, rawText) {
   };
 }
 
+// Retries without the 2026-09-25 tracking columns if the migration hasn't
+// been run yet, so a missing column can never break syncing.
 async function upsertMillReport(row) {
+  try {
+    return await upsertMillReportRaw(row);
+  } catch (e) {
+    if (!/pc_name|last_synced_at/.test(e.message || "")) throw e;
+    const { pc_name, last_synced_at, ...rest } = row;
+    console.error("mill_reports tracking columns missing -- run millpulse_applog_and_tracking.sql. Saving without them.");
+    return upsertMillReportRaw(rest);
+  }
+}
+
+async function upsertMillReportRaw(row) {
   const r = await fetch(`${SUPABASE_URL}/rest/v1/mill_reports?on_conflict=serial,correction_count`, {
     method: "POST",
     headers: { ...HEADERS, Prefer: "return=representation,resolution=merge-duplicates" },
@@ -473,7 +594,7 @@ module.exports = async (req, res) => {
       return res.status(401).json({ error: "Missing or invalid x-ingest-key header." });
     }
 
-    const { rawText, sourcePath, labName, labEmail, applogText } = req.body || {};
+    const { rawText, sourcePath, labName, labEmail, applogText, computerName } = req.body || {};
     if (!rawText || typeof rawText !== "string" || !rawText.trim()) {
       return res.status(400).json({ error: "rawText is required (the raw systemreport.txt contents)." });
     }
@@ -489,6 +610,8 @@ module.exports = async (req, res) => {
     // Newest report per serial in this POST -- its CorrectionCount + Date
     // anchor the applog's calibration numbering.
     const anchorBySerial = {};
+    // Serials seen for the very first time in this POST -> Devon heads-up.
+    const brandNew = {};
     for (const chunk of chunks) {
       try {
         const report = parseVPanelReport(chunk);
@@ -503,7 +626,17 @@ module.exports = async (req, res) => {
           // than emailing a customer about an old report.
           console.error(`new-report check failed for ${report.serial}:`, lookupErr.message || lookupErr);
         }
-        await upsertMillReport(buildMillReportRow(report, chunk, labName, labEmail));
+        if (!touchedSerials.has(report.serial) && !brandNew[report.serial]) {
+          try {
+            if (!(await serialAlreadyKnown(report.serial))) brandNew[report.serial] = { model: report.model, correctionCount: report.correctionCount };
+          } catch (lookupErr) {
+            // Can't tell -> don't claim it's new.
+            console.error(`new-machine check failed for ${report.serial}:`, lookupErr.message || lookupErr);
+          }
+        } else if (brandNew[report.serial] && report.correctionCount > brandNew[report.serial].correctionCount) {
+          brandNew[report.serial].correctionCount = report.correctionCount;
+        }
+        await upsertMillReport(buildMillReportRow(report, chunk, labName, labEmail, computerName));
         touchedSerials.add(report.serial);
         const prevAnchor = anchorBySerial[report.serial];
         if (!prevAnchor || report.correctionCount > prevAnchor.cc) {
@@ -549,6 +682,32 @@ module.exports = async (req, res) => {
       }
     }
 
+    // Auto-assign unowned machines to a customer from the typed lab name.
+    // Runs before auto-notify so a brand-new lab's contact is on file.
+    // Best-effort: never fails the ingest.
+    const customerAssign = {};
+    for (const serial of touchedSerials) {
+      try {
+        customerAssign[serial] = await autoAssignCustomer(serial, labName, labEmail, computerName);
+      } catch (assignErr) {
+        console.error(`customer auto-assign failed for ${serial}:`, assignErr.message || assignErr);
+        customerAssign[serial] = { error: assignErr.message || String(assignErr) };
+      }
+    }
+
+    // New-machine heads-up to Devon -- best-effort, never fails the ingest.
+    for (const [serial, info] of Object.entries(brandNew)) {
+      try {
+        await notifyDevonNewMachine({
+          serial, ...info, labName, labEmail, computerName, sourcePath, assignment: customerAssign[serial],
+          host: req.headers.host, proto: req.headers["x-forwarded-proto"] || "https",
+          hasApplog: !!(applogResult && applogResult.serial === serial && !applogResult.error),
+        });
+      } catch (mailErr) {
+        console.error(`new-machine email failed for ${serial}:`, mailErr.message || mailErr);
+      }
+    }
+
     // Automatic customer notification (see api/check-and-notify.js for what
     // "automatic" means: 2 consecutive flagged syncs, same checks Fleet's
     // card already flags today, no duplicate sends, Devon gets his own
@@ -565,7 +724,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    return res.status(200).json({ ok: true, sourcePath: sourcePath || null, results, newCalibrations: [...newReportSerials], applog: applogResult });
+    return res.status(200).json({ ok: true, sourcePath: sourcePath || null, results, newCalibrations: [...newReportSerials], applog: applogResult, newMachines: Object.keys(brandNew), customerAssign });
   } catch (e) {
     return res.status(500).json({ error: e.message || String(e) });
   }
