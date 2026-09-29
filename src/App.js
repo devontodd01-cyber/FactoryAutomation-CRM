@@ -3385,51 +3385,97 @@ async function reconcileLatestFlag(serial) {
 // second customer list, just points a machine at one). Local draft state so
 // typing/selecting doesn't fire a save on every keystroke; the Save button
 // only appears once something's actually changed.
-function MachineOwnerEditor({ serial, owner, customers, onSave }) {
-  const [customerId, setCustomerId] = useState(owner?.customer_id ?? '');
+// Same matching rule as the server's auto-assign (api/ingest-report.js):
+// ignore case, spacing and punctuation, "&" == "and".
+const normCompanyName = (x) => String(x || '').toLowerCase().replace(/&/g, 'and').replace(/[^a-z0-9]+/g, '');
+const NEW_CUSTOMER = '__new__';
+
+function MachineOwnerEditor({ serial, owner, customers, onSave, reportedLab, reportedEmail, onCreateCustomer }) {
+  // When the machine has no customer yet but its PC reported a lab name
+  // (typed at MillPulse install), pre-pick the matching customer — or, if
+  // there isn't one, pre-pick "➕ New customer" with that name — so
+  // assigning it is a single 💾 Save tap. (2026-09-28)
+  const labName = (reportedLab || '').trim();
+  const unassigned = owner?.customer_id == null;
+  const match = labName ? customers.find(c => normCompanyName(c.company) === normCompanyName(labName)) : null;
+  const suggestedId = unassigned && labName ? (match ? match.id : NEW_CUSTOMER) : '';
+  const initialId = owner?.customer_id ?? suggestedId;
+
+  const [customerId, setCustomerId] = useState(initialId);
   const [nickname, setNickname] = useState(owner?.nickname ?? '');
+  const [newName, setNewName] = useState(labName);
   const [saving, setSaving] = useState(false);
   useEffect(() => {
-    setCustomerId(owner?.customer_id ?? '');
+    setCustomerId(owner?.customer_id ?? suggestedId);
     setNickname(owner?.nickname ?? '');
-  }, [owner, serial]);
+    setNewName(labName);
+  }, [owner, serial, labName, suggestedId]);
   const dirty = (owner?.customer_id ?? '') !== customerId || (owner?.nickname ?? '') !== nickname;
+  const isSuggestion = unassigned && customerId !== '' && customerId === suggestedId;
   // `customers` arrives in whatever order it loaded from the DB — sort it
   // here (case-insensitive) so the assign dropdown is always A→Z regardless
   // of what order the caller's own list happens to be in.
   const sortedCustomers = [...customers].sort((a, b) =>
     (a.company || '').localeCompare(b.company || '', undefined, { sensitivity: 'base', numeric: true })
   );
+  const monoHint = { fontSize: 10, color: 'var(--txd)', fontFamily: "'IBM Plex Mono',monospace" };
+  const save = async () => {
+    setSaving(true);
+    try {
+      let id = customerId || null;
+      if (customerId === NEW_CUSTOMER) {
+        const name = newName.trim();
+        if (!name) { setSaving(false); return; }
+        const created = await onCreateCustomer(name, reportedEmail, serial);
+        if (!created || created.id == null) { setSaving(false); return; }
+        id = created.id;
+      }
+      await onSave(serial, id, nickname.trim() || null);
+    } finally {
+      setSaving(false);
+    }
+  };
   return (
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', background: 'var(--sur2)', border: '1px solid var(--bdr)', borderRadius: 6, padding: '8px 10px', marginBottom: 12 }} onClick={e => e.stopPropagation()}>
-      <span style={{ fontSize: 10, color: 'var(--txd)', fontFamily: "'IBM Plex Mono',monospace" }}>OWNER</span>
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', background: 'var(--sur2)', border: `1px solid ${isSuggestion ? '#ffb020' : 'var(--bdr)'}`, borderRadius: 6, padding: '8px 10px', marginBottom: 12 }} onClick={e => e.stopPropagation()}>
+      <span style={monoHint}>OWNER</span>
       <select
-        className="fsl" style={{ maxWidth: 220, margin: 0 }}
+        className="fsl" style={{ maxWidth: 240, margin: 0 }}
         value={customerId}
-        onChange={e => setCustomerId(e.target.value || '')}
+        onChange={e => setCustomerId(e.target.value === NEW_CUSTOMER ? NEW_CUSTOMER : (e.target.value ? Number.isNaN(Number(e.target.value)) ? e.target.value : Number(e.target.value) : ''))}
       >
         <option value="">— Unassigned —</option>
+        <option value={NEW_CUSTOMER}>➕ New customer{labName ? `: "${labName}"` : '…'}</option>
         {sortedCustomers.map(c => <option key={c.id} value={c.id}>{c.company}</option>)}
       </select>
+      {customerId === NEW_CUSTOMER && (
+        <input
+          className="fi" style={{ maxWidth: 200, margin: 0 }}
+          placeholder="New customer name"
+          value={newName}
+          onChange={e => setNewName(e.target.value)}
+        />
+      )}
       <input
         className="fi" style={{ maxWidth: 180, margin: 0 }}
         placeholder="Nickname (optional)"
         value={nickname}
         onChange={e => setNickname(e.target.value)}
       />
-      {customers.length === 0 && (
-        <span style={{ fontSize: 10, color: 'var(--txd)', fontFamily: "'IBM Plex Mono',monospace" }}>
-          No customers yet — add one in the Customers tab first.
-        </span>
-      )}
       {dirty && (
         <button
           className="btn bp bs"
-          disabled={saving}
-          onClick={async () => { setSaving(true); await onSave(serial, customerId || null, nickname.trim() || null); setSaving(false); }}
+          disabled={saving || (customerId === NEW_CUSTOMER && !newName.trim())}
+          onClick={save}
         >
-          {saving ? '⏳' : '💾 Save'}
+          {saving ? '⏳' : customerId === NEW_CUSTOMER ? '💾 Create & assign' : '💾 Save'}
         </button>
+      )}
+      {isSuggestion && (
+        <span style={{ ...monoHint, color: '#ffb020', flexBasis: '100%' }}>
+          {customerId === NEW_CUSTOMER
+            ? `✨ No customer named "${labName}" yet — tap Create & assign to add it${reportedEmail ? ` (email ${reportedEmail})` : ''}, or pick an existing one.`
+            : `✨ Matched the lab name this PC reported ("${labName}") — tap Save to assign.`}
+        </span>
       )}
     </div>
   );
@@ -3450,6 +3496,31 @@ const APPLOG_KIND_INFO = {
   spindle_replacement: { icon: '🔧', label: 'Spindle replacement',          alert: false },
   spindle_run_in:      { icon: '🔄', label: 'Spindle run-in',               alert: false },
 };
+// A machine counts as 🆕 for this many days after its first sync (or until
+// it's assigned an owner, whichever is later). ⏸ = the sync agent hasn't
+// reported in for more than STALE_SYNC_DAYS (it runs nightly).
+const NEW_MACHINE_DAYS = 7;
+// Local-calendar bucket for a sync timestamp.
+function syncBucket(ts) {
+  if (!ts) return 'NEVER SYNCED';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return 'NEVER SYNCED';
+  const startOf = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((startOf(new Date()) - startOf(d)) / 86400000);
+  if (days <= 0) return 'TODAY';
+  if (days === 1) return 'YESTERDAY';
+  if (days < 7) return 'THIS WEEK';
+  return 'EARLIER';
+}
+// "07:42" for today, "Sep 27 07:42" otherwise (local time).
+function syncTimeLabel(ts) {
+  if (!ts) return null;
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return null;
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return syncBucket(ts) === 'TODAY' ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+}
+const STALE_SYNC_DAYS = 3;
 const applogKind = (k) => APPLOG_KIND_INFO[k] || { icon: '•', label: k, alert: false };
 const calLabel = (cc, ts) => (cc != null ? `cal #${cc}` : `cal ${String(ts || '').slice(0, 10)}`);
 
@@ -3536,10 +3607,18 @@ function Fleet({ msg }) {
     try {
       // pull every report, newest first; we group by serial client-side
       const [r, ownersData, customersData, alertsData, diagData, applogData] = await Promise.all([
-        fetch(
-          `${SUPABASE_URL}/rest/v1/mill_reports?select=serial,model,correction_count,firmware_main,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length,spindle_hours,total_work_time,report_date,recent_errors,is_latest,created_at,lab_name,lab_email&order=serial.asc,correction_count.asc`,
-          { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
-        ).then(res => res.json()),
+        (async () => {
+          // pc_name / last_synced_at come from the 2026-09-25 migration
+          // (millpulse_applog_and_tracking.sql). If it hasn't been run yet,
+          // PostgREST rejects the unknown columns -- retry without them so
+          // Fleet keeps working either way.
+          const base = 'serial,model,correction_count,firmware_main,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length,spindle_hours,total_work_time,report_date,recent_errors,is_latest,created_at,lab_name,lab_email';
+          const hdrs = { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } };
+          const url = (cols) => `${SUPABASE_URL}/rest/v1/mill_reports?select=${cols}&order=serial.asc,correction_count.asc`;
+          const first = await fetch(url(base + ',pc_name,last_synced_at'), hdrs);
+          if (first.ok) return first.json();
+          return fetch(url(base), hdrs).then(res => res.json());
+        })(),
         db.get('machines').catch(() => []),
         db.get('customers').catch(() => []),
         db.get('fleet_alerts').catch(() => []),
@@ -3567,6 +3646,25 @@ function Fleet({ msg }) {
       setLoading(false);
     }
   }, [msg]);
+
+  // "➕ New customer" from the owner dropdown — created with the lab name /
+  // email the PC reported, then added to Fleet's list so it shows at once.
+  const createCustomerFromLab = async (company, email, serial) => {
+    try {
+      const r = await db.insert('customers', {
+        company,
+        email: email || null,
+        notes: `Added from Fleet on ${new Date().toISOString().slice(0, 10)} for machine ${serial} (lab name reported by MillPulse). Check contact details.`,
+      });
+      const row = Array.isArray(r) ? r[0] : r;
+      if (!row || row.id == null) throw new Error('no id returned');
+      setCustomers(prev => [...prev, row]);
+      return row;
+    } catch (e) {
+      msg && msg('⚠️ Could not create customer — ' + e.message, 'bad');
+      return null;
+    }
+  };
 
   const saveMachineOwner = async (serial, customerId, nickname) => {
     try {
@@ -3756,8 +3854,30 @@ function Fleet({ msg }) {
     const latest = sorted.find(x => x.is_latest) || sorted[sorted.length - 1];
     const owner = ownerBySerial[serial] || null;
     const customer = owner && owner.customer_id != null ? customerById[owner.customer_id] || null : null;
-    return { serial, latest, history: sorted, owner, customer };
+    // New-machine / sync tracking (2026-09-25):
+    //   firstSeen  -- earliest created_at of any row for this serial
+    //   lastSynced -- latest last_synced_at (only the sync agent sets it, so
+    //                 manually-pasted machines never count as "stopped")
+    //   pcName     -- Windows computer name the agent reported
+    //   lastActivity -- newest report_date/last_synced_at: when this machine
+    //                   last sent (or was pasted) a report. Fleet sorts by it.
+    let firstSeen = null, lastSynced = null, pcName = null, pcAt = '', lastActivity = null;
+    for (const x of sorted) {
+      for (const t of [x.report_date, x.last_synced_at]) if (t && (!lastActivity || t > lastActivity)) lastActivity = t;
+      if (x.created_at && (!firstSeen || x.created_at < firstSeen)) firstSeen = x.created_at;
+      if (x.last_synced_at && (!lastSynced || x.last_synced_at > lastSynced)) lastSynced = x.last_synced_at;
+      if (x.pc_name && String(x.last_synced_at || x.created_at || '') >= pcAt) { pcName = x.pc_name; pcAt = String(x.last_synced_at || x.created_at || ''); }
+    }
+    const DAY = 86400000;
+    const isRecent = firstSeen && (Date.now() - new Date(firstSeen).getTime()) < NEW_MACHINE_DAYS * DAY;
+    const isNew = !!(isRecent || !owner); // new this week, or never assigned a customer/nickname
+    const staleDays = lastSynced ? Math.floor((Date.now() - new Date(lastSynced).getTime()) / DAY) : null;
+    return { serial, latest, history: sorted, owner, customer, firstSeen, lastSynced, pcName, isNew, isRecent, staleDays, lastActivity };
   }).sort((a, b) => {
+    // Most recent sync first (2026-09-28, Devon: "see who's come in this
+    // morning"). Ties / never-synced fall back to name A→Z.
+    const byTime = String(b.lastActivity || '').localeCompare(String(a.lastActivity || ''));
+    if (byTime) return byTime;
     const aName = a.customer?.company || a.owner?.nickname || a.serial;
     const bName = b.customer?.company || b.owner?.nickname || b.serial;
     return aName.localeCompare(bName, undefined, { sensitivity: 'base', numeric: true }) || a.serial.localeCompare(b.serial);
@@ -3768,9 +3888,10 @@ function Fleet({ msg }) {
   const machines = (() => {
     const q = search.trim().toLowerCase();
     if (!q) return allMachines;
-    return allMachines.filter(({ serial, owner, customer }) => {
+    return allMachines.filter(({ serial, owner, customer, pcName, latest }) => {
       const name = (customer?.company || owner?.nickname || serial || '').toLowerCase();
-      return name.includes(q) || (serial || '').toLowerCase().includes(q);
+      return name.includes(q) || (serial || '').toLowerCase().includes(q)
+        || (pcName || '').toLowerCase().includes(q) || (latest?.lab_name || '').toLowerCase().includes(q);
     });
   })();
 
@@ -3946,6 +4067,8 @@ function Fleet({ msg }) {
   };
 
   const fleetFlagged = machines.filter(m => flags(m.serial).length > 0).length;
+  const newCount = machines.filter(m => m.isNew).length;
+  const staleCount = machines.filter(m => m.staleDays != null && m.staleDays > STALE_SYNC_DAYS).length;
 
   return (
     <div>
@@ -3959,7 +4082,7 @@ function Fleet({ msg }) {
           style={{ marginBottom: 0, flex: '1 1 220px', minWidth: 160, maxWidth: 320 }}
         />
         <div className="diag-meta" style={{ margin: 0 }}>
-          {loading ? 'loading…' : `${machines.length} machine(s)${search.trim() ? ` of ${allMachines.length}` : ''} · ${fleetFlagged} flagged`}
+          {loading ? 'loading…' : `${machines.length} machine(s)${search.trim() ? ` of ${allMachines.length}` : ''} · ${fleetFlagged} flagged${newCount ? ` · 🆕 ${newCount} new` : ''}${staleCount ? ` · ⏸ ${staleCount} not syncing` : ''}`}
         </div>
         <button className={`btn bs ${showAdd ? 'bp' : ''}`} style={{ marginLeft: 'auto' }} onClick={() => setShowAdd(s => !s)}>
           {showAdd ? '✕ Cancel' : '➕ Add Report'}
@@ -4030,7 +4153,17 @@ function Fleet({ msg }) {
         </div>
       )}
 
-      {machines.map(({ serial, latest, history, owner, customer }) => {
+      {machines.map(({ serial, latest, history, owner, customer, firstSeen, lastSynced, pcName, isNew, isRecent, staleDays, lastActivity }, idx) => {
+        // Day dividers (TODAY / YESTERDAY / THIS WEEK / EARLIER) so the
+        // morning's syncs are grouped at the top.
+        const sectionStyle = { fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 12, letterSpacing: '.5px', color: 'var(--txm)', margin: idx === 0 ? '0 0 6px' : '14px 0 6px' };
+        const bucket = syncBucket(lastActivity);
+        const prevBucket = idx > 0 ? syncBucket(machines[idx - 1].lastActivity) : null;
+        const sectionHeader = bucket !== prevBucket
+          ? <div key={`hdr-${bucket}`} style={{ ...sectionStyle, color: bucket === 'TODAY' ? 'var(--gn, #3fe0b0)' : sectionStyle.color }}>
+              {bucket} ({machines.filter(m => syncBucket(m.lastActivity) === bucket).length})
+            </div>
+          : null;
         const f = flags(serial);
         const isBad = f.length > 0;
         const open = openSerial === serial;
@@ -4046,7 +4179,7 @@ function Fleet({ msg }) {
         // long as a lab email came through.
         const notifyEmail = latest?.lab_email || customer?.email || null;
         const notifyName = customer?.company || latest?.lab_name || serial;
-        return (
+        return [sectionHeader, (
           <div key={serial} className="diag-report-card">
             <div
               className="diag-report-head"
@@ -4061,6 +4194,29 @@ function Fleet({ msg }) {
                   {customer && `${serial} · `}{owner?.nickname && customer && `${owner.nickname} · `}{latest?.model || '—'} · cc {latest?.correction_count ?? '—'} · fw {latest?.firmware_main || '—'}
                 </span>
                 {!customer && <span style={{fontSize:9,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",border:'1px solid var(--bdr)',borderRadius:4,padding:'1px 6px'}}>unassigned</span>}
+                {isRecent && firstSeen && (
+                  <span style={{fontSize:9,color:'#ffb020',fontFamily:"'IBM Plex Mono',monospace",border:'1px solid #ffb020',borderRadius:4,padding:'1px 6px'}}>
+                    🆕 first synced {String(firstSeen).slice(0, 10)}
+                  </span>
+                )}
+                {pcName && (
+                  <span style={{fontSize:9,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",border:'1px solid var(--bdr)',borderRadius:4,padding:'1px 6px'}}>
+                    🖥 {pcName}
+                  </span>
+                )}
+                {syncTimeLabel(lastActivity) && (
+                  <span style={{fontSize:9,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",border:'1px solid var(--bdr)',borderRadius:4,padding:'1px 6px'}}>
+                    🔄 {syncTimeLabel(lastActivity)}
+                  </span>
+                )}
+                {staleDays != null && staleDays > STALE_SYNC_DAYS && (
+                  <span
+                    title="The MillPulse agent syncs nightly. Check the PC is on, still has MillPulse installed, and can reach the internet."
+                    style={{fontSize:9,color:'var(--rd)',fontFamily:"'IBM Plex Mono',monospace",border:'1px solid var(--rd)',borderRadius:4,padding:'1px 6px'}}
+                  >
+                    ⏸ no sync in {staleDays} days (last {String(lastSynced).slice(0, 10)})
+                  </span>
+                )}
                 {/* Lab name typed into MillPulse Setup's install GUI (opt-in when
                     enabling automatic sync) -- only useful before a customer is
                     linked, since once linked the customer's actual name takes
@@ -4149,7 +4305,10 @@ function Fleet({ msg }) {
 
             {open && (
               <div style={{ marginTop: 12 }}>
-                <MachineOwnerEditor serial={serial} owner={owner} customers={customers} onSave={saveMachineOwner} />
+                <MachineOwnerEditor
+                  serial={serial} owner={owner} customers={customers} onSave={saveMachineOwner}
+                  reportedLab={latest?.lab_name} reportedEmail={latest?.lab_email} onCreateCustomer={createCustomerFromLab}
+                />
 
                 {/* trend across correction counts — graph or table */}
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -4368,7 +4527,7 @@ function Fleet({ msg }) {
               </div>
             )}
           </div>
-        );
+        )];
       })}
     </div>
   );
