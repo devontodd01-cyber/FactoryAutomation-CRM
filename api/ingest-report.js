@@ -68,10 +68,10 @@ async function serialAlreadyKnown(serial) {
   return Array.isArray(rows) && rows.length > 0;
 }
 
-async function notifyDevonNewMachine({ serial, model, correctionCount, labName, labEmail, computerName, sourcePath, host, proto, hasApplog, assignment }) {
+async function notifyDevonNewMachine({ serial, model, correctionCount, labName, labEmail, computerName, sourcePath, host, proto, hasApplog, assignment, servicePc }) {
   if (!process.env.RESEND_API_KEY || !process.env.DEVON_EMAIL) return;
   const machineLine = `${model ? model + " " : ""}SN ${serial}`;
-  const who = (labName && labName.trim()) || "unnamed lab";
+  const who = servicePc ? "your service PC" : ((labName && labName.trim()) || "unnamed lab");
   const fleetUrl = host ? `${proto || "https"}://${host}/` : null;
   const text =
     `A machine synced to MillPulse for the first time.\n\n`
@@ -100,6 +100,22 @@ async function notifyDevonNewMachine({ serial, model, correctionCount, labName, 
       text,
     }),
   });
+}
+
+// ── Service PCs (2026-09-28) ─────────────────────────────────────────────
+// Devon's own PC(s) hold report copies from many customers' machines he has
+// serviced, so the lab name typed on them is HIS, not the machine owner's.
+// Any sync whose lab name matches SERVICE_LAB_NAMES (Vercel env var, comma
+// separated, matched ignoring case/spacing/punctuation) is treated as a
+// service-PC sync: the report is saved and diagnosed as usual, but
+//   - no lab_name / lab_email is written (so it can't become the machine's
+//     "reported as" name or its customer-notify email),
+//   - no customer auto-assign,
+//   - no automatic customer email.
+function isServiceLabName(labName) {
+  const list = String(process.env.SERVICE_LAB_NAMES || "").split(",").map((x) => normCompany(x)).filter(Boolean);
+  const key = normCompany(labName);
+  return !!key && list.includes(key);
 }
 
 // ── Auto-assign a customer (2026-09-27) ──────────────────────────────────
@@ -594,7 +610,11 @@ module.exports = async (req, res) => {
       return res.status(401).json({ error: "Missing or invalid x-ingest-key header." });
     }
 
-    const { rawText, sourcePath, labName, labEmail, applogText, computerName } = req.body || {};
+    const body = req.body || {};
+    const { rawText, sourcePath, applogText, computerName } = body;
+    const servicePc = isServiceLabName(body.labName);
+    const labName = servicePc ? "" : body.labName;
+    const labEmail = servicePc ? "" : body.labEmail;
     if (!rawText || typeof rawText !== "string" || !rawText.trim()) {
       return res.status(400).json({ error: "rawText is required (the raw systemreport.txt contents)." });
     }
@@ -650,7 +670,7 @@ module.exports = async (req, res) => {
           await upsertDiagnosticReport(buildDiagnosticReportRow(report, chunk));
           // Only once it's actually in diagnostic_reports -- that's what
           // check-and-notify re-parses, so a failed save must not trigger it.
-          if (isNewCalibration) newReportSerials.add(report.serial);
+          if (isNewCalibration && !servicePc) newReportSerials.add(report.serial);
         } catch (diagErr) {
           console.error(`diagnostic_reports save failed for ${report.serial} corr ${report.correctionCount}:`, diagErr.message || diagErr);
         }
@@ -688,7 +708,9 @@ module.exports = async (req, res) => {
     const customerAssign = {};
     for (const serial of touchedSerials) {
       try {
-        customerAssign[serial] = await autoAssignCustomer(serial, labName, labEmail, computerName);
+        customerAssign[serial] = servicePc
+          ? { skipped: "synced from your service PC (SERVICE_LAB_NAMES) — assign manually" }
+          : await autoAssignCustomer(serial, labName, labEmail, computerName);
       } catch (assignErr) {
         console.error(`customer auto-assign failed for ${serial}:`, assignErr.message || assignErr);
         customerAssign[serial] = { error: assignErr.message || String(assignErr) };
@@ -699,7 +721,7 @@ module.exports = async (req, res) => {
     for (const [serial, info] of Object.entries(brandNew)) {
       try {
         await notifyDevonNewMachine({
-          serial, ...info, labName, labEmail, computerName, sourcePath, assignment: customerAssign[serial],
+          serial, ...info, labName, labEmail, computerName, sourcePath, assignment: customerAssign[serial], servicePc,
           host: req.headers.host, proto: req.headers["x-forwarded-proto"] || "https",
           hasApplog: !!(applogResult && applogResult.serial === serial && !applogResult.error),
         });
@@ -724,7 +746,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    return res.status(200).json({ ok: true, sourcePath: sourcePath || null, results, newCalibrations: [...newReportSerials], applog: applogResult, newMachines: Object.keys(brandNew), customerAssign });
+    return res.status(200).json({ ok: true, sourcePath: sourcePath || null, results, newCalibrations: [...newReportSerials], applog: applogResult, newMachines: Object.keys(brandNew), customerAssign, servicePc });
   } catch (e) {
     return res.status(500).json({ error: e.message || String(e) });
   }
