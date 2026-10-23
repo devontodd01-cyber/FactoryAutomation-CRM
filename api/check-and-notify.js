@@ -110,6 +110,24 @@ async function notifyDevonOfAutoSend({ serial, model, correctionCount, name, toE
   } catch { /* best-effort — never let this block the actual customer send */ }
 }
 
+// Records "flagged, but no contact email" so the heads-up to Devon only
+// goes out once per machine + check. Throws if the insert fails, so a DB
+// problem can't turn into an email every sync.
+async function logNoContact({ serial, customerId, check, label, cause, action, correctionCount }) {
+  const row = {
+    serial, customer_id: customerId, check_key: check, label, cause: cause || null, action: action || null,
+    correction_count: correctionCount != null ? correctionCount : null,
+    status: 'no_contact', sent_to: null,
+    confirm_token: require('crypto').randomBytes(24).toString('hex'), // column is NOT NULL UNIQUE; never emailed
+  };
+  const post = (body) => fetch(`${SUPABASE_URL}/rest/v1/fleet_alerts`, {
+    method: 'POST', headers: { ...HEADERS, Prefer: 'return=minimal' }, body: JSON.stringify(body),
+  });
+  let r = await post({ ...row, triggered_by: 'auto' });
+  if (!r.ok) r = await post(row); // triggered_by column may not exist yet
+  if (!r.ok) throw new Error(`fleet_alerts no_contact insert failed (${r.status})`);
+}
+
 // Was the SAME check flagged on the immediately-preceding evaluation too
 // (report N-1 vs N-2), not just the current one (report N vs N-1)?
 // `history` is diagnoseHistory()'s ascending output; needs at least 3
@@ -180,10 +198,17 @@ async function checkAndNotifySerial(serial, opts = {}) {
   const notifyName = (customer && customer.company) || (owner && owner.nickname) || latestMill.lab_name || serial;
 
   if (!notifyEmail) {
-    // Called only on new calibrations from the sync agent, so this heads-up
-    // goes out at most once per correction_count via that path.
-    // Confirmed twice, nothing to send to — still worth telling Devon so a
-    // real issue doesn't just sit there unnoticed for lack of a contact.
+    // Confirmed twice, nothing to send to — tell Devon ONCE per machine +
+    // check, not on every calibration (2026-10-23 per Devon: too many
+    // emails). Logged as a fleet_alerts row with status 'no_contact'; while
+    // that row is open, later calibrations stay silent. Fleet's load()
+    // resolves it once a clean report comes in, so if the issue clears and
+    // comes back later, Devon hears about it again.
+    const openNoContact = await sbSelect(
+      `fleet_alerts?serial=eq.${encodeURIComponent(serial)}&check_key=eq.${encodeURIComponent(rec.check)}&status=eq.no_contact&select=id`
+    );
+    if (Array.isArray(openNoContact) && openNoContact.length) return { skipped: 'no contact email — Devon already told about this check', check: rec.check };
+    await logNoContact({ serial, customerId: (customer && customer.id) || null, check: rec.check, label: rec.label, cause: rec.cause, action: rec.action, correctionCount: cc });
     await notifyDevonOfAutoSend({
       serial, model: latestEntry.model, correctionCount: cc, name: notifyName, toEmail: '(no contact email on file)',
       label: rec.label,
