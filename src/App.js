@@ -3729,11 +3729,20 @@ function Fleet({ msg }) {
     const chunks = splitReports(text);
     let ok = 0, fail = 0, lastErr = '';
     const touchedSerials = new Set();
+    // Only a NEW calibration (correction_count higher than anything already
+    // saved for that serial) may trigger auto-notify -- re-pasting an old
+    // report never emails anyone. Same rule ingest-report.js uses for syncs.
+    const priorMaxCC = {};
+    for (const r of (Array.isArray(rows) ? rows : [])) {
+      if (typeof r.correction_count === 'number' && (priorMaxCC[r.serial] == null || r.correction_count > priorMaxCC[r.serial])) priorMaxCC[r.serial] = r.correction_count;
+    }
+    const newReportSerials = new Set();
     for (const chunk of chunks) {
       try {
         const report = parseVPanelReport(chunk);
         if (!report.serial) throw new Error('No serial number found in this report');
         if (report.correctionCount == null) throw new Error('No correction count found in this report');
+        if (priorMaxCC[report.serial] == null || report.correctionCount > priorMaxCC[report.serial]) newReportSerials.add(report.serial);
         await db.upsert('mill_reports', buildMillReportRow(report, chunk), 'serial,correction_count');
         // Also seed diagnostic_reports (same table/shape Mill Diagnostics'
         // "Save All" writes, and every auto-synced report gets via
@@ -3772,6 +3781,7 @@ function Fleet({ msg }) {
       // hand would never get auto-notified even after 2 flagged reports in
       // a row. Best-effort -- this never blocks the "✅ Added" message
       // below, and if it fails, the next real sync still catches it.
+      if (!newReportSerials.has(serial)) continue; // old report re-pasted -> no notify
       try {
         await fetch('/api/check-and-notify', {
           method: 'POST',
@@ -4004,7 +4014,7 @@ function Fleet({ msg }) {
   // report is the proof, not anyone's say-so.
   useEffect(() => {
     if (loading) return;
-    const openAlerts = alerts.filter(a => a.status === 'sent' || a.status === 'customer_confirmed');
+    const openAlerts = alerts.filter(a => a.status === 'sent' || a.status === 'customer_confirmed' || a.status === 'no_contact');
     if (!openAlerts.length) return;
     let cancelled = false;
     (async () => {
@@ -4238,6 +4248,7 @@ function Fleet({ msg }) {
                     {alert.status === 'sent' && `🔔 notified ${(alert.sent_at || '').slice(0, 10)}`}
                     {alert.status === 'customer_confirmed' && '⏳ customer says done — awaiting sync'}
                     {alert.status === 'resolved' && `✔ resolved ${(alert.resolved_at || '').slice(0, 10)}`}
+                    {alert.status === 'no_contact' && '⚠ flagged — no contact email, not sent'}
                   </span>
                 )}
                 {/* App-log warning: crash / spindle overcurrent / axis error /
@@ -4297,7 +4308,7 @@ function Fleet({ msg }) {
                     disabled={notifyingSerial === serial}
                     onClick={(e) => { e.stopPropagation(); notifyCustomer(serial, notifyEmail, notifyName, customer?.id, latest?.correction_count, rec); }}
                   >
-                    {notifyingSerial === serial ? '⏳' : (alert && alert.status !== 'resolved') ? '🔁 Re-notify' : '📣 Notify Customer'}
+                    {notifyingSerial === serial ? '⏳' : (alert && alert.status !== 'resolved' && alert.status !== 'no_contact') ? '🔁 Re-notify' : '📣 Notify Customer'}
                   </button>
                 )}
               </div>
