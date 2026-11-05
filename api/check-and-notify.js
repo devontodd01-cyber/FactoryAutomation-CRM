@@ -143,6 +143,11 @@ function isConfirmedTwice(history, checkKey) {
 
 async function checkAndNotifySerial(serial, opts = {}) {
   if (!serial) return { skipped: 'no serial' };
+  // Temporary pause (2026-11-05, Devon): some faults take several corrections to
+  // clear, so customers were being emailed while it was still settling.
+  // Set AUTO_NOTIFY_PAUSED=1 in Vercel to stop automatic emails; remove it to resume.
+  // The manual "Notify customer" button in Fleet still works.
+  if (/^(1|true|yes|on)$/i.test(String(process.env.AUTO_NOTIFY_PAUSED || '').trim())) return { skipped: 'auto-notify paused' };
 
   // Last 3 diagnostic_reports rows (raw_text needed to re-parse through the
   // full engine) — descending, then reversed to ascending for diagnoseHistory.
