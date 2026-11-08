@@ -135,6 +135,13 @@ async function logNoContact({ serial, customerId, check, label, cause, action, c
 // email. Same rule the monthly Customer Report uses.
 // `history` is diagnoseHistory()'s ascending output; the oldest entry only
 // seeds prev-state for the change checks, so we need SETTLE_AFTER + 2 entries.
+// Machines kept QUIET toward customers (2026-11-07, Devon): no automatic fault
+// emails and left out of monthly Customer Reports. Still fully visible in Fleet.
+// Remove a line to bring the machine back.
+const QUIET_SERIALS = {
+  KFZ2938: 'Crystal Dental — Devon wants this one kept quiet (Nov 2026)',
+};
+
 const SETTLE_AFTER = 3;
 const SETTLE_ROWS = SETTLE_AFTER + 2;
 function stillThereAfterSettle(history, checkKey) {
@@ -147,6 +154,7 @@ function stillThereAfterSettle(history, checkKey) {
 
 async function checkAndNotifySerial(serial, opts = {}) {
   if (!serial) return { skipped: 'no serial' };
+  if (QUIET_SERIALS[String(serial).toUpperCase()]) return { skipped: 'machine kept quiet (no customer emails)' };
   // Temporary pause (2026-11-05, Devon): some faults take several corrections to
   // clear, so customers were being emailed while it was still settling.
   // Set AUTO_NOTIFY_PAUSED=1 in Vercel to stop automatic emails; remove it to resume.

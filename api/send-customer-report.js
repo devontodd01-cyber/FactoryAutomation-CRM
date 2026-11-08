@@ -43,6 +43,13 @@
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
+// Machines kept QUIET toward customers (2026-11-07, Devon): no automatic fault
+// emails and left out of monthly Customer Reports. Still fully visible in Fleet.
+// Remove a line to bring the machine back.
+const QUIET_SERIALS = {
+  KFZ2938: 'Crystal Dental — Devon wants this one kept quiet (Nov 2026)',
+};
+
 // Customers whose monthly report must NOT be sent (preview still works).
 // Remove the line to release. (2026-11-07, Devon: hold Crystal Dental's report.)
 const REPORT_HOLD = {
@@ -382,7 +389,7 @@ async function buildReport(customerId, monthStr) {
   const customerRows = await sb(`customers?id=eq.${customerId}`);
   const customer = customerRows[0];
   if (!customer) throw new Error('Customer not found');
-  const machineRows = await sb(`machines?customer_id=eq.${customerId}`);
+  const machineRows = (await sb(`machines?customer_id=eq.${customerId}`)).filter(m => !QUIET_SERIALS[String(m.serial).toUpperCase()]);
   if (!machineRows.length) throw new Error('This customer has no machines linked yet — assign one in Fleet first.');
 
   const sections = [];
