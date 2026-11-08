@@ -18,7 +18,7 @@
 //     syncs in a row (not just the latest one) before it emails anyone. A
 //     single glitchy reading never reaches a customer. This applies to
 //     EVERY check below, including the 4 newly added ones — see
-//     isConfirmedTwice() below.
+//     (Superseded 2026-11-07 by the settle rule — see stillThereAfterSettle() below.)
 //   - SCOPE (updated 2026-09-23): the FULL diagnostic engine — all of
 //     spindle gradient, A/B-axis gap, origin drift (X/Y/Z), magazine offset
 //     drift, base tool length drift, and angle-offset drift (new) and the
@@ -128,17 +128,21 @@ async function logNoContact({ serial, customerId, check, label, cause, action, c
   if (!r.ok) throw new Error(`fleet_alerts no_contact insert failed (${r.status})`);
 }
 
-// Was the SAME check flagged on the immediately-preceding evaluation too
-// (report N-1 vs N-2), not just the current one (report N vs N-1)?
-// `history` is diagnoseHistory()'s ascending output; needs at least 3
-// entries — with only 2, there's no earlier evaluation to confirm against
-// yet (returns false: pending, will get re-checked on the next sync).
-function isConfirmedTwice(history, checkKey) {
+// SETTLE RULE (2026-11-07, Devon — replaces "confirmed on 2 consecutive syncs"):
+// some faults take a few corrections to clear. A check that flagged at
+// correction N only emails the customer if it is STILL flagged at the 3rd
+// correction after it (N+3). If it has cleared by then, it was settling — no
+// email. Same rule the monthly Customer Report uses.
+// `history` is diagnoseHistory()'s ascending output; the oldest entry only
+// seeds prev-state for the change checks, so we need SETTLE_AFTER + 2 entries.
+const SETTLE_AFTER = 3;
+const SETTLE_ROWS = SETTLE_AFTER + 2;
+function stillThereAfterSettle(history, checkKey) {
   const n = history.length;
-  if (n < 2) return false;
+  if (n < SETTLE_ROWS) return false; // not enough corrections yet — pending
   const flaggedNow = history[n - 1].diagnostics.some((d) => d.check === checkKey && d.flagged);
-  const flaggedPrev = history[n - 2].diagnostics.some((d) => d.check === checkKey && d.flagged);
-  return flaggedNow && flaggedPrev;
+  const flaggedThen = history[n - 1 - SETTLE_AFTER].diagnostics.some((d) => d.check === checkKey && d.flagged);
+  return flaggedNow && flaggedThen;
 }
 
 async function checkAndNotifySerial(serial, opts = {}) {
@@ -155,7 +159,7 @@ async function checkAndNotifySerial(serial, opts = {}) {
   // checks); change/drift checks naturally need 3, since the first report has
   // nothing to compare against.
   const diagRowsDesc = await sbSelect(
-    `diagnostic_reports?serial=eq.${encodeURIComponent(serial)}&select=correction_count,raw_text&order=correction_count.desc&limit=3`
+    `diagnostic_reports?serial=eq.${encodeURIComponent(serial)}&select=correction_count,raw_text&order=correction_count.desc&limit=${SETTLE_ROWS}`
   );
   const diagRows = Array.isArray(diagRowsDesc) ? [...diagRowsDesc].reverse() : [];
   if (diagRows.length < 2) return { skipped: 'not enough history yet (need 2+ reports)' };
@@ -166,9 +170,12 @@ async function checkAndNotifySerial(serial, opts = {}) {
   const latestEntry = history[history.length - 1];
   // Highest-priority flag that's allowed to email for this model (a
   // suppressed check is skipped, so the next real issue can still go out).
-  const rec = topFlagged(emailableDiagnostics(latestEntry.diagnostics, latestEntry.model), latestEntry.model);
-  if (!rec) return { skipped: 'nothing flagged' };
-  if (!isConfirmedTwice(history, rec.check)) return { skipped: 'flagged, but not yet confirmed on a 2nd consecutive sync', check: rec.check };
+  const emailable = emailableDiagnostics(latestEntry.diagnostics, latestEntry.model);
+  if (!topFlagged(emailable, latestEntry.model)) return { skipped: 'nothing flagged' };
+  // Only checks that are still there 3 corrections after they first flagged.
+  const settled = emailable.filter((d) => !d.flagged || stillThereAfterSettle(history, d.check));
+  const rec = topFlagged(settled, latestEntry.model);
+  if (!rec) return { skipped: `flagged, but not still there ${SETTLE_AFTER} corrections later (settling or pending)` };
 
   // One notification per check PER CALIBRATION (correction_count), any
   // status, manual or auto. Same report re-sent / re-pasted -> no repeat.
@@ -217,7 +224,7 @@ async function checkAndNotifySerial(serial, opts = {}) {
     await notifyDevonOfAutoSend({
       serial, model: latestEntry.model, correctionCount: cc, name: notifyName, toEmail: '(no contact email on file)',
       label: rec.label,
-      cause: `Confirmed on 2 consecutive syncs, but there's no lab-entered contact email and no linked customer email to send it to. ${rec.cause}`,
+      cause: `Still flagged ${SETTLE_AFTER} corrections after it first appeared, but there's no lab-entered contact email and no linked customer email to send it to. ${rec.cause}`,
       action: 'Add a contact email at install time, or link a customer with an email, then use 🔁 Re-notify on the Fleet card.',
     });
     return { skipped: 'confirmed but no contact email on file', check: rec.check };
