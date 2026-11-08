@@ -383,7 +383,7 @@ async function buildReport(customerId, monthStr) {
     );
     // last reading before this month — comparison point for the first report of the month
     const before = millRows.length ? await sb(
-      `mill_reports?serial=eq.${encodeURIComponent(m.serial)}&created_at=lt.${start.toISOString()}&select=correction_count,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length&order=created_at.desc,correction_count.desc&limit=1`
+      `mill_reports?serial=eq.${encodeURIComponent(m.serial)}&created_at=lt.${start.toISOString()}&select=correction_count,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length&order=correction_count.desc&limit=1`
     ).catch(() => []) : [];
     const ccList = [...millRows, ...before].map(r => r.correction_count).filter(v => v != null);
     const diagRows = ccList.length
