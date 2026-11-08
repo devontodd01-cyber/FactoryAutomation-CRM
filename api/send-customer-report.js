@@ -51,6 +51,8 @@ const HEADERS = { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABAS
 // no shared import between this serverless function and the CRA frontend.
 const T = {
   gradientHard: 0.001,   // rule 1 — stable magnitude → spindle misalignment
+  gradientMinorMax: 0.0015, // (2026-11-07, Devon) steady and only slightly over (≤ this) = MINOR:
+                            // common on the DWX-53DC; worth pointing out (accuracy/quality) but not urgent
   gradientStep: 0.0005,  // rule 2 — bounce → collet wear (outranks rule 1 on the same axis)
   gapHard: 100,          // rule 4 — stable magnitude → axis alignment issue
   gapStep: 100,          // rule 4 — bounce → ballscrew wear (outranks the magnitude check)
@@ -149,84 +151,83 @@ function normalizeToIndex(rows, keys) {
 // a true cross-month-boundary comparison would need last month's final
 // reading too, which is a reasonable future improvement but out of scope
 // here).
-function diagnoseFull(sorted) {
+function diagnoseFull(sorted, baseline) {
   if (!sorted.length) return { status: 'no-data', flags: [] };
+  // (2026-11-07) Check EVERY step within the month (plus the step from last
+  // month's final reading into this month), not just the last two readings —
+  // a jump mid-month shouldn't vanish because the machine settled afterwards.
+  const seq = baseline ? [baseline, ...sorted] : sorted;
   const latest = sorted[sorted.length - 1];
-  const prev = sorted.length > 1 ? sorted[sorted.length - 2] : null;
   const flags = [];
+  const seen = new Set();
+  const add = f => { if (!seen.has(f.text)) { seen.add(f.text); flags.push(f); } };
+  const where = (p, l) => p && p.cc != null && l.cc != null ? ` (between correction #${p.cc} and #${l.cc})` : '';
 
   // Rules 1 & 2 — spindle calibration (Precision Calibration Index)
-  const checkGradient = (axisLabel, val, prevVal) => {
-    if (val == null) return;
-    const bounced = prevVal != null && Math.abs(val - prevVal) >= T.gradientStep;
-    const over = Math.abs(val) > T.gradientHard;
-    if (bounced) flags.push({ severity: 3, index: NAME.gradient, text: `${NAME.gradient} moved more than expected between readings (axis ${axisLabel}) — this pattern typically points to collet wear. Recommended: replace the collet.` });
-    else if (over) flags.push({ severity: 2, index: NAME.gradient, text: `${NAME.gradient} is outside its normal range (axis ${axisLabel}) — this pattern typically points to spindle misalignment. Recommended: have the spindle re-aligned.` });
-  };
-  checkGradient('X', latest.gradX, prev?.gradX);
-  checkGradient('Y', latest.gradY, prev?.gradY);
-
-  // Rule 4 — axis alignment gap (Structural Alignment Index), magnitude + bounce
-  const checkGap = (axisLabel, val, prevVal) => {
-    if (val == null) return;
-    const bounced = prevVal != null && Math.abs(val - prevVal) >= T.gapStep;
-    const over = val > T.gapHard;
-    if (bounced) flags.push({ severity: 3, index: NAME.gap, text: `${NAME.gap} jumped between readings (${axisLabel}-axis) — this pattern typically points to ballscrew wear. Recommended: have the ${axisLabel}-axis ballscrew inspected.` });
-    else if (over) flags.push({ severity: 2, index: NAME.gap, text: `${NAME.gap} is outside its normal range (${axisLabel}-axis) — recommended: inspect/re-align the ${axisLabel}-axis.` });
-  };
-  checkGap('Y', latest.aGap, prev?.aGap);
-  checkGap('X', latest.bGap, prev?.bGap);
-
-  // Rule 3 — origin drift (Positional Stability Index), any axis bouncing
-  if (Array.isArray(latest.origin) && Array.isArray(prev?.origin)) {
-    const axisLabels = ['X', 'Y', 'Z'];
-    latest.origin.forEach((v, i) => {
-      const pv = prev.origin[i];
-      if (typeof v === 'number' && typeof pv === 'number' && Math.abs(v - pv) >= T.originStep) {
-        flags.push({ severity: 1, index: NAME.origin, text: `${NAME.origin} shifted more than expected on the ${axisLabels[i]} axis. Recommended: have that axis's positioning checked.` });
-      }
-    });
-  }
-
-  // Rule 5 — magazine/tool-changer offset (Tool Changer Consistency Index)
-  if (Array.isArray(latest.magOffset) && Array.isArray(prev?.magOffset)) {
-    const flaggedAxes = [];
-    latest.magOffset.forEach((v, i) => {
-      const pv = prev.magOffset[i];
-      if (typeof v === 'number' && typeof pv === 'number' && Math.abs(v - pv) >= T.magOffsetStep) {
-        flaggedAxes.push(['X', 'Y', 'Z'][i]);
-      }
-    });
-    if (flaggedAxes.length) {
-      const zHit = flaggedAxes.includes('Z');
-      const xyHit = flaggedAxes.filter(a => a !== 'Z');
-      if (zHit) flags.push({ severity: 1, index: NAME.magOffset, text: `${NAME.magOffset} shifted on the tool changer's Z reference — this pattern typically points to ballscrew wear. Recommended: have the ballscrew inspected.` });
-      if (xyHit.length) flags.push({ severity: 1, index: NAME.magOffset, text: `${NAME.magOffset} shifted on the tool changer's ${xyHit.join('/')} reference. Recommended: have that alignment checked.` });
+  for (const [axisLabel, key] of [['X', 'gradX'], ['Y', 'gradY']]) {
+    let bounced = null;
+    for (let i = 1; i < seq.length; i++) {
+      const a = seq[i - 1][key], b = seq[i][key];
+      if (a != null && b != null && Math.abs(b - a) >= T.gradientStep) bounced = [seq[i - 1], seq[i]];
     }
+    const vals = sorted.map(r => r[key]).filter(v => v != null);
+    const overCount = vals.filter(v => Math.abs(v) > T.gradientHard).length;
+    const mostlyOver = vals.length && (overCount / vals.length >= 0.5 || Math.abs(latest[key] ?? 0) > T.gradientHard);
+    const worst = vals.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
+    if (bounced) add({ severity: 3, index: NAME.gradient, text: `${NAME.gradient} moved more than expected between readings (axis ${axisLabel})${where(...bounced)} — this pattern typically points to collet wear. Recommended: replace the collet.` });
+    else if (mostlyOver && worst <= T.gradientMinorMax) add({ severity: 0, minor: true, index: NAME.gradient, text: `${NAME.gradient} sat slightly outside its ideal range (axis ${axisLabel}) on ${overCount} of ${vals.length} readings this month. This isn't urgent and the machine is fine to keep running, but it can reduce fit accuracy and surface finish quality. Recommended: have the spindle alignment checked at your next service visit.` });
+    else if (mostlyOver) add({ severity: 2, index: NAME.gradient, text: `${NAME.gradient} is outside its normal range (axis ${axisLabel}) — this pattern typically points to spindle misalignment. Recommended: have the spindle re-aligned.` });
   }
 
-  // Rule 6 — reference tool length (Reference Tool Stability), gated on a
-  // clean Z-origin and clean magazine-Z (isolates the cause to the tool
-  // setter switch itself rather than a real Z-axis movement).
-  if (typeof latest.baseTool === 'number' && typeof prev?.baseTool === 'number') {
-    const bounced = Math.abs(latest.baseTool - prev.baseTool) >= T.baseToolStep;
-    if (bounced) {
-      const originZClean = !Array.isArray(latest.origin) || !Array.isArray(prev.origin)
-        || latest.origin[2] == null || prev.origin[2] == null
-        || Math.abs(latest.origin[2] - prev.origin[2]) < T.originStep;
-      const magZClean = !Array.isArray(latest.magOffset) || !Array.isArray(prev.magOffset)
-        || latest.magOffset[2] == null || prev.magOffset[2] == null
-        || Math.abs(latest.magOffset[2] - prev.magOffset[2]) < T.magOffsetStep;
-      if (originZClean && magZClean) {
-        flags.push({ severity: 1, index: NAME.baseTool, text: `${NAME.baseTool} moved more than expected between readings, with the other axis references holding steady — this pattern typically points to a bad tool-setter switch. Recommended: have the tool setter switch inspected.` });
+  // Rule 4 — axis alignment gap (Structural Alignment Index): bounce on any step, magnitude on latest
+  for (const [axisLabel, key] of [['Y', 'aGap'], ['X', 'bGap']]) {
+    let bounced = null;
+    for (let i = 1; i < seq.length; i++) {
+      const a = seq[i - 1][key], b = seq[i][key];
+      if (a != null && b != null && Math.abs(b - a) >= T.gapStep) bounced = [seq[i - 1], seq[i]];
+    }
+    if (bounced) add({ severity: 3, index: NAME.gap, text: `${NAME.gap} jumped between readings (${axisLabel}-axis)${where(...bounced)} — this pattern typically points to ballscrew wear. Recommended: have the ${axisLabel}-axis ballscrew inspected.` });
+    else if (latest[key] != null && latest[key] > T.gapHard) add({ severity: 2, index: NAME.gap, text: `${NAME.gap} is outside its normal range (${axisLabel}-axis) — recommended: inspect/re-align the ${axisLabel}-axis.` });
+  }
+
+  for (let i = 1; i < seq.length; i++) {
+    const prev = seq[i - 1], cur = seq[i];
+    // Rule 3 — origin drift (Positional Stability Index)
+    if (Array.isArray(cur.origin) && Array.isArray(prev.origin)) {
+      ['X', 'Y', 'Z'].forEach((ax, k) => {
+        const v = cur.origin[k], pv = prev.origin[k];
+        if (typeof v === 'number' && typeof pv === 'number' && Math.abs(v - pv) >= T.originStep) {
+          add({ severity: 1, index: NAME.origin, text: `${NAME.origin} shifted more than expected on the ${ax} axis. Recommended: have that axis's positioning checked.` });
+        }
+      });
+    }
+    // Rule 5 — magazine/tool-changer offset (Tool Changer Consistency Index)
+    if (Array.isArray(cur.magOffset) && Array.isArray(prev.magOffset)) {
+      const hit = ['X', 'Y', 'Z'].filter((ax, k) => typeof cur.magOffset[k] === 'number' && typeof prev.magOffset[k] === 'number' && Math.abs(cur.magOffset[k] - prev.magOffset[k]) >= T.magOffsetStep);
+      if (hit.includes('Z')) add({ severity: 1, index: NAME.magOffset, text: `${NAME.magOffset} shifted on the tool changer's Z reference — this pattern typically points to ballscrew wear. Recommended: have the ballscrew inspected.` });
+      const xy = hit.filter(a => a !== 'Z');
+      if (xy.length) add({ severity: 1, index: NAME.magOffset, text: `${NAME.magOffset} shifted on the tool changer's ${xy.join('/')} reference. Recommended: have that alignment checked.` });
+    }
+    // Rule 6 — reference tool length, gated on clean Z-origin and magazine-Z
+    if (typeof cur.baseTool === 'number' && typeof prev.baseTool === 'number' && Math.abs(cur.baseTool - prev.baseTool) >= T.baseToolStep) {
+      const zClean = (arr, parr, step) => !Array.isArray(arr) || !Array.isArray(parr) || arr[2] == null || parr[2] == null || Math.abs(arr[2] - parr[2]) < step;
+      if (zClean(cur.origin, prev.origin, T.originStep) && zClean(cur.magOffset, prev.magOffset, T.magOffsetStep)) {
+        add({ severity: 1, index: NAME.baseTool, text: `${NAME.baseTool} moved more than expected between readings, with the other axis references holding steady — this pattern typically points to a bad tool-setter switch. Recommended: have the tool setter switch inspected.` });
       }
     }
   }
 
   if (!flags.length) return { status: 'clean', flags: [] };
   flags.sort((a, b) => b.severity - a.severity);
-  return { status: 'flagged', flags };
+  return { status: flags.some(f => !f.minor) ? 'flagged' : 'minor', flags };
 }
+
+const STATUS_STYLE = {
+  flagged: { color: '#c0392b', bg: '#fdf1f1', bdr: '#f5c6c6', text: '#7f1d1d', chip: '⚠ Needs attention' },
+  minor:   { color: '#b7791f', bg: '#fff8e6', bdr: '#f6deb0', text: '#7a4f0a', chip: '● Minor — worth noting' },
+  clean:   { color: '#1e8e3e', chip: '✓ All normal' },
+  'no-data': { color: '#888', chip: 'No data this month' },
+};
 
 function chartSection(title, subtitle, imgUrl, caption) {
   return `
@@ -239,7 +240,16 @@ function chartSection(title, subtitle, imgUrl, caption) {
   `;
 }
 
-function buildMachineSection(serial, nickname, millRows, diagRows, monthLabel) {
+function toPoint(r, diagByCC) {
+  return {
+    cc: r.correction_count, gradX: r.spindle_gradient_x, gradY: r.spindle_gradient_y,
+    aGap: r.a_y_gap, bGap: r.b_x_gap, baseTool: r.base_tool_length,
+    origin: diagByCC?.[r.correction_count]?.origin || null,
+    magOffset: diagByCC?.[r.correction_count]?.magOffset || null,
+  };
+}
+
+function buildMachineSection(serial, nickname, millRows, diagRows, monthLabel, baselineRow) {
   const diagByCC = {};
   for (const d of diagRows) {
     const rm = d.raw_metrics || {};
@@ -259,22 +269,26 @@ function buildMachineSection(serial, nickname, millRows, diagRows, monthLabel) {
       magOffset: diagByCC[r.correction_count]?.magOffset || null,
     }));
 
-  const diag = diagnoseFull(sorted);
+  const diag = diagnoseFull(sorted, baselineRow ? toPoint(baselineRow, diagByCC) : null);
   const name = nickname ? `${nickname} (${serial})` : serial;
-  const statusColor = diag.status === 'flagged' ? '#c0392b' : diag.status === 'no-data' ? '#888' : '#1e8e3e';
-  const statusLabel = diag.status === 'flagged' ? `⚠ ${diag.flags.length} thing${diag.flags.length === 1 ? '' : 's'} need attention` : diag.status === 'no-data' ? 'No data this month' : '✓ All normal';
+  const st = STATUS_STYLE[diag.status];
+  const statusColor = st.color;
+  const statusLabel = st.chip;
+
+  const box = (items, sty, heading) => items.length ? `
+      <div style="border:1px solid ${sty.bdr};background:${sty.bg};border-radius:6px;padding:10px 12px;margin-bottom:12px;">
+        <div style="font-family:Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:.4px;color:${sty.color};margin-bottom:6px;">${heading}</div>
+        ${items.map((f, i) => `
+          <div style="font-family:Arial,sans-serif;font-size:12.5px;color:${sty.text};${i > 0 ? `border-top:1px solid ${sty.bdr};margin-top:8px;padding-top:8px;` : ''}">
+            ${items.length > 1 ? `<strong>${i + 1}.</strong> ` : ''}${f.text}
+          </div>
+        `).join('')}
+      </div>` : '';
 
   let concernsHtml = '';
   if (diag.flags.length) {
-    concernsHtml = `
-      <div style="border:1px solid #f5c6c6;background:#fdf1f1;border-radius:6px;padding:10px 12px;margin-bottom:14px;">
-        ${diag.flags.map((f, i) => `
-          <div style="font-family:Arial,sans-serif;font-size:12.5px;color:#7f1d1d;padding:${i === 0 ? '0' : '8px 0 0'};${i > 0 ? 'border-top:1px solid #f5c6c6;margin-top:8px;' : ''}">
-            <strong>${i + 1}.</strong> ${f.text}
-          </div>
-        `).join('')}
-      </div>
-    `;
+    concernsHtml = box(diag.flags.filter(f => !f.minor), STATUS_STYLE.flagged, 'NEEDS ATTENTION')
+      + box(diag.flags.filter(f => f.minor), STATUS_STYLE.minor, 'MINOR — NOT URGENT');
   } else if (diag.status === 'clean') {
     concernsHtml = `<div style="font-family:Arial,sans-serif;font-size:13px;color:#1e8e3e;margin-bottom:14px;">Everything checked out within normal range this month — no action needed.</div>`;
   }
@@ -343,15 +357,15 @@ function buildMachineSection(serial, nickname, millRows, diagRows, monthLabel) {
     }
   }
 
-  return `
-    <div style="margin-bottom:28px;padding:16px;border:1px solid #e2e2e2;border-radius:8px;">
+  return { status: diag.status, name, html: `
+    <div style="margin-bottom:28px;padding:16px;border:1px solid #e2e2e2;border-left:4px solid ${statusColor};border-radius:8px;">
       <h3 style="margin:0 0 4px;font-family:Arial,sans-serif;">${name}</h3>
       <div style="font-family:Arial,sans-serif;font-size:13px;color:${statusColor};font-weight:bold;margin-bottom:10px;">${statusLabel}</div>
       ${concernsHtml}
       ${charts}
-      <div style="font-family:Arial,sans-serif;font-size:11px;color:#888;margin-top:10px;">${sorted.length} report${sorted.length === 1 ? '' : 's'} recorded this month${sorted.length === 1 ? ' — charts need at least 2 to draw a trend.' : ''}.</div>
+      <div style="font-family:Arial,sans-serif;font-size:11px;color:#888;margin-top:10px;">${sorted.length} report${sorted.length === 1 ? '' : 's'} recorded this month${sorted.length === 1 ? ' — charts need at least 2 to draw a trend' : ''}.</div>
     </div>
-  `;
+  ` };
 }
 
 async function buildReport(customerId, monthStr) {
@@ -365,20 +379,34 @@ async function buildReport(customerId, monthStr) {
   const sections = [];
   for (const m of machineRows) {
     const millRows = await sb(
-      `mill_reports?serial=eq.${encodeURIComponent(m.serial)}&report_date=gte.${start.toISOString()}&report_date=lt.${end.toISOString()}&select=correction_count,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length,report_date`
+      `mill_reports?serial=eq.${encodeURIComponent(m.serial)}&created_at=gte.${start.toISOString()}&created_at=lt.${end.toISOString()}&select=correction_count,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length,created_at`
     );
-    const ccList = millRows.map(r => r.correction_count).filter(v => v != null);
+    // last reading before this month — comparison point for the first report of the month
+    const before = millRows.length ? await sb(
+      `mill_reports?serial=eq.${encodeURIComponent(m.serial)}&created_at=lt.${start.toISOString()}&select=correction_count,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length&order=created_at.desc,correction_count.desc&limit=1`
+    ).catch(() => []) : [];
+    const ccList = [...millRows, ...before].map(r => r.correction_count).filter(v => v != null);
     const diagRows = ccList.length
       ? await sb(`diagnostic_reports?serial=eq.${encodeURIComponent(m.serial)}&correction_count=in.(${ccList.join(',')})&select=correction_count,raw_metrics`)
       : [];
-    sections.push(buildMachineSection(m.serial, m.nickname, millRows, diagRows, label));
+    sections.push(buildMachineSection(m.serial, m.nickname, millRows, diagRows, label, before[0]));
   }
+
+  const summary = `
+      <table cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;margin:6px 0 22px;font-family:Arial,sans-serif;font-size:13px;">
+        ${sections.map(sec => `
+          <tr>
+            <td style="padding:8px 10px;border-bottom:1px solid #eee;">${sec.name}</td>
+            <td style="padding:8px 10px;border-bottom:1px solid #eee;text-align:right;font-weight:bold;color:${STATUS_STYLE[sec.status].color};white-space:nowrap;">${STATUS_STYLE[sec.status].chip}</td>
+          </tr>`).join('')}
+      </table>`;
 
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
       <h2 style="font-family:Arial,sans-serif;">${customer.company} — ${label} Machine Status</h2>
       <p style="font-family:Arial,sans-serif;font-size:13px;color:#555;">Here's a summary of your machine${machineRows.length > 1 ? 's' : ''} for ${label}, generated from your MillPulse readings.</p>
-      ${sections.join('')}
+      ${sections.length > 1 ? summary : ''}
+      ${sections.map(sec => sec.html).join('')}
       <p style="font-family:Arial,sans-serif;font-size:11px;color:#999;margin-top:20px;">Questions about this report? Just reply to this email.</p>
     </div>
   `;
