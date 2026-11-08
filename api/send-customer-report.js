@@ -151,75 +151,77 @@ function normalizeToIndex(rows, keys) {
 // a true cross-month-boundary comparison would need last month's final
 // reading too, which is a reasonable future improvement but out of scope
 // here).
-function diagnoseFull(sorted, baseline) {
-  if (!sorted.length) return { status: 'no-data', flags: [] };
-  // (2026-11-07) Check EVERY step within the month (plus the step from last
-  // month's final reading into this month), not just the last two readings —
-  // a jump mid-month shouldn't vanish because the machine settled afterwards.
-  const seq = baseline ? [baseline, ...sorted] : sorted;
-  const latest = sorted[sorted.length - 1];
-  const flags = [];
-  const seen = new Set();
-  const add = f => { if (!seen.has(f.text)) { seen.add(f.text); flags.push(f); } };
-  const where = (p, l) => p && p.cc != null && l.cc != null ? ` (between correction #${p.cc} and #${l.cc})` : '';
+// Settle rule (2026-11-07, Devon): some faults take a few corrections to
+// clear. A check that flags at correction N is dropped as RESOLVED when the
+// same check passes again at the 3rd correction after it (N+3). If N+3 is still
+// out of range, or hasn't happened yet, the flag stands.
+const SETTLE_AFTER = 3;
 
-  // Rules 1 & 2 — spindle calibration (Precision Calibration Index)
+// Each check looks at reading i (and i-1 for step checks) and returns a flag or null.
+const zClean = (arr, parr, step) => !Array.isArray(arr) || !Array.isArray(parr) || arr[2] == null || parr[2] == null || Math.abs(arr[2] - parr[2]) < step;
+const step = (seq, i, key, lim) => i > 0 && seq[i][key] != null && seq[i - 1][key] != null && Math.abs(seq[i][key] - seq[i - 1][key]) >= lim;
+const stepArr = (seq, i, key, k, lim) => i > 0 && Array.isArray(seq[i][key]) && Array.isArray(seq[i - 1][key])
+  && typeof seq[i][key][k] === 'number' && typeof seq[i - 1][key][k] === 'number' && Math.abs(seq[i][key][k] - seq[i - 1][key][k]) >= lim;
+const CHECKS = [
+  ...[['X', 'gradX'], ['Y', 'gradY']].map(([ax, key]) => ({ id: 'gradStep' + ax, test: (seq, i) => step(seq, i, key, T.gradientStep),
+    flag: { severity: 3, index: NAME.gradient, text: `${NAME.gradient} moved more than expected between readings (axis ${ax}) — this pattern typically points to collet wear. Recommended: replace the collet.` } })),
+  ...[['Y', 'aGap'], ['X', 'bGap']].map(([ax, key]) => ({ id: 'gapStep' + ax, test: (seq, i) => step(seq, i, key, T.gapStep),
+    flag: { severity: 3, index: NAME.gap, text: `${NAME.gap} jumped between readings (${ax}-axis) — this pattern typically points to ballscrew wear. Recommended: have the ${ax}-axis ballscrew inspected.` } })),
+  ...[['Y', 'aGap'], ['X', 'bGap']].map(([ax, key]) => ({ id: 'gapOver' + ax, test: (seq, i) => seq[i][key] != null && seq[i][key] > T.gapHard,
+    flag: { severity: 2, index: NAME.gap, text: `${NAME.gap} is outside its normal range (${ax}-axis) — recommended: inspect/re-align the ${ax}-axis.` } })),
+  ...['X', 'Y', 'Z'].map((ax, k) => ({ id: 'origin' + ax, test: (seq, i) => stepArr(seq, i, 'origin', k, T.originStep),
+    flag: { severity: 1, index: NAME.origin, text: `${NAME.origin} shifted more than expected on the ${ax} axis. Recommended: have that axis's positioning checked.` } })),
+  { id: 'magZ', test: (seq, i) => stepArr(seq, i, 'magOffset', 2, T.magOffsetStep),
+    flag: { severity: 1, index: NAME.magOffset, text: `${NAME.magOffset} shifted on the tool changer's Z reference — this pattern typically points to ballscrew wear. Recommended: have the ballscrew inspected.` } },
+  ...['X', 'Y'].map((ax, k) => ({ id: 'mag' + ax, test: (seq, i) => stepArr(seq, i, 'magOffset', k, T.magOffsetStep),
+    flag: { severity: 1, index: NAME.magOffset, text: `${NAME.magOffset} shifted on the tool changer's ${ax} reference. Recommended: have that alignment checked.` } })),
+  { id: 'baseTool', test: (seq, i) => step(seq, i, 'baseTool', T.baseToolStep)
+      && zClean(seq[i].origin, seq[i - 1].origin, T.originStep) && zClean(seq[i].magOffset, seq[i - 1].magOffset, T.magOffsetStep),
+    flag: { severity: 1, index: NAME.baseTool, text: `${NAME.baseTool} moved more than expected between readings, with the other axis references holding steady — this pattern typically points to a bad tool-setter switch. Recommended: have the tool setter switch inspected.` } },
+];
+
+// sorted = this month's readings (oldest first); baseline = last reading before
+// the month; after = the next few readings after the month (to see if flags settled).
+function diagnoseFull(sorted, baseline, after = []) {
+  if (!sorted.length) return { status: 'no-data', flags: [], resolved: 0 };
+  const seq = [...(baseline ? [baseline] : []), ...sorted, ...after];
+  const first = baseline ? 1 : 0, last = first + sorted.length - 1;
+  const latest = sorted[sorted.length - 1];
+  const flags = []; const seen = new Set(); let resolved = 0;
+
+  // Gradient slightly over and steady → MINOR (a standing condition, not an event)
+  const gradStepHit = new Set();
   for (const [axisLabel, key] of [['X', 'gradX'], ['Y', 'gradY']]) {
-    let bounced = null;
-    for (let i = 1; i < seq.length; i++) {
-      const a = seq[i - 1][key], b = seq[i][key];
-      if (a != null && b != null && Math.abs(b - a) >= T.gradientStep) bounced = [seq[i - 1], seq[i]];
-    }
     const vals = sorted.map(r => r[key]).filter(v => v != null);
     const overCount = vals.filter(v => Math.abs(v) > T.gradientHard).length;
     const mostlyOver = vals.length && (overCount / vals.length >= 0.5 || Math.abs(latest[key] ?? 0) > T.gradientHard);
     const worst = vals.reduce((m, v) => Math.max(m, Math.abs(v)), 0);
-    if (bounced) add({ severity: 3, index: NAME.gradient, text: `${NAME.gradient} moved more than expected between readings (axis ${axisLabel})${where(...bounced)} — this pattern typically points to collet wear. Recommended: replace the collet.` });
-    else if (mostlyOver && worst <= T.gradientMinorMax) add({ severity: 0, minor: true, index: NAME.gradient, text: `${NAME.gradient} sat slightly outside its ideal range (axis ${axisLabel}) on ${overCount} of ${vals.length} readings this month. This isn't urgent and the machine is fine to keep running, but it can reduce fit accuracy and surface finish quality. Recommended: have the spindle alignment checked at your next service visit.` });
-    else if (mostlyOver) add({ severity: 2, index: NAME.gradient, text: `${NAME.gradient} is outside its normal range (axis ${axisLabel}) — this pattern typically points to spindle misalignment. Recommended: have the spindle re-aligned.` });
+    if (!mostlyOver) continue;
+    if (worst <= T.gradientMinorMax) flags.push({ severity: 0, minor: true, index: NAME.gradient, text: `${NAME.gradient} sat slightly outside its ideal range (axis ${axisLabel}) on ${overCount} of ${vals.length} readings this month. This isn't urgent and the machine is fine to keep running, but it can reduce fit accuracy and surface finish quality. Recommended: have the spindle alignment checked at your next service visit.` });
+    else flags.push({ severity: 2, index: NAME.gradient, text: `${NAME.gradient} is outside its normal range (axis ${axisLabel}) — this pattern typically points to spindle misalignment. Recommended: have the spindle re-aligned.` });
   }
 
-  // Rule 4 — axis alignment gap (Structural Alignment Index): bounce on any step, magnitude on latest
-  for (const [axisLabel, key] of [['Y', 'aGap'], ['X', 'bGap']]) {
-    let bounced = null;
-    for (let i = 1; i < seq.length; i++) {
-      const a = seq[i - 1][key], b = seq[i][key];
-      if (a != null && b != null && Math.abs(b - a) >= T.gapStep) bounced = [seq[i - 1], seq[i]];
+  // Event checks: flagged at reading i (inside this month); dropped if the same
+  // check passes at reading i + SETTLE_AFTER.
+  for (const c of CHECKS) {
+    let open = null;
+    for (let i = Math.max(first, 1); i <= last; i++) {
+      if (!c.test(seq, i)) continue;
+      const j = i + SETTLE_AFTER;
+      if (j < seq.length && !c.test(seq, j)) { resolved++; continue; }
+      open = i;
     }
-    if (bounced) add({ severity: 3, index: NAME.gap, text: `${NAME.gap} jumped between readings (${axisLabel}-axis)${where(...bounced)} — this pattern typically points to ballscrew wear. Recommended: have the ${axisLabel}-axis ballscrew inspected.` });
-    else if (latest[key] != null && latest[key] > T.gapHard) add({ severity: 2, index: NAME.gap, text: `${NAME.gap} is outside its normal range (${axisLabel}-axis) — recommended: inspect/re-align the ${axisLabel}-axis.` });
-  }
-
-  for (let i = 1; i < seq.length; i++) {
-    const prev = seq[i - 1], cur = seq[i];
-    // Rule 3 — origin drift (Positional Stability Index)
-    if (Array.isArray(cur.origin) && Array.isArray(prev.origin)) {
-      ['X', 'Y', 'Z'].forEach((ax, k) => {
-        const v = cur.origin[k], pv = prev.origin[k];
-        if (typeof v === 'number' && typeof pv === 'number' && Math.abs(v - pv) >= T.originStep) {
-          add({ severity: 1, index: NAME.origin, text: `${NAME.origin} shifted more than expected on the ${ax} axis. Recommended: have that axis's positioning checked.` });
-        }
-      });
-    }
-    // Rule 5 — magazine/tool-changer offset (Tool Changer Consistency Index)
-    if (Array.isArray(cur.magOffset) && Array.isArray(prev.magOffset)) {
-      const hit = ['X', 'Y', 'Z'].filter((ax, k) => typeof cur.magOffset[k] === 'number' && typeof prev.magOffset[k] === 'number' && Math.abs(cur.magOffset[k] - prev.magOffset[k]) >= T.magOffsetStep);
-      if (hit.includes('Z')) add({ severity: 1, index: NAME.magOffset, text: `${NAME.magOffset} shifted on the tool changer's Z reference — this pattern typically points to ballscrew wear. Recommended: have the ballscrew inspected.` });
-      const xy = hit.filter(a => a !== 'Z');
-      if (xy.length) add({ severity: 1, index: NAME.magOffset, text: `${NAME.magOffset} shifted on the tool changer's ${xy.join('/')} reference. Recommended: have that alignment checked.` });
-    }
-    // Rule 6 — reference tool length, gated on clean Z-origin and magazine-Z
-    if (typeof cur.baseTool === 'number' && typeof prev.baseTool === 'number' && Math.abs(cur.baseTool - prev.baseTool) >= T.baseToolStep) {
-      const zClean = (arr, parr, step) => !Array.isArray(arr) || !Array.isArray(parr) || arr[2] == null || parr[2] == null || Math.abs(arr[2] - parr[2]) < step;
-      if (zClean(cur.origin, prev.origin, T.originStep) && zClean(cur.magOffset, prev.magOffset, T.magOffsetStep)) {
-        add({ severity: 1, index: NAME.baseTool, text: `${NAME.baseTool} moved more than expected between readings, with the other axis references holding steady — this pattern typically points to a bad tool-setter switch. Recommended: have the tool setter switch inspected.` });
-      }
+    if (open != null && !seen.has(c.id)) {
+      seen.add(c.id);
+      const p = seq[open - 1], l = seq[open];
+      const where = p?.cc != null && l?.cc != null ? ` Seen between correction #${p.cc} and #${l.cc}.` : '';
+      flags.push({ ...c.flag, text: c.flag.text + where });
     }
   }
 
-  if (!flags.length) return { status: 'clean', flags: [] };
+  if (!flags.length) return { status: 'clean', flags: [], resolved };
   flags.sort((a, b) => b.severity - a.severity);
-  return { status: flags.some(f => !f.minor) ? 'flagged' : 'minor', flags };
+  return { status: flags.some(f => !f.minor) ? 'flagged' : 'minor', flags, resolved };
 }
 
 const STATUS_STYLE = {
@@ -249,7 +251,7 @@ function toPoint(r, diagByCC) {
   };
 }
 
-function buildMachineSection(serial, nickname, millRows, diagRows, monthLabel, baselineRow) {
+function buildMachineSection(serial, nickname, millRows, diagRows, monthLabel, baselineRow, afterRows = []) {
   const diagByCC = {};
   for (const d of diagRows) {
     const rm = d.raw_metrics || {};
@@ -269,7 +271,7 @@ function buildMachineSection(serial, nickname, millRows, diagRows, monthLabel, b
       magOffset: diagByCC[r.correction_count]?.magOffset || null,
     }));
 
-  const diag = diagnoseFull(sorted, baselineRow ? toPoint(baselineRow, diagByCC) : null);
+  const diag = diagnoseFull(sorted, baselineRow ? toPoint(baselineRow, diagByCC) : null, afterRows.map(r => toPoint(r, diagByCC)));
   const name = nickname ? `${nickname} (${serial})` : serial;
   const st = STATUS_STYLE[diag.status];
   const statusColor = st.color;
@@ -362,6 +364,7 @@ function buildMachineSection(serial, nickname, millRows, diagRows, monthLabel, b
       <h3 style="margin:0 0 4px;font-family:Arial,sans-serif;">${name}</h3>
       <div style="font-family:Arial,sans-serif;font-size:13px;color:${statusColor};font-weight:bold;margin-bottom:10px;">${statusLabel}</div>
       ${concernsHtml}
+      ${diag.resolved ? `<div style="font-family:Arial,sans-serif;font-size:11.5px;color:#666;margin:-4px 0 12px;">${diag.resolved === 1 ? 'One brief irregularity' : `${diag.resolved} brief irregularities`} this month settled by ${diag.resolved === 1 ? 'itself' : 'themselves'} within a few corrections — no action needed.</div>` : ''}
       ${charts}
       <div style="font-family:Arial,sans-serif;font-size:11px;color:#888;margin-top:10px;">${sorted.length} report${sorted.length === 1 ? '' : 's'} recorded this month${sorted.length === 1 ? ' — charts need at least 2 to draw a trend' : ''}.</div>
     </div>
@@ -385,11 +388,15 @@ async function buildReport(customerId, monthStr) {
     const before = millRows.length ? await sb(
       `mill_reports?serial=eq.${encodeURIComponent(m.serial)}&created_at=lt.${start.toISOString()}&select=correction_count,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length&order=correction_count.desc&limit=1`
     ).catch(() => []) : [];
-    const ccList = [...millRows, ...before].map(r => r.correction_count).filter(v => v != null);
+    // the next few readings after the month, to see whether a late-month flag settled
+    const after = millRows.length ? await sb(
+      `mill_reports?serial=eq.${encodeURIComponent(m.serial)}&created_at=gte.${end.toISOString()}&select=correction_count,spindle_gradient_x,spindle_gradient_y,a_y_gap,b_x_gap,base_tool_length&order=correction_count.asc&limit=${SETTLE_AFTER}`
+    ).catch(() => []) : [];
+    const ccList = [...millRows, ...before, ...after].map(r => r.correction_count).filter(v => v != null);
     const diagRows = ccList.length
       ? await sb(`diagnostic_reports?serial=eq.${encodeURIComponent(m.serial)}&correction_count=in.(${ccList.join(',')})&select=correction_count,raw_metrics`)
       : [];
-    sections.push(buildMachineSection(m.serial, m.nickname, millRows, diagRows, label, before[0]));
+    sections.push(buildMachineSection(m.serial, m.nickname, millRows, diagRows, label, before[0], after));
   }
 
   const summary = `
