@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine, ReferenceArea, ComposedChart, Scatter, Customized } from "recharts";
 import { unzipSync, strFromU8 } from "fflate";
 
@@ -212,10 +212,31 @@ function daysUntilFollowup(job) {
   return Math.ceil(diff / (1000 * 60 * 60 * 24));
 }
 
+
+// ── Theme: light by default; dark kept as an option (topbar toggle). ──
+const THEME = (() => { try { return localStorage.getItem('axis-theme') || 'light'; } catch { return 'light'; } })();
+if (typeof document !== 'undefined') document.documentElement.dataset.theme = THEME;
+const CH = THEME === 'dark'
+  ? { bg: '#0a0c10', grid: '#1e2a3a', axis: '#5a6a80', zero: '#8a9ab0', tipBg: '#161b24', tipBdr: '#243040', tipTx: '#d0dae8' }
+  : { bg: '#ffffff', grid: '#e3e8ee', axis: '#6b7785', zero: '#94a3b8', tipBg: '#ffffff', tipBdr: '#d9e0e8', tipTx: '#1b2430' };
+const toggleTheme = () => { try { localStorage.setItem('axis-theme', THEME === 'dark' ? 'light' : 'dark'); } catch {} location.reload(); };
+
 const styles = `
   @import url('https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
   *{margin:0;padding:0;box-sizing:border-box;}
   :root{
+    --bg:#f3f5f8;--sur:#ffffff;--sur2:#f7f9fb;--sur3:#eef2f6;
+    --bdr:#d9e0e8;--bdr2:#c6d0db;
+    --ac:#0284c7;--ac2:#0369a1;--acd:rgba(2,132,199,0.08);
+    --am:#b45309;--amd:rgba(217,119,6,0.12);
+    --gr:#15803d;--grd:rgba(22,163,74,0.10);
+    --rd:#dc2626;--rdd:rgba(220,38,38,0.08);
+    --tx:#1b2430;--txd:#5b6776;--txm:#3f4b5a;
+    --sw:200px;
+    --bnav-h:62px;
+    color-scheme:light;
+  }
+  [data-theme="dark"]{
     --bg:#0a0c10;--sur:#0f1218;--sur2:#161b24;--sur3:#1c2230;
     --bdr:#1e2a3a;--bdr2:#243040;
     --ac:#00c8ff;--ac2:#0084a8;--acd:rgba(0,200,255,0.08);
@@ -223,9 +244,36 @@ const styles = `
     --gr:#22d47a;--grd:rgba(34,212,122,0.10);
     --rd:#ff4d6a;--rdd:rgba(255,77,106,0.10);
     --tx:#d0dae8;--txd:#5a6a80;--txm:#8a9ab0;
-    --sw:200px;
-    --bnav-h:62px;
+    color-scheme:dark;
   }
+  /* Light v2 (2026-11-01): a touch darker + more colour — navy bars, tinted cards */
+  :root:not([data-theme="dark"]){
+    --bg:#d8e0ea;--sur:#f4f7fa;--sur2:#e8eef4;--sur3:#dfe7ef;
+    --bdr:#bac6d3;--bdr2:#a6b4c4;--txd:#4f5d6e;--txm:#334155;
+    --acd:rgba(2,132,199,0.12);
+  }
+  :root:not([data-theme="dark"]) .topbar, :root:not([data-theme="dark"]) .sidebar, :root:not([data-theme="dark"]) .bnav{
+    --tx:#ffffff;--txm:#dbe5f1;--txd:#9fb6d1;--ac:#38bdf8;--ac2:#0ea5e9;--acd:rgba(56,189,248,0.16);
+    --am:#fbbf24;--rd:#f87171;--gr:#4ade80;
+    --sur2:rgba(255,255,255,0.07);--bdr:rgba(255,255,255,0.12);--bdr2:rgba(255,255,255,0.26);
+    color:var(--tx);
+  }
+  :root:not([data-theme="dark"]) .topbar{background:linear-gradient(90deg,#172b45,#23436b);border-bottom-color:#0f1f33;}
+  :root:not([data-theme="dark"]) .sidebar{background:#1d3352;border-right-color:#12243b;}
+  :root:not([data-theme="dark"]) .bnav{background:linear-gradient(90deg,#172b45,#23436b);border-top-color:#0f1f33;}
+  :root:not([data-theme="dark"]) .ni:hover{color:#fff;}
+  :root:not([data-theme="dark"]) .kc{border-width:1px;}
+  :root:not([data-theme="dark"]) .kc::before{height:4px;}
+  :root:not([data-theme="dark"]) .kc.bl{background:linear-gradient(160deg,#d6e9fb,var(--sur) 65%);}
+  :root:not([data-theme="dark"]) .kc.am{background:linear-gradient(160deg,#fbe7c6,var(--sur) 65%);}
+  :root:not([data-theme="dark"]) .kc.gr{background:linear-gradient(160deg,#d3f2dd,var(--sur) 65%);}
+  :root:not([data-theme="dark"]) .kc.rd{background:linear-gradient(160deg,#fbd9d9,var(--sur) 65%);}
+  :root:not([data-theme="dark"]) .panel{box-shadow:0 1px 3px rgba(16,24,40,.10);}
+  :root:not([data-theme="dark"]) .ph{background:linear-gradient(90deg,#e1eaf4,var(--sur));border-bottom-color:var(--bdr);}
+  :root:not([data-theme="dark"]) .bp{color:#fff;}
+  :root:not([data-theme="dark"]) .bp:hover{background:var(--ac2);}
+  :root:not([data-theme="dark"]) .topbar, :root:not([data-theme="dark"]) .sidebar{box-shadow:0 1px 3px rgba(16,24,40,.06);}
+  .theme-toggle{background:none;border:1px solid var(--bdr2);border-radius:6px;color:var(--txm);font-size:16px;width:38px;height:36px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;}
   html,body{background:var(--bg);font-family:'IBM Plex Sans',sans-serif;color:var(--tx);min-height:100vh;-webkit-text-size-adjust:100%;overflow-x:hidden;max-width:100vw;}
   .app{display:flex;flex-direction:column;min-height:100vh;min-height:100dvh;overflow-x:hidden;max-width:100vw;}
   .topbar{height:52px;background:var(--sur);border-bottom:1px solid var(--bdr);display:flex;align-items:center;padding:0 16px;gap:8px;position:sticky;top:0;z-index:20;}
@@ -2011,7 +2059,7 @@ function DiagFlagCard({ checkKey, data }) {
       <div className="diag-flag-title">{data.flagged ? '⚠ ' : '✓ '}{info.label}{!data.thresholdsValidatedForModel && <span style={{color:'var(--txd)',fontWeight:400,fontSize:10,marginLeft:6}}>(unvalidated for this model)</span>}</div>
       <div className="diag-flag-desc">{info.cause}</div>
       {data.flagged && info.action && <div className="diag-flag-action">→ {info.action}</div>}
-      {data.priorityNote && <div className="diag-flag-action" style={{color:'#ffb020'}}>⚑ {data.priorityNote}</div>}
+      {data.priorityNote && <div className="diag-flag-action" style={{color:'var(--am)'}}>⚑ {data.priorityNote}</div>}
       <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',marginTop:6}}>
         {(checkKey === 'spindle_gradient_x_collet_wear' || checkKey === 'spindle_gradient_y_collet_wear') && <>{data.axis}: {data.currentValue} (threshold ±{data.threshold})</>}
         {(checkKey === 'spindle_gradient_x_drift' || checkKey === 'spindle_gradient_y_drift') && <>{data.axis}: {data.currentValue}{data.previousValue!=null && <>, previous: {data.previousValue}, Δ {data.delta>0?'+':''}{data.delta?.toFixed(6)}</>} (step threshold ±{data.threshold})</>}
@@ -2424,13 +2472,13 @@ const SEV_COLOR = { stop: "#ff4d6a", error: "#ffb020", info: "#5a6a80" };
 function ErrorDotTooltip({ e }) {
   if (!e) return null;
   return (
-    <div style={{background:'#161b24',border:`1px solid ${SEV_COLOR[e.sev]}`,borderRadius:6,padding:'9px 11px',fontFamily:"'IBM Plex Mono',monospace",fontSize:11,maxWidth:260,lineHeight:1.5}}>
+    <div style={{background:'var(--sur2)',border:`1px solid ${SEV_COLOR[e.sev]}`,borderRadius:6,padding:'9px 11px',fontFamily:"'IBM Plex Mono',monospace",fontSize:11,maxWidth:260,lineHeight:1.5}}>
       <div style={{color:SEV_COLOR[e.sev],fontWeight:700,marginBottom:3}}>{e.code} · {e.sub}</div>
-      <div style={{color:'#8a9ab0',marginBottom:5}}>{e.ts} · at corr {e.corr}</div>
-      <div style={{color:'#d0dae8'}}>{e.hint}</div>
-      {e.coords && <div style={{color:'#5a6a80',marginTop:5}}>pos: X={e.coords}</div>}
-      {e.recurring && <div style={{color:'#ff4d6a',marginTop:5}}>⚠ Recurred {e.recurCount}× in this correction window — area of concern.</div>}
-      {!e.recurring && e.sev==='info' && <div style={{color:'#5a6a80',marginTop:5}}>Self-clearing; flagged for context only.</div>}
+      <div style={{color:'var(--txm)',marginBottom:5}}>{e.ts} · at corr {e.corr}</div>
+      <div style={{color:'var(--tx)'}}>{e.hint}</div>
+      {e.coords && <div style={{color:'var(--txd)',marginTop:5}}>pos: X={e.coords}</div>}
+      {e.recurring && <div style={{color:'var(--rd)',marginTop:5}}>⚠ Recurred {e.recurCount}× in this correction window — area of concern.</div>}
+      {!e.recurring && e.sev==='info' && <div style={{color:'var(--txd)',marginTop:5}}>Self-clearing; flagged for context only.</div>}
     </div>
   );
 }
@@ -2559,7 +2607,7 @@ function ErrorDotsLayer(props) {
              style={{ cursor: 'pointer' }}>
             <circle cx={cx} cy={cy} r={r + 6} fill="transparent" />
             {e.recurring && <circle cx={cx} cy={cy} r={r + 3} fill={col} fillOpacity={0.2} />}
-            <circle cx={cx} cy={cy} r={r} fill={col} stroke="#0a0c10" strokeWidth={1.5} />
+            <circle cx={cx} cy={cy} r={r} fill={col} stroke={CH.bg} strokeWidth={1.5} />
           </g>
         );
       })}
@@ -2650,7 +2698,7 @@ function DriftBanner({ latest, note }) {
   if (!latest || !latest.length) return null;
   return (
     <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',background:'var(--sur2)',border:'1px solid rgba(255,176,32,0.35)',borderRadius:6,padding:'9px 12px',marginBottom:10,fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5}}>
-      <span style={{color:'#ffb020'}}>▲ Rate-of-change warning:</span>
+      <span style={{color:'var(--am)'}}>▲ Rate-of-change warning:</span>
       {latest.map((d, i) => (
         <span key={i} style={{color:d.color}}>
           {d.label} {d.delta>0?'+':''}{Math.abs(d.delta) < 1 ? d.delta.toFixed(5) : d.delta.toFixed(2)} since last report (cc {d.corr})
@@ -2684,7 +2732,7 @@ function DriftDotsLayer({ xAxisMap, yAxisMap, markers }) {
             key={i}
             points={`${cx},${cy - s} ${cx - s},${cy + s} ${cx + s},${cy + s}`}
             fill={m.color || '#ffb020'}
-            stroke="#0a0c10"
+            stroke={CH.bg}
             strokeWidth={1.2}
           />
         );
@@ -2698,7 +2746,13 @@ function DriftDotsLayer({ xAxisMap, yAxisMap, markers }) {
 // which chart you're looking at.
 const AXIS_COLOR = { X: '#f472b6', Y: '#ffb020', Z: '#3b82f6', A: '#a78bfa', B: '#22d47a' };
 
+// Service notes (2026-11-05): Fleet wraps a machine's graphs in this provider so every
+// TrendChart draws a purple marker at each note's position (e.g. 207.5 = between cc 207 and 208).
+const FleetNotesCtx = createContext([]);
+const noteShort = t => (t || '').length > 22 ? t.slice(0, 21) + '…' : (t || '');
+
 function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks, zeroLine, subtitle, yTicks, tooltipFormatter, toleranceBand, errorMarkers, driftMarkers }) {
+  const serviceNotes = useContext(FleetNotesCtx);
   const [hovered, setHovered] = useState(null); // {e, x, y} for the error tooltip
   const wrapRef = useRef(null);
 
@@ -2740,13 +2794,13 @@ function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks
       <div style={{width:'100%',height:190}}>
         <ResponsiveContainer>
           <LineChart data={data} margin={{top:5,right:14,left:hideYTicks?-24:0,bottom:5}}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e2a3a"/>
+            <CartesianGrid strokeDasharray="3 3" stroke={CH.grid}/>
             {toleranceBand && (
               <ReferenceArea y1={toleranceBand[0]} y2={toleranceBand[1]} fill="#22d47a" fillOpacity={0.07} stroke="none"/>
             )}
-            <XAxis dataKey="corr" type="number" domain={['dataMin','dataMax']} stroke="#5a6a80" tick={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}} label={{value:'Correction Count',position:'insideBottom',offset:-3,fontSize:9,fill:'#5a6a80'}} allowDuplicatedCategory={false}/>
+            <XAxis dataKey="corr" type="number" domain={['dataMin','dataMax']} stroke={CH.axis} tick={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}} label={{value:'Correction Count',position:'insideBottom',offset:-3,fontSize:9,fill:'#5a6a80'}} allowDuplicatedCategory={false}/>
             <YAxis
-              stroke="#5a6a80"
+              stroke={CH.axis}
               tick={hideYTicks ? false : {fontSize:10,fontFamily:"IBM Plex Mono, monospace"}}
               tickFormatter={yFormat}
               domain={yDomain || ['auto','auto']}
@@ -2754,13 +2808,14 @@ function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks
               axisLine={!hideYTicks}
             />
             <Tooltip
-              contentStyle={{background:'#161b24',border:'1px solid #243040',fontSize:11,fontFamily:"IBM Plex Mono, monospace"}}
+              contentStyle={{background:CH.tipBg,border:`1px solid ${CH.tipBdr}`,color:CH.tipTx,fontSize:11,fontFamily:"IBM Plex Mono, monospace"}}
               labelFormatter={v=>`Corr ${v}`}
               formatter={tooltipFormatter || ((v)=>typeof v==='number'?v.toFixed(1):v)}
             />
             <Legend wrapperStyle={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}}/>
-            {zeroLine && <ReferenceLine y={0} stroke="#8a9ab0" strokeWidth={1.5}/>}
+            {zeroLine && <ReferenceLine y={0} stroke={CH.zero} strokeWidth={1.5}/>}
             {(refLines||[]).map((rl,i) => <ReferenceLine key={i} y={rl.y} stroke="#ff4d6a" strokeDasharray="4 4" label={{value:rl.label,fontSize:9,fill:'#ff4d6a',position:'right'}}/>)}
+            {(serviceNotes||[]).map((n,i) => <ReferenceLine key={'note'+n.id} x={Number(n.after_cc)} stroke="#8b5cf6" strokeWidth={2} strokeDasharray="6 3" label={{value:`📝 ${noteShort(n.note)}`,fontSize:9,fill:'#8b5cf6',position:'insideTopRight',offset:4+(i%3)*12}}/>)}
             {lines.map(l => <Line key={l.key} type="monotone" dataKey={l.key} name={l.name} stroke={l.color} dot={{r:3}} connectNulls/>)}
             {hasErrors && (
               <Customized component={(cp) => (
@@ -2850,10 +2905,10 @@ function TrendCharts({ history, applogText, points: providedPoints }) {
       {errorMarkers.length > 0 && (
         <div style={{display:'flex',alignItems:'center',gap:12,flexWrap:'wrap',background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:6,padding:'9px 12px',marginBottom:14,fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5}}>
           <span style={{color:'var(--txm)'}}>Error overlay:</span>
-          <span style={{display:'flex',alignItems:'center',gap:5,color:'#ff4d6a'}}><span style={{width:8,height:8,borderRadius:'50%',background:'#ff4d6a'}}/>{stopCount} emergency stop</span>
-          <span style={{display:'flex',alignItems:'center',gap:5,color:'#ffb020'}}><span style={{width:8,height:8,borderRadius:'50%',background:'#ffb020'}}/>{errorMarkers.filter(e=>e.sev==='error').length} error</span>
-          <span style={{display:'flex',alignItems:'center',gap:5,color:'#5a6a80'}}><span style={{width:8,height:8,borderRadius:'50%',background:'#5a6a80'}}/>{errorMarkers.filter(e=>e.sev==='info').length} info</span>
-          {recurCount > 0 && <span style={{color:'#ff4d6a'}}>⚠ {recurCount} recurring — hover the ringed dots</span>}
+          <span style={{display:'flex',alignItems:'center',gap:5,color:'var(--rd)'}}><span style={{width:8,height:8,borderRadius:'50%',background:'var(--rd)'}}/>{stopCount} emergency stop</span>
+          <span style={{display:'flex',alignItems:'center',gap:5,color:'var(--am)'}}><span style={{width:8,height:8,borderRadius:'50%',background:'var(--am)'}}/>{errorMarkers.filter(e=>e.sev==='error').length} error</span>
+          <span style={{display:'flex',alignItems:'center',gap:5,color:'var(--txd)'}}><span style={{width:8,height:8,borderRadius:'50%',background:'var(--txd)'}}/>{errorMarkers.filter(e=>e.sev==='info').length} info</span>
+          {recurCount > 0 && <span style={{color:'var(--rd)'}}>⚠ {recurCount} recurring — hover the ringed dots</span>}
           <span style={{color:'var(--txd)',marginLeft:'auto'}}>hover any dot for the why</span>
         </div>
       )}
@@ -3436,7 +3491,7 @@ function MachineOwnerEditor({ serial, owner, customers, onSave, reportedLab, rep
     }
   };
   return (
-    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', background: 'var(--sur2)', border: `1px solid ${isSuggestion ? '#ffb020' : 'var(--bdr)'}`, borderRadius: 6, padding: '8px 10px', marginBottom: 12 }} onClick={e => e.stopPropagation()}>
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', background: 'var(--sur2)', border: `1px solid ${isSuggestion ? 'var(--am)' : 'var(--bdr)'}`, borderRadius: 6, padding: '8px 10px', marginBottom: 12 }} onClick={e => e.stopPropagation()}>
       <span style={monoHint}>OWNER</span>
       <select
         className="fsl" style={{ maxWidth: 240, margin: 0 }}
@@ -3471,7 +3526,7 @@ function MachineOwnerEditor({ serial, owner, customers, onSave, reportedLab, rep
         </button>
       )}
       {isSuggestion && (
-        <span style={{ ...monoHint, color: '#ffb020', flexBasis: '100%' }}>
+        <span style={{ ...monoHint, color: 'var(--am)', flexBasis: '100%' }}>
           {customerId === NEW_CUSTOMER
             ? `✨ No customer named "${labName}" yet — tap Create & assign to add it${reportedEmail ? ` (email ${reportedEmail})` : ''}, or pick an existing one.`
             : `✨ Matched the lab name this PC reported ("${labName}") — tap Save to assign.`}
@@ -3557,8 +3612,72 @@ function recentApplogAlerts(summary) {
 
 function Fleet({ msg }) {
   const [rows, setRows] = useState([]);
+  // Service notes per machine, drawn on its trend graphs (table fleet_notes).
+  const [notesBySerial, setNotesBySerial] = useState({});
+  const [noteDraft, setNoteDraft] = useState({ at: '', text: '' });
+  const loadNotes = useCallback(async () => {
+    try {
+      const r = await fetch(`${SUPABASE_URL}/rest/v1/fleet_notes?select=*&order=after_cc.asc`, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+      const list = r.ok ? await r.json() : [];
+      const m = {}; for (const n of list) (m[n.serial] = m[n.serial] || []).push(n);
+      setNotesBySerial(m);
+    } catch { setNotesBySerial({}); }
+  }, []);
+  useEffect(() => { loadNotes(); }, [loadNotes]);
+  const addNote = async (serial) => {
+    const text = noteDraft.text.trim(); const at = Number(noteDraft.at);
+    if (!text || !noteDraft.at) return msg && msg('Pick where it goes and type the note', 'bad');
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/fleet_notes`, {
+      method: 'POST', headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ serial, after_cc: at, note: text }),
+    });
+    if (!r.ok) return msg && msg('Could not save note' + (r.status === 404 ? ' — notes table not set up yet' : ''), 'bad');
+    setNoteDraft({ at: '', text: '' }); msg && msg('Note added to the graph'); loadNotes();
+  };
+  const delNote = async (n) => {
+    if (!window.confirm(`Delete this note?\n\n"${n.note}"`)) return;
+    await fetch(`${SUPABASE_URL}/rest/v1/fleet_notes?id=eq.${n.id}`, { method: 'DELETE', headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+    loadNotes();
+  };
   const [loading, setLoading] = useState(true);
   const [openSerial, setOpenSerial] = useState(null);
+  // Reset history after a rebuild (2026-11-01): old rows are archived server-side
+  // (reset_machine_history) so the machine starts fresh; undo_machine_reset restores.
+  const [resetTarget, setResetTarget] = useState(null); // { serial, name, count }
+  const [resetBusy, setResetBusy] = useState(false);
+  const [lastReset, setLastReset] = useState(null);     // { serial, name } for the Undo banner
+  const rpc = async (fn, serial) => {
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/rpc/${fn}`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p_serial: serial }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.message || `HTTP ${r.status}`);
+    return j;
+  };
+  const doReset = async () => {
+    if (!resetTarget) return;
+    setResetBusy(true);
+    try {
+      const j = await rpc('reset_machine_history', resetTarget.serial);
+      msg && msg(`${resetTarget.name}: history reset (${(j.fleet_rows || 0) + (j.diag_rows || 0)} report(s) archived)`);
+      setLastReset({ serial: resetTarget.serial, name: resetTarget.name });
+      setResetTarget(null);
+      await load();
+    } catch (e) {
+      msg && msg('Reset failed: ' + e.message, 'bad');
+    } finally { setResetBusy(false); }
+  };
+  const undoReset = async () => {
+    if (!lastReset) return;
+    try {
+      const j = await rpc('undo_machine_reset', lastReset.serial);
+      msg && msg(`${lastReset.name}: history restored (${j.restored || 0} report(s))`);
+      setLastReset(null);
+      await load();
+    } catch (e) { msg && msg('Undo failed: ' + e.message, 'bad'); }
+  };
   const [trendView, setTrendView] = useState('graph'); // 'graph' | 'table' | 'report' — shared since only one card opens at a time
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
@@ -3601,6 +3720,11 @@ function Fleet({ msg }) {
   const [applogBySerial, setApplogBySerial] = useState({});
   const [applogRaw, setApplogRaw] = useState({}); // serial -> { text, updated_at } | { error }
   const [applogErrorsOnly, setApplogErrorsOnly] = useState(false);
+  // Hidden machines (2026-10-31): mill_fleet_latest leaves out machines hidden
+  // from the Axis Inbox hub, and machines with no new correction count in 30
+  // days. null = view unavailable, so nothing gets hidden.
+  const [visibleSerials, setVisibleSerials] = useState(null);
+  const [showHidden, setShowHidden] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -3630,7 +3754,14 @@ function Fleet({ msg }) {
           `${SUPABASE_URL}/rest/v1/mill_applogs?select=serial,summary,updated_at`,
           { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
         ).then(res => (res.ok ? res.json() : [])).catch(() => []),
-      ]);
+        fetch(
+          `${SUPABASE_URL}/rest/v1/mill_fleet_latest?select=serial`,
+          { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } }
+        ).then(res => (res.ok ? res.json() : null)).catch(() => null),
+      ]).then(([a, b, c, d, e, f, vis]) => {
+        setVisibleSerials(Array.isArray(vis) ? new Set(vis.map(v => v.serial)) : null);
+        return [a, b, c, d, e, f];
+      });
       const applogMap = {};
       for (const a of (Array.isArray(applogData) ? applogData : [])) applogMap[a.serial] = a;
       setApplogBySerial(applogMap);
@@ -3897,7 +4028,7 @@ function Fleet({ msg }) {
   // so searching either the customer name or the machine's serial works.
   const machines = (() => {
     const q = search.trim().toLowerCase();
-    if (!q) return allMachines;
+    if (!q) return (showHidden || !visibleSerials) ? allMachines : allMachines.filter(m => visibleSerials.has(m.serial));
     return allMachines.filter(({ serial, owner, customer, pcName, latest }) => {
       const name = (customer?.company || owner?.nickname || serial || '').toLowerCase();
       return name.includes(q) || (serial || '').toLowerCase().includes(q)
@@ -4083,6 +4214,32 @@ function Fleet({ msg }) {
   return (
     <div>
       <div className="pt">🛠 Fleet Monitoring</div>
+      {lastReset && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', margin: '0 0 12px', border: '1px solid var(--bdr)', borderRadius: 6, background: 'var(--sur2)', fontSize: 12 }}>
+          <span>↺ <b>{lastReset.name}</b> ({lastReset.serial}) history was reset — it shows up again with its next report.</span>
+          <button className="btn bs bg" style={{ marginLeft: 'auto', height: 26, fontSize: 10 }} onClick={undoReset}>↩ Undo</button>
+          <button className="btn bs bg" style={{ height: 26, fontSize: 10 }} onClick={() => setLastReset(null)}>✕</button>
+        </div>
+      )}
+      {resetTarget && (
+        <Modal
+          title="Reset machine history"
+          saveLabel={resetBusy ? 'Resetting…' : 'Yes, reset history'}
+          onClose={() => !resetBusy && setResetTarget(null)}
+          onSave={() => !resetBusy && doReset()}
+        >
+          <p style={{ margin: '0 0 10px', fontSize: 14 }}>
+            You're about to reset the history for <b>{resetTarget.name}</b> ({resetTarget.serial}). <b>Are you sure?</b>
+          </p>
+          <p style={{ margin: '0 0 10px', fontSize: 13, color: 'var(--txm)' }}>
+            Its {resetTarget.count} report(s) and trend graphs will be cleared so it starts fresh as a new machine (e.g. after a rebuild).
+            It drops off Fleet until its next report comes in.
+          </p>
+          <p style={{ margin: 0, fontSize: 12, color: 'var(--txd)' }}>
+            The old history is archived, not deleted — you can undo right after.
+          </p>
+        </Modal>
+      )}
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', margin: '4px 0 16px', flexWrap: 'wrap' }}>
         <input
           className="fi"
@@ -4094,6 +4251,12 @@ function Fleet({ msg }) {
         <div className="diag-meta" style={{ margin: 0 }}>
           {loading ? 'loading…' : `${machines.length} machine(s)${search.trim() ? ` of ${allMachines.length}` : ''} · ${fleetFlagged} flagged${newCount ? ` · 🆕 ${newCount} new` : ''}${staleCount ? ` · ⏸ ${staleCount} not syncing` : ''}`}
         </div>
+        {visibleSerials && allMachines.length > visibleSerials.size && (
+          <button className={`btn bs ${showHidden ? 'bp' : ''}`} onClick={() => setShowHidden(h => !h)}
+            title="Hidden from the Axis Inbox hub, or no new correction count in 30 days. Each comes back with its next new correction count.">
+            {showHidden ? '🙈 Hide inactive' : `👁 Show hidden (${allMachines.filter(m => !visibleSerials.has(m.serial)).length})`}
+          </button>
+        )}
         <button className={`btn bs ${showAdd ? 'bp' : ''}`} style={{ marginLeft: 'auto' }} onClick={() => setShowAdd(s => !s)}>
           {showAdd ? '✕ Cancel' : '➕ Add Report'}
         </button>
@@ -4138,7 +4301,7 @@ function Fleet({ msg }) {
             </button>
           </div>
           {addText.trim() && (
-            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'#ffb020',marginTop:8,lineHeight:1.4}}>
+            <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--am)',marginTop:8,lineHeight:1.4}}>
               ⚠ Especially after a camera scan: check the text above against the machine's screen before saving — OCR can misread small decimals.
             </div>
           )}
@@ -4205,7 +4368,7 @@ function Fleet({ msg }) {
                 </span>
                 {!customer && <span style={{fontSize:9,color:'var(--txd)',fontFamily:"'IBM Plex Mono',monospace",border:'1px solid var(--bdr)',borderRadius:4,padding:'1px 6px'}}>unassigned</span>}
                 {isRecent && firstSeen && (
-                  <span style={{fontSize:9,color:'#ffb020',fontFamily:"'IBM Plex Mono',monospace",border:'1px solid #ffb020',borderRadius:4,padding:'1px 6px'}}>
+                  <span style={{fontSize:9,color:'var(--am)',fontFamily:"'IBM Plex Mono',monospace",border:'1px solid var(--am)',borderRadius:4,padding:'1px 6px'}}>
                     🆕 first synced {String(firstSeen).slice(0, 10)}
                   </span>
                 )}
@@ -4242,7 +4405,7 @@ function Fleet({ msg }) {
                     title={`${alert.label} · ${(alert.sent_at || '').slice(0, 10)}`}
                     style={{
                       fontSize: 9, fontFamily: "'IBM Plex Mono',monospace", border: '1px solid var(--bdr)', borderRadius: 4, padding: '1px 6px',
-                      color: alert.status === 'resolved' ? 'var(--gr)' : alert.status === 'customer_confirmed' ? '#ffb020' : 'var(--txd)',
+                      color: alert.status === 'resolved' ? 'var(--gr)' : alert.status === 'customer_confirmed' ? 'var(--am)' : 'var(--txd)',
                     }}
                   >
                     {alert.status === 'sent' && `🔔 notified ${(alert.sent_at || '').slice(0, 10)}`}
@@ -4348,10 +4511,51 @@ function Fleet({ msg }) {
                     >
                       📄 Report
                     </button>
+                    <button
+                      className="btn bs bg"
+                      style={{ height: 26, fontSize: 10, color: 'var(--rd)' }}
+                      title="Rebuilt machine? Start its history fresh"
+                      onClick={(e) => { e.stopPropagation(); setResetTarget({ serial, name: customer?.company || owner?.nickname || serial, count: history.length }); }}
+                    >
+                      ↺ Reset
+                    </button>
                   </div>
                 </div>
 
-                {trendView === 'graph' && <FleetSerialTrendGraphs serial={serial} fleetHistory={history} />}
+                {(() => {
+                  const ccs = [...new Set(history.map(h => h.correction_count).filter(c => c != null))].sort((a, b) => a - b);
+                  const opts = ccs.map((c, i) => ({ v: ccs[i + 1] != null ? (c + ccs[i + 1]) / 2 : c + 0.5, label: ccs[i + 1] != null ? `Between ${c} → ${ccs[i + 1]}` : `After ${c} (latest)` })).reverse();
+                  const notes = notesBySerial[serial] || [];
+                  const where = v => { const lo = ccs.filter(c => c < v).pop(), hi = ccs.find(c => c > v); return lo != null && hi != null ? `${lo} → ${hi}` : lo != null ? `after ${lo}` : `before ${hi ?? '?'}`; };
+                  return (
+                    <div onClick={e => e.stopPropagation()} style={{ margin: '4px 0 12px', padding: '10px 12px', border: '1px solid var(--bdr)', borderLeft: '3px solid #8b5cf6', borderRadius: 6, background: 'var(--sur2)' }}>
+                      <div style={{ fontFamily: "'Rajdhani',sans-serif", fontWeight: 700, fontSize: 12, letterSpacing: '.5px', color: '#8b5cf6', marginBottom: 6 }}>📝 SERVICE NOTES · shown on the graphs</div>
+                      {notes.map(n => (
+                        <div key={n.id} style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 12, padding: '3px 0' }}>
+                          <span style={{ fontFamily: "'IBM Plex Mono',monospace", fontSize: 10, color: '#8b5cf6', whiteSpace: 'nowrap' }}>cc {where(Number(n.after_cc))}</span>
+                          <span style={{ flex: 1 }}>{n.note}</span>
+                          <span style={{ fontSize: 10, color: 'var(--txd)', whiteSpace: 'nowrap' }}>{new Date(n.created_at).toLocaleDateString()}</span>
+                          <button className="btn bs bg" style={{ height: 22, fontSize: 10, padding: '0 6px' }} onClick={() => delNote(n)}>✕</button>
+                        </div>
+                      ))}
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: notes.length ? 6 : 0 }}>
+                        <select className="fi" style={{ marginBottom: 0, flex: '0 1 190px', height: 34, fontSize: 12, padding: '0 8px' }} value={noteDraft.at} onChange={e => setNoteDraft(d => ({ ...d, at: e.target.value }))}>
+                          <option value="">Where on the graph…</option>
+                          {opts.map(o => <option key={o.v} value={o.v}>{o.label}</option>)}
+                        </select>
+                        <input className="fi" style={{ marginBottom: 0, flex: '1 1 200px', height: 34, fontSize: 13 }} placeholder="e.g. Y axis ballscrew adjusted" value={noteDraft.text}
+                          onChange={e => setNoteDraft(d => ({ ...d, text: e.target.value }))} onKeyDown={e => e.key === 'Enter' && addNote(serial)} />
+                        <button className="btn bs bp" style={{ height: 32 }} onClick={() => addNote(serial)}>+ Add note</button>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {trendView === 'graph' && (
+                  <FleetNotesCtx.Provider value={notesBySerial[serial] || []}>
+                    <FleetSerialTrendGraphs serial={serial} fleetHistory={history} />
+                  </FleetNotesCtx.Provider>
+                )}
 
                 {trendView === 'table' && (
                 <div style={{ overflowX: 'auto' }}>
@@ -4381,10 +4585,10 @@ function Fleet({ msg }) {
                             <td style={{ padding: '4px 8px', color: h.is_latest ? 'var(--ac)' : 'var(--tx)' }}>
                               {h.correction_count}{h.is_latest ? ' •' : ''}
                             </td>
-                            <td style={{ padding: '4px 8px', color: xDrift ? '#ffb020' : (xOver ? 'var(--rd)' : 'var(--tx)') }} title={xDrift ? `Bounced ${(h.spindle_gradient_x - prev.spindle_gradient_x).toFixed(5)} since previous report — collet wear` : (xOver ? 'Stable but over ±0.001 — spindle misalignment' : undefined)}>
+                            <td style={{ padding: '4px 8px', color: xDrift ? 'var(--am)' : (xOver ? 'var(--rd)' : 'var(--tx)') }} title={xDrift ? `Bounced ${(h.spindle_gradient_x - prev.spindle_gradient_x).toFixed(5)} since previous report — collet wear` : (xOver ? 'Stable but over ±0.001 — spindle misalignment' : undefined)}>
                               {fmtNum(h.spindle_gradient_x)}{xDrift ? ' ▲' : ''}
                             </td>
-                            <td style={{ padding: '4px 8px', color: yDrift ? '#ffb020' : (yOver ? 'var(--rd)' : 'var(--tx)') }} title={yDrift ? `Bounced ${(h.spindle_gradient_y - prev.spindle_gradient_y).toFixed(5)} since previous report — collet wear` : (yOver ? 'Stable but over ±0.001 — spindle misalignment' : undefined)}>
+                            <td style={{ padding: '4px 8px', color: yDrift ? 'var(--am)' : (yOver ? 'var(--rd)' : 'var(--tx)') }} title={yDrift ? `Bounced ${(h.spindle_gradient_y - prev.spindle_gradient_y).toFixed(5)} since previous report — collet wear` : (yOver ? 'Stable but over ±0.001 — spindle misalignment' : undefined)}>
                               {fmtNum(h.spindle_gradient_y)}{yDrift ? ' ▲' : ''}
                             </td>
                             <td style={{ padding: '4px 8px', color: (h.a_y_gap != null && h.a_y_gap > DWX_THRESHOLDS.aAxisP1P2YGapMax) ? 'var(--rd)' : 'var(--tx)' }}>
@@ -4878,17 +5082,17 @@ function Diagnostics({ msg }) {
             onDrop={e=>{e.preventDefault();setDragOver(false); const items=e.dataTransfer?.files; if(items&&items.length) ingestFolder(items);}}
             onClick={()=>zipRef.current?.click()}
             style={{
-              border:`1.5px dashed ${dragOver?'#00c8ff':'var(--bdr)'}`,
+              border:`1.5px dashed ${dragOver?'var(--ac)':'var(--bdr)'}`,
               background:dragOver?'rgba(0,200,255,0.06)':'var(--sur2)',
               borderRadius:8, padding:'18px 16px', marginBottom:16, cursor:'pointer',
               textAlign:'center', transition:'all .15s',
             }}
           >
-            <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:15,color:dragOver?'#00c8ff':'var(--txm)',marginBottom:3}}>
+            <div style={{fontFamily:"'Rajdhani',sans-serif",fontWeight:700,fontSize:15,color:dragOver?'var(--ac)':'var(--txm)',marginBottom:3}}>
               📂 Drop the machine .zip or folder here
             </div>
             <div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5,color:'var(--txd)',lineHeight:1.5}}>
-              zip / folder with any number of reports (incl. autosave/) + applog + errorlog · auto-sorted · <span onClick={e=>{e.stopPropagation();zipRef.current?.click();}} style={{color:'#00c8ff',textDecoration:'underline',cursor:'pointer'}}>pick a .zip</span> or <span onClick={e=>{e.stopPropagation();folderRef.current?.click();}} style={{color:'#00c8ff',textDecoration:'underline',cursor:'pointer'}}>a folder</span>
+              zip / folder with any number of reports (incl. autosave/) + applog + errorlog · auto-sorted · <span onClick={e=>{e.stopPropagation();zipRef.current?.click();}} style={{color:'var(--ac)',textDecoration:'underline',cursor:'pointer'}}>pick a .zip</span> or <span onClick={e=>{e.stopPropagation();folderRef.current?.click();}} style={{color:'var(--ac)',textDecoration:'underline',cursor:'pointer'}}>a folder</span>
             </div>
             <input
               ref={folderRef} type="file" multiple
@@ -4949,11 +5153,11 @@ function Diagnostics({ msg }) {
               style={{
                 display:'flex',alignItems:'center',gap:6,padding:'0 12px',height:38,
                 background:autoSave?'rgba(34,212,122,0.12)':'var(--sur2)',
-                border:`1px solid ${autoSave?'#22d47a':'var(--bdr)'}`,borderRadius:6,cursor:'pointer',
-                fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5,color:autoSave?'#22d47a':'var(--txd)',whiteSpace:'nowrap',
+                border:`1px solid ${autoSave?'var(--gr)':'var(--bdr)'}`,borderRadius:6,cursor:'pointer',
+                fontFamily:"'IBM Plex Mono',monospace",fontSize:10.5,color:autoSave?'var(--gr)':'var(--txd)',whiteSpace:'nowrap',
               }}
             >
-              <span style={{width:8,height:8,borderRadius:'50%',background:autoSave?'#22d47a':'#5a6a80'}}/>
+              <span style={{width:8,height:8,borderRadius:'50%',background:autoSave?'var(--gr)':'var(--txd)'}}/>
               auto-save {autoSave?'ON':'OFF'}
             </button>
           </div>
@@ -5425,6 +5629,7 @@ export default function App(){
             ⚠ {overdueFollowupCount} overdue
           </div>
         )}
+        <button className="theme-toggle" onClick={toggleTheme} title="Light / dark">{THEME==='dark'?'☀️':'🌙'}</button>
         <button
           onClick={()=>setShowVoiceLog(true)}
           title="Voice Log"
