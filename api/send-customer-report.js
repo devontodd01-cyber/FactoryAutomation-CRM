@@ -43,6 +43,12 @@
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_KEY = process.env.SUPABASE_SERVICE_KEY;
 
+// Customers whose monthly report must NOT be sent (preview still works).
+// Remove the line to release. (2026-11-07, Devon: hold Crystal Dental's report.)
+const REPORT_HOLD = {
+  '502191aa-d784-420c-91c9-423403956ab7': 'Devon is holding this one back (Nov 2026).', // Cystal dental
+};
+
 const HEADERS = { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, "Content-Type": "application/json" };
 
 // Real thresholds, ported 1:1 from DWX_THRESHOLDS in App.js (rules 1,2,3,4,5,6
@@ -435,6 +441,7 @@ module.exports = async (req, res) => {
       return res.status(200).json({ html, customer: customer.company, machineCount });
     }
 
+    if (REPORT_HOLD[customerId]) throw new Error(`Report held for ${customer.company}: ${REPORT_HOLD[customerId]} Preview still works; ask to release it before sending.`);
     if (!customer.email) throw new Error('This customer has no email address on file — add one in the Customers tab first.');
     if (!process.env.RESEND_API_KEY) throw new Error('RESEND_API_KEY is not configured on the server yet — add it in Vercel → Project Settings → Environment Variables.');
 
