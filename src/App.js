@@ -1274,29 +1274,100 @@ function Schedule({ jobs, calNotes, onSaveNote }) {
   );
 }
 
-function Files({files, onUpload, onDelete, uploading}) {
+function Files({files, onUpload, onDelete, uploading, msg}) {
   const [viewing, setViewing] = useState(null);
   const [search, setSearch] = useState('');
+  const [show, setShow] = useState('all');          // all | files | notes
+  const [notes, setNotes] = useState([]);           // ref_notes (2026-11-10): titled notes kept with the PDFs
+  const [editing, setEditing] = useState(null);     // { id?, title, body }
+  const [saving, setSaving] = useState(false);
   const fileRef = useRef(null);
-  const filtered = files.filter(f=>(f.name||'').toLowerCase().includes(search.toLowerCase()));
+  useEffect(() => { db.get('ref_notes').then(r => setNotes(Array.isArray(r) ? r : [])).catch(() => setNotes([])); }, []);
+  const say = (t) => msg && msg(t);
+  const saveNote = async () => {
+    const title = (editing.title || '').trim(), body = editing.body || '';
+    if (!title && !body.trim()) return say('⚠️ Add a title or some text first.');
+    setSaving(true);
+    try {
+      const data = { title: title || body.trim().split('\n')[0].slice(0, 60), body, updated_at: new Date().toISOString() };
+      const r = editing.id ? await db.update('ref_notes', editing.id, data) : await db.insert('ref_notes', data);
+      const rec = Array.isArray(r) ? r[0] : r;
+      if (!rec?.id) throw new Error();
+      setNotes(p => editing.id ? p.map(n => n.id === rec.id ? rec : n) : [...p, rec]);
+      setEditing(null); say('📝 Note saved.');
+    } catch { say('⚠️ Could not save the note.'); }
+    setSaving(false);
+  };
+  const deleteNote = async (n) => {
+    if (!window.confirm(`Delete the note "${n.title || 'Untitled'}"?`)) return;
+    try { await db.delete('ref_notes', n.id); setNotes(p => p.filter(x => x.id !== n.id)); setEditing(null); say('🗑 Note deleted.'); }
+    catch { say('⚠️ Delete failed.'); }
+  };
+  const q = search.toLowerCase();
+  const items = [
+    ...(show !== 'notes' ? files.filter(f => (f.name || '').toLowerCase().includes(q)).map(f => ({ kind: 'file', key: 'f' + f.id, when: f.created_at, f })) : []),
+    ...(show !== 'files' ? notes.filter(n => `${n.title} ${n.body}`.toLowerCase().includes(q)).map(n => ({ kind: 'note', key: 'n' + n.id, when: n.updated_at || n.created_at, n })) : []),
+  ].sort((a, b) => new Date(b.when || 0) - new Date(a.when || 0));
   const fmt = (bytes) => { if(!bytes) return '—'; if(bytes<1024) return bytes+' B'; if(bytes<1024*1024) return Math.round(bytes/1024)+' KB'; return (bytes/(1024*1024)).toFixed(1)+' MB'; };
+  const day = (d) => d ? new Date(d).toLocaleDateString('en-CA') : '—';
+  const preview = (b) => (b || '').replace(/\s+/g, ' ').trim().slice(0, 90);
+  const open = (it) => it.kind === 'file' ? setViewing(it.f) : setEditing({ ...it.n });
+  const seg = (k, label) => <button key={k} className={`btn bs ${show === k ? 'bp' : 'bg'}`} style={{height:30}} onClick={() => setShow(k)}>{label}</button>;
   return (<>
     <div className="panel">
-      <div className="ph"><div className="pt">Files</div><button className="btn bimport" onClick={()=>fileRef.current?.click()} disabled={uploading}>{uploading?'⏳ Uploading...':'⬆ Upload PDF'}</button><input ref={fileRef} type="file" accept="application/pdf" multiple style={{display:'none'}} onChange={e=>onUpload([...e.target.files]).then(()=>e.target.value='')}/></div>
-      <div style={{padding:'10px 12px',borderBottom:'1px solid var(--bdr)'}}><input className="fi" placeholder="🔍 Search files..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:0}}/></div>
+      <div className="ph"><div className="pt">Files &amp; Notes</div><div style={{display:'flex',gap:8}}><button className="btn bg" onClick={()=>setEditing({ title:'', body:'' })}>📝 New note</button><button className="btn bimport" onClick={()=>fileRef.current?.click()} disabled={uploading}>{uploading?'⏳ Uploading...':'⬆ Upload PDF'}</button></div><input ref={fileRef} type="file" accept="application/pdf" multiple style={{display:'none'}} onChange={e=>onUpload([...e.target.files]).then(()=>e.target.value='')}/></div>
+      <div style={{padding:'10px 12px',borderBottom:'1px solid var(--bdr)',display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+        <input className="fi" placeholder="🔍 Search files and notes..." value={search} onChange={e=>setSearch(e.target.value)} style={{marginBottom:0,flex:'1 1 200px'}}/>
+        <div style={{display:'flex',gap:4}}>{seg('all',`All ${files.length + notes.length}`)}{seg('files',`📄 Files ${files.length}`)}{seg('notes',`📝 Notes ${notes.length}`)}</div>
+      </div>
       <div className="desktop-table tbl">
-        <div className="tr hdr" style={{gridTemplateColumns:'28px 1fr 80px 90px 70px'}}><div className="cl"/><div className="cl">File Name</div><div className="cl">Size</div><div className="cl">Uploaded</div><div className="cl">Act.</div></div>
-        {filtered.map(f=>(<div key={f.id} className="tr" style={{gridTemplateColumns:'28px 1fr 80px 90px 70px'}} onClick={()=>setViewing(f)}><div style={{fontSize:18}}>📄</div><div><div className="cm" style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{f.name||'Unnamed'}</div></div><div className="cn">{fmt(f.size)}</div><div className="cn">{f.created_at?new Date(f.created_at).toLocaleDateString('en-CA'):'—'}</div><div style={{display:'flex',gap:4}} onClick={e=>e.stopPropagation()}><button className="btn bg bs" onClick={()=>setViewing(f)}>👁</button><button className="btn bd bs" onClick={()=>onDelete(f)}>🗑</button></div></div>))}
-        {!filtered.length&&!uploading&&<div className="empty"><div className="ei">📁</div>{search?'No match.':'No files yet.'}</div>}
+        <div className="tr hdr" style={{gridTemplateColumns:'28px 1fr 80px 90px 70px'}}><div className="cl"/><div className="cl">Name / Title</div><div className="cl">Size</div><div className="cl">Updated</div><div className="cl">Act.</div></div>
+        {items.map(it => (<div key={it.key} className="tr" style={{gridTemplateColumns:'28px 1fr 80px 90px 70px'}} onClick={()=>open(it)}>
+          <div style={{fontSize:18}}>{it.kind === 'file' ? '📄' : '📝'}</div>
+          <div style={{minWidth:0}}>
+            <div className="cm" style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{it.kind === 'file' ? (it.f.name || 'Unnamed') : (it.n.title || 'Untitled note')}</div>
+            {it.kind === 'note' && it.n.body && <div className="cs" style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{preview(it.n.body)}</div>}
+          </div>
+          <div className="cn">{it.kind === 'file' ? fmt(it.f.size) : 'Note'}</div>
+          <div className="cn">{day(it.when)}</div>
+          <div style={{display:'flex',gap:4}} onClick={e=>e.stopPropagation()}>
+            <button className="btn bg bs" onClick={()=>open(it)}>{it.kind === 'file' ? '👁' : '✏️'}</button>
+            <button className="btn bd bs" onClick={()=>it.kind === 'file' ? onDelete(it.f) : deleteNote(it.n)}>🗑</button>
+          </div>
+        </div>))}
+        {!items.length&&!uploading&&<div className="empty"><div className="ei">📁</div>{search?'No match.':'No files or notes yet.'}</div>}
         {uploading&&<Loading/>}
       </div>
       <div className="mobile-cards" style={{padding:12}}>
-        {filtered.map(f=>(<div key={f.id} style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:8,padding:'12px 14px',marginBottom:10,display:'flex',alignItems:'center',gap:12}}><div style={{fontSize:28,flexShrink:0}}>📄</div><div style={{flex:1,minWidth:0}}><div style={{fontSize:13,fontWeight:500,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{f.name||'Unnamed'}</div><div style={{fontFamily:"'IBM Plex Mono',monospace",fontSize:10,color:'var(--txd)',marginTop:3}}>{fmt(f.size)}</div></div><div style={{display:'flex',gap:6,flexShrink:0}}><button className="btn bg bs" style={{height:40}} onClick={()=>setViewing(f)}>👁</button><button className="btn bd bs" style={{height:40}} onClick={()=>onDelete(f)}>🗑</button></div></div>))}
-        {!filtered.length&&!uploading&&<div className="empty"><div className="ei">📁</div>No files yet.</div>}
+        {items.map(it=>(<div key={it.key} onClick={()=>open(it)} style={{background:'var(--sur2)',border:'1px solid var(--bdr)',borderRadius:8,padding:'12px 14px',marginBottom:10,display:'flex',alignItems:'center',gap:12,cursor:'pointer'}}>
+          <div style={{fontSize:28,flexShrink:0}}>{it.kind === 'file' ? '📄' : '📝'}</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:13,fontWeight:600,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{it.kind === 'file' ? (it.f.name||'Unnamed') : (it.n.title || 'Untitled note')}</div>
+            <div style={{fontSize:11,color:'var(--txd)',marginTop:3,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{it.kind === 'file' ? fmt(it.f.size) : (preview(it.n.body) || day(it.when))}</div>
+          </div>
+          <div style={{display:'flex',gap:6,flexShrink:0}} onClick={e=>e.stopPropagation()}>
+            <button className="btn bg bs" style={{height:40}} onClick={()=>open(it)}>{it.kind === 'file' ? '👁' : '✏️'}</button>
+            <button className="btn bd bs" style={{height:40}} onClick={()=>it.kind === 'file' ? onDelete(it.f) : deleteNote(it.n)}>🗑</button>
+          </div>
+        </div>))}
+        {!items.length&&!uploading&&<div className="empty"><div className="ei">📁</div>No files or notes yet.</div>}
         {uploading&&<Loading/>}
       </div>
     </div>
     {viewing&&(<div className="mbg" onClick={()=>setViewing(null)}><div style={{background:'var(--sur)',border:'1px solid var(--bdr2)',borderRadius:8,width:'100%',maxWidth:860,height:'88vh',display:'flex',flexDirection:'column'}} onClick={e=>e.stopPropagation()}><div className="mh"><div className="mt" style={{fontSize:13}}>{viewing.name}</div><div style={{display:'flex',gap:8}}><a href={viewing.url} target="_blank" rel="noreferrer" className="btn bg bs" style={{textDecoration:'none'}}>⬇</a><button className="mc" onClick={()=>setViewing(null)}>×</button></div></div><div style={{flex:1,overflow:'hidden'}}><iframe src={viewing.url+'#toolbar=1&navpanes=0'} style={{width:'100%',height:'100%',border:'none'}} title={viewing.name}/></div></div></div>)}
+    {editing&&(<div className="mbg" onClick={()=>!saving&&setEditing(null)}><div style={{background:'var(--sur)',border:'1px solid var(--bdr2)',borderRadius:8,width:'100%',maxWidth:760,maxHeight:'90vh',display:'flex',flexDirection:'column'}} onClick={e=>e.stopPropagation()}>
+      <div className="mh"><div className="mt" style={{fontSize:13}}>{editing.id ? '📝 Edit note' : '📝 New note'}</div><button className="mc" onClick={()=>!saving&&setEditing(null)}>×</button></div>
+      <div style={{padding:'14px 16px',display:'flex',flexDirection:'column',gap:10,flex:1,minHeight:0}}>
+        <input className="fi" autoFocus={!editing.id} placeholder="Title (e.g. DWX-53DC spindle swap procedure)" value={editing.title} onChange={e=>setEditing(n=>({...n,title:e.target.value}))} style={{marginBottom:0,fontSize:16,fontWeight:600}}/>
+        <textarea className="fi" placeholder="Write your note..." value={editing.body} onChange={e=>setEditing(n=>({...n,body:e.target.value}))} style={{marginBottom:0,flex:1,minHeight:'45vh',resize:'vertical',fontSize:14,lineHeight:1.5}}/>
+        {editing.id && <div style={{fontSize:11,color:'var(--txd)'}}>Last saved {new Date(editing.updated_at || editing.created_at).toLocaleString('en-CA')}</div>}
+      </div>
+      <div style={{display:'flex',gap:8,padding:'12px 16px',borderTop:'1px solid var(--bdr)'}}>
+        {editing.id && <button className="btn bd" onClick={()=>deleteNote(editing)}>🗑 Delete</button>}
+        <button className="btn bg" style={{marginLeft:'auto'}} onClick={()=>setEditing(null)} disabled={saving}>Cancel</button>
+        <button className="btn bp" onClick={saveNote} disabled={saving}>{saving ? 'Saving…' : 'Save note'}</button>
+      </div>
+    </div></div>)}
   </>);
 }
 
@@ -5671,7 +5742,7 @@ export default function App(){
           {page==='Schedule'&&<Schedule jobs={jobs.filter(j=>!isArchived(j))} calNotes={calNotes} onSaveNote={saveCalNote}/>}
           {page==='Customers'&&<Customers customers={customers} jobs={jobs} loading={loading.customers} onAdd={addCust} onEdit={editCust} onDelete={delCust}/>}
           {page==='Technicians'&&<Technicians technicians={technicians} loading={loading.technicians} onAdd={addTech} onEdit={editTech} onDelete={delTech}/>}
-          {page==='Files'&&<Files files={files} onUpload={uploadFiles} onDelete={deleteFile} uploading={fileUploading}/>}
+          {page==='Files'&&<Files files={files} onUpload={uploadFiles} onDelete={deleteFile} uploading={fileUploading} msg={msg}/>}
           {page==='Diagnostics'&&<Diagnostics msg={msg}/>}
            {page==='Fleet'&&<Fleet msg={msg}/>}
           {page==='CustomerReports'&&<CustomerReports msg={msg}/>}
