@@ -113,11 +113,40 @@ async function notifyDevonOfAutoSend({ serial, model, correctionCount, name, toE
 // Records "flagged, but no contact email" so the heads-up to Devon only
 // goes out once per machine + check. Throws if the insert fails, so a DB
 // problem can't turn into an email every sync.
-async function logNoContact({ serial, customerId, check, label, cause, action, correctionCount }) {
+// REVIEW MODE (2026-11-14, Devon): automatic emails no longer go to customers.
+// A flagged report that passes the settle rule is emailed to Devon instead; he
+// decides whether to send it on with "📣 Notify Customer" in Fleet.
+const REVIEW_MODE = true;
+const REVIEW_EMAIL = 'factoryautomation@outlook.com';
+
+async function emailDevonForReview({ serial, model, correctionCount, name, wouldSendTo, label, cause, action, repeatOf, host, proto }) {
+  if (!process.env.RESEND_API_KEY) throw new Error('RESEND_API_KEY is not configured');
+  const machineLine = `${model ? model + ' ' : ''}SN ${serial}`;
+  const fleetUrl = host ? `${proto || 'https'}://${host}/` : 'https://axiscrm.vercel.app/';
+  const r = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from: process.env.FROM_EMAIL || 'AXISCRM Reports <onboarding@resend.dev>',
+      to: REVIEW_EMAIL,
+      subject: `🔎 Review: ${name} — ${label} — ${machineLine}`,
+      text: `A MillPulse report flagged ${name}. Nothing was sent to the customer.\n\n`
+        + `Machine: ${model || 'Unknown model'}\nSerial #: ${serial}\nCorrection #: ${correctionCount != null ? correctionCount : '—'}\n`
+        + `Customer contact on file: ${wouldSendTo || '(none — add one before notifying)'}\n\n`
+        + `Flag: ${label}\n${repeatOf != null ? `REPEAT: already flagged at correction #${repeatOf}.\n` : ''}`
+        + `Still there ${SETTLE_AFTER} corrections after it first appeared.\n\n`
+        + `Likely cause: ${cause || '—'}\nSuggested fix: ${action || '—'}\n\n`
+        + `If it's worth sharing, open Fleet and press "📣 Notify Customer" on ${serial}:\n${fleetUrl}`,
+    }),
+  });
+  if (!r.ok) throw new Error(`review email failed (${r.status})`);
+}
+
+async function logNoContact({ serial, customerId, check, label, cause, action, correctionCount, status = 'no_contact' }) {
   const row = {
     serial, customer_id: customerId, check_key: check, label, cause: cause || null, action: action || null,
     correction_count: correctionCount != null ? correctionCount : null,
-    status: 'no_contact', sent_to: null,
+    status, sent_to: null,
     confirm_token: require('crypto').randomBytes(24).toString('hex'), // column is NOT NULL UNIQUE; never emailed
   };
   const post = (body) => fetch(`${SUPABASE_URL}/rest/v1/fleet_alerts`, {
@@ -236,6 +265,20 @@ async function checkAndNotifySerial(serial, opts = {}) {
       action: 'Add a contact email at install time, or link a customer with an email, then use 🔁 Re-notify on the Fleet card.',
     });
     return { skipped: 'confirmed but no contact email on file', check: rec.check };
+  }
+
+  if (REVIEW_MODE) {
+    // One review email per machine + check while it stays open (Fleet resolves
+    // it when a clean report comes in, so a new occurrence emails again).
+    const openReview = await sbSelect(
+      `fleet_alerts?serial=eq.${encodeURIComponent(serial)}&check_key=eq.${encodeURIComponent(rec.check)}&status=eq.review&select=id`
+    );
+    if (Array.isArray(openReview) && openReview.length) return { skipped: 'review mode — Devon already emailed about this check', check: rec.check };
+    await emailDevonForReview({ serial, model: latestEntry.model, correctionCount: cc, name: notifyName, wouldSendTo: notifyEmail,
+      label: rec.label, cause: rec.cause, action: rec.action, repeatOf, host: opts.host, proto: opts.proto });
+    await logNoContact({ serial, customerId: (customer && customer.id) || null, check: rec.check, label: rec.label, cause: rec.cause,
+      action: rec.action, correctionCount: cc, status: 'review' });
+    return { review: true, emailed: REVIEW_EMAIL, check: rec.check };
   }
 
   const result = await sendFleetAlert({

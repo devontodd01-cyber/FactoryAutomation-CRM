@@ -4216,7 +4216,7 @@ function Fleet({ msg }) {
   // report is the proof, not anyone's say-so.
   useEffect(() => {
     if (loading) return;
-    const openAlerts = alerts.filter(a => a.status === 'sent' || a.status === 'customer_confirmed' || a.status === 'no_contact');
+    const openAlerts = alerts.filter(a => a.status === 'sent' || a.status === 'customer_confirmed' || a.status === 'no_contact' || a.status === 'review');
     if (!openAlerts.length) return;
     let cancelled = false;
     (async () => {
@@ -4483,6 +4483,7 @@ function Fleet({ msg }) {
                     {alert.status === 'customer_confirmed' && '⏳ customer says done — awaiting sync'}
                     {alert.status === 'resolved' && `✔ resolved ${(alert.resolved_at || '').slice(0, 10)}`}
                     {alert.status === 'no_contact' && '⚠ flagged — no contact email, not sent'}
+                    {alert.status === 'review' && `🔎 flagged — emailed to you ${(alert.created_at || '').slice(0, 10)}, not sent to customer`}
                   </span>
                 )}
                 {/* App-log warning: crash / spindle overcurrent / axis error /
@@ -4542,7 +4543,7 @@ function Fleet({ msg }) {
                     disabled={notifyingSerial === serial}
                     onClick={(e) => { e.stopPropagation(); notifyCustomer(serial, notifyEmail, notifyName, customer?.id, latest?.correction_count, rec); }}
                   >
-                    {notifyingSerial === serial ? '⏳' : (alert && alert.status !== 'resolved' && alert.status !== 'no_contact') ? '🔁 Re-notify' : '📣 Notify Customer'}
+                    {notifyingSerial === serial ? '⏳' : (alert && alert.status !== 'resolved' && alert.status !== 'no_contact' && alert.status !== 'review') ? '🔁 Re-notify' : '📣 Notify Customer'}
                   </button>
                 )}
               </div>
