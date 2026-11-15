@@ -2901,7 +2901,9 @@ function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks
             <Legend wrapperStyle={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}}/>
             {zeroLine && <ReferenceLine y={0} stroke={CH.zero} strokeWidth={1.5}/>}
             {(refLines||[]).map((rl,i) => <ReferenceLine key={i} y={rl.y} stroke="#ff4d6a" strokeDasharray="4 4" label={{value:rl.label,fontSize:9,fill:'#ff4d6a',position:'right'}}/>)}
-            {(serviceNotes||[]).map((n,i) => <ReferenceLine key={'note'+n.id} x={Number(n.after_cc)} stroke="#8b5cf6" strokeWidth={2} strokeDasharray="6 3" label={{value:`📝 ${noteShort(n.note)}`,fontSize:9,fill:'#8b5cf6',position:'insideTopRight',offset:4+(i%3)*12}}/>)}
+            {(serviceNotes||[]).map((n,i) => n.kind === 'reset'
+              ? <ReferenceLine key={'reset'+n.id} x={Number(n.after_cc)} stroke="#dc2626" strokeWidth={2} strokeDasharray="2 3" label={{value:`↺ ${n.note}`,fontSize:9,fill:'#dc2626',position:'insideTopLeft',offset:4}}/>
+              : <ReferenceLine key={'note'+n.id} x={Number(n.after_cc)} stroke="#8b5cf6" strokeWidth={2} strokeDasharray="6 3" label={{value:`📝 ${noteShort(n.note)}`,fontSize:9,fill:'#8b5cf6',position:'insideTopRight',offset:4+(i%3)*12}}/>)}
             {lines.map(l => <Line key={l.key} type="monotone" dataKey={l.key} name={l.name} stroke={l.color} dot={{r:3}} connectNulls/>)}
             {hasErrors && (
               <Customized component={(cp) => (
@@ -3325,7 +3327,57 @@ function mergeTrendPoints(diagPoints, fleetPoints) {
 // diagnostic_reports history for this serial and merge it with Fleet's own
 // live-synced mill_reports history into one combined, correctly-scaled
 // trend, rendered with the same TrendCharts component Mill Diagnostics uses.
+// Pre-reset history toggle (2026-11-15, Devon): after a Fleet reset the graph
+// starts fresh, but the archived reports can be switched back on for viewing
+// (nothing is restored). A red ↺ line marks where the reset happened.
 function FleetSerialTrendGraphs({ serial, fleetHistory }) {
+  const [archived, setArchived] = useState(null);   // { mill: [], diag: [], resetAt, topCc } or null
+  const [showOld, setShowOld] = useState(false);
+  const notes = useContext(FleetNotesCtx);
+  useEffect(() => {
+    let cancelled = false; setArchived(null); setShowOld(false);
+    fetch(`${SUPABASE_URL}/rest/v1/mill_history_archive?serial=eq.${encodeURIComponent(serial)}&restored_at=is.null&select=source,row_data,archived_at&order=archived_at.desc`,
+      { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } })
+      .then(r => r.ok ? r.json() : []).then(rows => {
+        if (cancelled || !Array.isArray(rows) || !rows.length) return;
+        const seenCc = new Set();
+        const mill = rows.filter(r => r.source === 'mill_reports').map(r => r.row_data)
+          .filter(r => { const k = r.correction_count; if (seenCc.has(k)) return false; seenCc.add(k); return true; }); // newest reset wins
+        const seenD = new Set();
+        const diag = rows.filter(r => r.source === 'diagnostic_reports').map(r => r.row_data)
+          .filter(r => { const k = r.correction_count; if (seenD.has(k)) return false; seenD.add(k); return true; });
+        const topCc = Math.max(...mill.map(r => Number(r.correction_count)).filter(n => !isNaN(n)));
+        setArchived({ mill, diag, resetAt: rows[0].archived_at, topCc: isFinite(topCc) ? topCc : null });
+      }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [serial]);
+  const mergeByCc = (live, old) => {
+    const have = new Set((live || []).map(r => r.correction_count));
+    return [...(live || []), ...(old || []).filter(r => !have.has(r.correction_count))]
+      .sort((a, b) => (a.correction_count ?? 0) - (b.correction_count ?? 0));
+  };
+  const history = showOld && archived ? mergeByCc(fleetHistory, archived.mill) : fleetHistory;
+  const marker = showOld && archived?.topCc != null
+    ? [{ id: 'reset', kind: 'reset', after_cc: archived.topCc - 0.5, note: `reset ${new Date(archived.resetAt).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' })}` }]
+    : [];
+  return (
+    <div>
+      {archived && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '0 0 8px', fontSize: 11, color: 'var(--txd)' }}>
+          <button className={`btn bs ${showOld ? 'bp' : 'bg'}`} style={{ height: 26, fontSize: 10 }} onClick={e => { e.stopPropagation(); setShowOld(v => !v); }}>
+            {showOld ? '🙈 Hide pre-reset history' : '👁 Show pre-reset history'}
+          </button>
+          <span>{showOld ? `Showing ${archived.mill.length} archived report${archived.mill.length === 1 ? '' : 's'} from before the reset — view only.` : `Reset ${new Date(archived.resetAt).toLocaleDateString('en-CA')} · ${archived.mill.length} older report${archived.mill.length === 1 ? '' : 's'} archived.`}</span>
+        </div>
+      )}
+      <FleetNotesCtx.Provider value={[...(notes || []), ...marker]}>
+        <FleetSerialTrendGraphsInner key={showOld ? 'all' : 'fresh'} serial={serial} fleetHistory={history} extraDiag={showOld && archived ? archived.diag : null} mergeByCc={mergeByCc} />
+      </FleetNotesCtx.Provider>
+    </div>
+  );
+}
+
+function FleetSerialTrendGraphsInner({ serial, fleetHistory, extraDiag, mergeByCc }) {
   const [diagHistory, setDiagHistory] = useState(null); // null = still loading
   const [loadError, setLoadError] = useState(false);
   // Everything the lookup actually did, so we can show it on screen instead
@@ -3366,7 +3418,7 @@ function FleetSerialTrendGraphs({ serial, fleetHistory }) {
         const sorted = Array.isArray(rows)
           ? [...rows].sort((a, b) => (a.correction_count ?? 0) - (b.correction_count ?? 0))
           : [];
-        setDiagHistory(sorted);
+        setDiagHistory(extraDiag && mergeByCc ? mergeByCc(sorted, extraDiag) : sorted);
         setDebug(dbg);
       } catch (e) {
         dbg.error = (e && e.message) ? e.message : String(e);
