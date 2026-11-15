@@ -2820,10 +2820,25 @@ const AXIS_COLOR = { X: '#f472b6', Y: '#ffb020', Z: '#3b82f6', A: '#a78bfa', B: 
 // Service notes (2026-11-05): Fleet wraps a machine's graphs in this provider so every
 // TrendChart draws a purple marker at each note's position (e.g. 207.5 = between cc 207 and 208).
 const FleetNotesCtx = createContext([]);
+// Correction count -> date it first came in (2026-11-14): shown in the graph
+// tooltip ("Corr 350 · Nov 3, 2026"). Built from created_at (first seen), not
+// report_date, which gets bumped on every re-sync.
+const CorrDatesCtx = createContext({});
+const corrDateMap = (...lists) => {
+  const m = {};
+  for (const list of lists) for (const r of (list || [])) {
+    const cc = r?.correction_count, d = r?.created_at;
+    if (cc == null || !d) continue;
+    if (!m[cc] || new Date(d) < new Date(m[cc])) m[cc] = d;
+  }
+  return m;
+};
+const fmtCorrDate = d => new Date(d).toLocaleDateString('en-CA', { month: 'short', day: 'numeric', year: 'numeric' });
 const noteShort = t => (t || '').length > 22 ? t.slice(0, 21) + '…' : (t || '');
 
 function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks, zeroLine, subtitle, yTicks, tooltipFormatter, toleranceBand, errorMarkers, driftMarkers }) {
   const serviceNotes = useContext(FleetNotesCtx);
+  const corrDates = useContext(CorrDatesCtx);
   const [hovered, setHovered] = useState(null); // {e, x, y} for the error tooltip
   const wrapRef = useRef(null);
 
@@ -2880,7 +2895,7 @@ function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks
             />
             <Tooltip
               contentStyle={{background:CH.tipBg,border:`1px solid ${CH.tipBdr}`,color:CH.tipTx,fontSize:11,fontFamily:"IBM Plex Mono, monospace"}}
-              labelFormatter={v=>`Corr ${v}`}
+              labelFormatter={v=>`Corr ${v}${corrDates[v] ? ' · ' + fmtCorrDate(corrDates[v]) : ''}`}
               formatter={tooltipFormatter || ((v)=>typeof v==='number'?v.toFixed(1):v)}
             />
             <Legend wrapperStyle={{fontSize:10,fontFamily:"IBM Plex Mono, monospace"}}/>
@@ -3389,7 +3404,7 @@ function FleetSerialTrendGraphs({ serial, fleetHistory }) {
       <div>
         {debugLine}
         {fallbackNote(`⚠ Couldn't load Mill Diagnostics history for ${serial} — showing live Fleet sync data instead.`)}
-        <FleetTrendCharts history={fleetHistory} />
+        <CorrDatesCtx.Provider value={corrDateMap(fleetHistory)}><FleetTrendCharts history={fleetHistory} /></CorrDatesCtx.Provider>
       </div>
     );
   }
@@ -3413,7 +3428,7 @@ function FleetSerialTrendGraphs({ serial, fleetHistory }) {
       <div>
         {debugLine}
         {diagHistory.length < 2 && fallbackNote(`Only ${diagHistory.length} Mill Diagnostics ${diagHistory.length === 1 ? 'entry' : 'entries'} found for serial "${serial}" (checked for case/spacing differences too) — showing Fleet's live sync data merged in. Run more reports through 🩺 Mill Diagnostics to unlock the full chart set (origin drift, magazine offset, raw P1/P2, angle-offset range).`)}
-        <TrendCharts points={merged} />
+        <CorrDatesCtx.Provider value={corrDateMap(fleetHistory, diagHistory)}><TrendCharts points={merged} /></CorrDatesCtx.Provider>
       </div>
     );
   }
@@ -5287,7 +5302,7 @@ function Diagnostics({ msg }) {
           )}
           {historyLoading && <Loading/>}
           {!historyLoading && historyLoaded && history.length === 0 && <div className="empty"><div className="ei">📭</div>No saved reports for this serial yet.</div>}
-          {!historyLoading && history.length > 0 && <TrendCharts history={history} applogText={applogText}/>}
+          {!historyLoading && history.length > 0 && <CorrDatesCtx.Provider value={corrDateMap(history)}><TrendCharts history={history} applogText={applogText}/></CorrDatesCtx.Provider>}
           {!historyLoading && history.map(row => {
             const flaggedCount = (row.diagnostics||[]).filter(d=>d.flagged).length + (Array.isArray(row.dice) && row.dice.length ? (diagnoseDice3B9B(row.dice[row.dice.length-1])?.flagged?1:0) : 0);
             return (
