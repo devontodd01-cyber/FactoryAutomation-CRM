@@ -50,6 +50,7 @@ const HEADERS = {
 // 3am / on-startup sync agent run is what actually drives it, in-process,
 // with nothing extra to schedule.
 const { checkAndNotifySerial } = require("./check-and-notify");
+const { sendPushAll, customerNameFor } = require("./_push");
 
 // VPanel applog.txt (optional, sent by the sync agent when one sits in the
 // same folder as systemreport.txt). Parsed into a compact event summary
@@ -738,12 +739,33 @@ module.exports = async (req, res) => {
     // email problem would be worse than skipping the auto-notify check this
     // one time and letting the next scheduled sync retry it naturally.
     const proto = req.headers["x-forwarded-proto"] || "https";
+    const notifyResult = {};
     for (const serial of newReportSerials) {
       try {
-        await checkAndNotifySerial(serial, { host: req.headers.host, proto });
+        notifyResult[serial] = await checkAndNotifySerial(serial, { host: req.headers.host, proto });
       } catch (notifyErr) {
         console.error(`auto-notify check failed for ${serial}:`, notifyErr.message || notifyErr);
       }
+    }
+
+    // Phone push to Devon (2026-11-20): one per NEW correction (re-sends never
+    // notify) and one per brand-new machine. Tap opens that machine in Fleet.
+    try {
+      for (const [serial, info] of Object.entries(brandNew)) {
+        await sendPushAll({ serial, tag: `new-${serial}`, title: `🆕 New machine connected: ${serial}`,
+          body: `${info.model || 'Unknown model'} · correction #${info.correctionCount}${labName ? ` · ${labName}` : ''}` });
+      }
+      for (const serial of newReportSerials) {
+        if (brandNew[serial]) continue;
+        const r = results.filter(x => x.serial === serial).sort((a, b) => b.correctionCount - a.correctionCount)[0];
+        const who = await customerNameFor(serial);
+        const n = notifyResult[serial] || {};
+        const flag = n.review || n.sent ? '⚠ Flagged — still there 3 corrections on. ' : '';
+        await sendPushAll({ serial, title: `${serial}${who ? ` · ${who}` : ''}`,
+          body: `${flag}New correction #${r ? r.correctionCount : '?'}${r && r.model ? ` · ${r.model}` : ''}. Tap to open the report.` });
+      }
+    } catch (pushErr) {
+      console.error('push notify failed:', pushErr.message || pushErr);
     }
 
     return res.status(200).json({ ok: true, sourcePath: sourcePath || null, results, newCalibrations: [...newReportSerials], applog: applogResult, newMachines: Object.keys(brandNew), customerAssign, servicePc });

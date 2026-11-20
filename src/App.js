@@ -3748,6 +3748,58 @@ function recentApplogAlerts(summary) {
   return summary.events.filter(e => applogKind(e.kind).alert && e.ts > since);
 }
 
+// 🔔 Phone alerts (2026-11-20): subscribe this device to push notifications for
+// new corrections. Public VAPID key — safe in the browser; the private one is a
+// Vercel secret used by api/_push.js.
+const PUSH_PUBLIC_KEY = 'BLz9qT2TkWnSO4Gded2MgaMd617xv5IEtiJd2qG4Y0QYTUzCy6_T5eo89dz4xDIxuHKcU_eIh5OfyBn5ThNNBuk';
+const b64ToBytes = (b64) => { const p = '='.repeat((4 - b64.length % 4) % 4); const raw = atob((b64 + p).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from([...raw].map(c => c.charCodeAt(0))); };
+function PushToggle({ msg }) {
+  const supported = typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  const [on, setOn] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!supported) return;
+    navigator.serviceWorker.ready.then(r => r.pushManager.getSubscription()).then(sub => setOn(!!sub)).catch(() => {});
+  }, [supported]);
+  if (!supported) return null;
+  const rest = (path, opts = {}) => fetch(`${SUPABASE_URL}/rest/v1/${path}`, { ...opts, headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', ...(opts.headers || {}) } });
+  const enable = async () => {
+    setBusy(true);
+    try {
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') { msg && msg('Notifications are blocked — allow them for Axis CRM in your phone settings', 'bad'); return; }
+      const reg = await navigator.serviceWorker.ready;
+      const sub = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(PUSH_PUBLIC_KEY) });
+      const j = sub.toJSON();
+      const r = await rest('push_subscriptions?on_conflict=endpoint', { method: 'POST', headers: { Prefer: 'resolution=merge-duplicates' },
+        body: JSON.stringify({ endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth, device: navigator.userAgent.slice(0, 200) }) });
+      if (!r.ok) throw new Error(`save failed (${r.status})`);
+      setOn(true); msg && msg('🔔 Phone alerts on — sending a test…');
+      fetch('/api/push-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).catch(() => {});
+    } catch (e) { msg && msg('Could not turn on alerts: ' + e.message, 'bad'); }
+    finally { setBusy(false); }
+  };
+  const disable = async () => {
+    setBusy(true);
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.getSubscription();
+      if (sub) { await rest(`push_subscriptions?endpoint=eq.${encodeURIComponent(sub.endpoint)}`, { method: 'DELETE' }); await sub.unsubscribe(); }
+      setOn(false); msg && msg('🔕 Phone alerts off for this device');
+    } catch (e) { msg && msg('Could not turn off alerts: ' + e.message, 'bad'); }
+    finally { setBusy(false); }
+  };
+  return (
+    <span style={{ display: 'inline-flex', gap: 6 }}>
+      <button className={`btn bs ${on ? 'bp' : 'bg'}`} disabled={busy} onClick={on ? disable : enable}
+        title="Get a phone notification for every new correction; tap it to open that machine">
+        {busy ? '…' : on ? '🔔 Alerts on' : '🔕 Phone alerts'}
+      </button>
+      {on && <button className="btn bs bg" disabled={busy} onClick={() => fetch('/api/push-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(() => msg && msg('Test sent'))}>Test</button>}
+    </span>
+  );
+}
+
 function Fleet({ msg }) {
   const [rows, setRows] = useState([]);
   // Service notes per machine, drawn on its trend graphs (table fleet_notes).
@@ -3778,7 +3830,8 @@ function Fleet({ msg }) {
     loadNotes();
   };
   const [loading, setLoading] = useState(true);
-  const [openSerial, setOpenSerial] = useState(null);
+  const deepSerial = (() => { try { return (new URLSearchParams(window.location.search).get('fleet') || '').toUpperCase() || null; } catch { return null; } })();
+  const [openSerial, setOpenSerial] = useState(deepSerial);
   // Reset history after a rebuild (2026-11-01): old rows are archived server-side
   // (reset_machine_history) so the machine starts fresh; undo_machine_reset restores.
   const [resetTarget, setResetTarget] = useState(null); // { serial, name, count }
@@ -3817,7 +3870,16 @@ function Fleet({ msg }) {
     } catch (e) { msg && msg('Undo failed: ' + e.message, 'bad'); }
   };
   const [trendView, setTrendView] = useState('graph'); // 'graph' | 'table' | 'report' — shared since only one card opens at a time
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(deepSerial || '');
+  // Arrived from a phone alert: scroll to that machine, then tidy the URL.
+  useEffect(() => {
+    if (!deepSerial || loading) return;
+    const t = setTimeout(() => {
+      document.getElementById(`fleet-${deepSerial}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      try { window.history.replaceState(null, '', window.location.pathname); } catch {}
+    }, 300);
+    return () => clearTimeout(t);
+  }, [deepSerial, loading]);
   const [showAdd, setShowAdd] = useState(false);
   const [addText, setAddText] = useState('');
   const [addBusy, setAddBusy] = useState(false);
@@ -4395,7 +4457,8 @@ function Fleet({ msg }) {
             {showHidden ? '🙈 Hide inactive' : `👁 Show hidden (${allMachines.filter(m => !visibleSerials.has(m.serial)).length})`}
           </button>
         )}
-        <button className={`btn bs ${showAdd ? 'bp' : ''}`} style={{ marginLeft: 'auto' }} onClick={() => setShowAdd(s => !s)}>
+        <span style={{ marginLeft: 'auto' }}><PushToggle msg={msg} /></span>
+        <button className={`btn bs ${showAdd ? 'bp' : ''}`} onClick={() => setShowAdd(s => !s)}>
           {showAdd ? '✕ Cancel' : '➕ Add Report'}
         </button>
         <button className="btn" onClick={load}>↻ Refresh</button>
@@ -4491,7 +4554,7 @@ function Fleet({ msg }) {
         const notifyEmail = latest?.lab_email || customer?.email || null;
         const notifyName = customer?.company || latest?.lab_name || serial;
         return [sectionHeader, (
-          <div key={serial} className="diag-report-card">
+          <div key={serial} id={`fleet-${serial}`} className="diag-report-card">
             <div
               className="diag-report-head"
               style={{ cursor: 'pointer' }}
@@ -5685,7 +5748,8 @@ function CustomerReports({ msg }) {
 
 // ── App ───────────────────────────────────────────────────────────────────────
 export default function App(){
-  const [page,setPage]=useState('Dashboard');
+  // ?fleet=SERIAL (from a phone alert) opens Fleet on that machine (2026-11-20)
+  const [page,setPage]=useState(()=>{ try { return new URLSearchParams(window.location.search).get('fleet') ? 'Fleet' : 'Dashboard'; } catch { return 'Dashboard'; } });
   const [jobs,setJobs]=useState([]);
   const [customers,setCustomers]=useState([]);
   const [technicians,setTechnicians]=useState([]);
