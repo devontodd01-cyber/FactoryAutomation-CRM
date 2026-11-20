@@ -636,7 +636,11 @@ module.exports = async (req, res) => {
     for (const chunk of chunks) {
       try {
         const report = parseVPanelReport(chunk);
-        if (!report.serial) throw new Error("No serial number found in this report");
+        // A blank "SERIAL NUMBER:" line parses to {} (truthy) -- treat anything
+        // that isn't a real serial string as missing. (2026-11-20: was saving
+        // serial "{}" and emailing "New machine synced — SN [object Object]".)
+        if (typeof report.serial !== "string" || !report.serial.trim()) throw new Error("No serial number found in this report");
+        report.serial = report.serial.trim();
         if (report.correctionCount == null) throw new Error("No correction count found in this report");
         let isNewCalibration = false;
         try {
