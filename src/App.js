@@ -2833,7 +2833,7 @@ const corrDateMap = (...lists) => {
   }
   return m;
 };
-const fmtCorrDate = d => new Date(d).toLocaleDateString('en-CA', { month: 'short', day: 'numeric', year: 'numeric' });
+const fmtCorrDate = d => { const x = new Date(d); return x.toLocaleDateString('en-CA', { month: 'short', day: 'numeric', year: 'numeric' }) + ' · ' + x.toLocaleTimeString('en-CA', { hour: 'numeric', minute: '2-digit' }); };
 const noteShort = t => (t || '').length > 22 ? t.slice(0, 21) + '…' : (t || '');
 
 function TrendChart({ title, data, lines, refLines, yFormat, yDomain, hideYTicks, zeroLine, subtitle, yTicks, tooltipFormatter, toleranceBand, errorMarkers, driftMarkers }) {
